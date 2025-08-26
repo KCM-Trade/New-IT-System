@@ -22,14 +22,14 @@ class TradeSummaryRow(BaseModel):
     """
     One grouped row for summary table.
     - grp: 按收盘分类（正在持仓/当日已平/昨日已平）
-    - settlement: 结算方式（即日/过夜）
+    - settlement: 结算方式（过夜/当天）
     - direction: buy/sell
     - total_volume: 汇总交易量（手），SQL 中为 SUM(volume)/100
     - total_profit: 汇总盈亏
     """
 
     grp: Literal["正在持仓", "当日已平", "昨日已平"] | str
-    settlement: Literal["即日", "过夜"] | str
+    settlement: Literal["过夜", "当天"] | str
     direction: Literal["buy", "sell"] | str
     total_volume: float
     total_profit: float
@@ -37,7 +37,7 @@ class TradeSummaryRow(BaseModel):
 
 class TradeSummaryResponse(BaseModel):
     ok: bool
-    items: list[TradeSummaryRow] = []
+    items: list[TradeSummaryRow]
     error: str | None = None
 
 
