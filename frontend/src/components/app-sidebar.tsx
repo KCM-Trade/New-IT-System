@@ -42,7 +42,7 @@ const data = {
       icon: IconChartBar,
       children: [
         { title: "产品报仓", url: "/warehouse/products" },
-        { title: "全仓报表", url: "/positions" },
+        { title: "全仓报表", url: "/position" },
         { title: "其他", url: "/warehouse/others" },
       ],
     },

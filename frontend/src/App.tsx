@@ -9,7 +9,7 @@ const BasisPage = lazy(() => import("@/pages/Basis"))
 const GoldQuotePage = lazy(() => import("@/pages/GoldQuote"))
 const DownloadsPage = lazy(() => import("@/pages/Downloads"))
 const WarehousePage = lazy(() => import("@/pages/Warehouse"))
-const PositionsPage = lazy(() => import("@/pages/Positions"))
+const PositionPage = lazy(() => import("@/pages/Position"))
 const WarehouseProductsPage = lazy(() => import("@/pages/WarehouseProducts"))
 const WarehouseOthersPage = lazy(() => import("@/pages/WarehouseOthers"))
 const LoginIPsPage = lazy(() => import("@/pages/LoginIPs"))
@@ -46,7 +46,7 @@ function App() {
               <Route path="warehouse" element={<WarehousePage />} />
               <Route path="warehouse/products" element={<WarehouseProductsPage />} />
               <Route path="warehouse/others" element={<WarehouseOthersPage />} />
-              <Route path="positions" element={<PositionsPage />} />
+              <Route path="position" element={<PositionPage />} />
               <Route path="login-ips" element={<LoginIPsPage />} />
               <Route path="profit" element={<ProfitPage />} />
               <Route path="settings" element={<SettingsPage />} />

@@ -54,7 +54,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
           core.grp AS grp,
           '过夜' AS settlement,
           core.direction AS direction,
-          SUM(core.volume)/100 AS total_volume,
+          SUM(core.scaled_volume) AS total_volume,
           SUM(core.profit) AS total_profit
         FROM (
           SELECT
@@ -65,7 +65,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
             END AS grp,
             CASE WHEN cmd = 0 THEN 'buy' WHEN cmd = 1 THEN 'sell' END AS direction,
             swaps,
-            volume,
+            volume / POW(10, DIGITS) AS scaled_volume,
             profit
           FROM mt4_live.mt4_trades
           WHERE symbol = %(symbol)s
@@ -96,7 +96,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
           core.grp AS grp,
           '当天' AS settlement,
           core.direction AS direction,
-          SUM(core.volume)/100 AS total_volume,
+          SUM(core.scaled_volume) AS total_volume,
           SUM(core.profit) AS total_profit
         FROM (
           SELECT
@@ -106,7 +106,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
               WHEN CLOSE_TIME >= %(prev_start)s  AND CLOSE_TIME < %(prev_end)s       THEN '昨日已平'
             END AS grp,
             CASE WHEN cmd = 0 THEN 'buy' WHEN cmd = 1 THEN 'sell' END AS direction,
-            volume,
+            volume / POW(10, DIGITS) AS scaled_volume,
             profit
           FROM mt4_live.mt4_trades
           WHERE symbol = %(symbol)s
