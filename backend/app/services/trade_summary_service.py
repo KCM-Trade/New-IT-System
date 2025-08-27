@@ -63,12 +63,13 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
               WHEN CLOSE_TIME >= %(today_start)s AND CLOSE_TIME < %(tomorrow_start)s THEN '当日已平'
               WHEN CLOSE_TIME >= %(prev_start)s  AND CLOSE_TIME < %(prev_end)s       THEN '昨日已平'
             END AS grp,
-            CASE WHEN cmd = 0 THEN 'buy' ELSE 'sell' END AS direction,
+            CASE WHEN cmd = 0 THEN 'buy' WHEN cmd = 1 THEN 'sell' END AS direction,
             swaps,
             volume,
             profit
           FROM mt4_live.mt4_trades
           WHERE symbol = %(symbol)s
+            AND cmd IN (0, 1)
             AND (
               CLOSE_TIME = '1970-01-01 00:00:00'
               OR (CLOSE_TIME >= %(prev_start)s AND CLOSE_TIME < %(prev_end)s)
@@ -104,11 +105,12 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
               WHEN CLOSE_TIME >= %(today_start)s AND CLOSE_TIME < %(tomorrow_start)s THEN '当日已平'
               WHEN CLOSE_TIME >= %(prev_start)s  AND CLOSE_TIME < %(prev_end)s       THEN '昨日已平'
             END AS grp,
-            CASE WHEN cmd = 0 THEN 'buy' ELSE 'sell' END AS direction,
+            CASE WHEN cmd = 0 THEN 'buy' WHEN cmd = 1 THEN 'sell' END AS direction,
             volume,
             profit
           FROM mt4_live.mt4_trades
           WHERE symbol = %(symbol)s
+            AND cmd IN (0, 1)
             AND (
               CLOSE_TIME = '1970-01-01 00:00:00'
               OR (CLOSE_TIME >= %(prev_start)s AND CLOSE_TIME < %(prev_end)s)

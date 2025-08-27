@@ -11,6 +11,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
 import { Calendar as CalendarIcon } from "lucide-react"
+import { Progress } from "@/components/ui/progress"
 
 // Static sample data from backend response for preview (no API calls yet)
 const sampleItems = [
@@ -26,6 +27,16 @@ const sampleItems = [
   { grp: "当日已平", settlement: "当天", direction: "sell", total_volume: 245.83, total_profit: 31473.5 },
   { grp: "当日已平", settlement: "当天", direction: "buy", total_volume: 8, total_profit: 268.21 },
 ]
+
+// API response types for trade summary
+type TradeSummaryItem = {
+  grp: "正在持仓" | "当日已平" | "昨日已平"
+  settlement: "当天" | "过夜"
+  direction: "buy" | "sell"
+  total_volume: number
+  total_profit: number
+}
+type TradeSummaryResp = { ok: boolean; items: TradeSummaryItem[]; error: string | null }
 
 type DirectionType = "Buy" | "Sell" | "Total"
 
@@ -71,6 +82,50 @@ export default function WarehouseProductsPage() {
   const [symbol, setSymbol] = React.useState<string>("XAU-CNH")
   const [date, setDate] = React.useState<string>("2025-08-27")
 
+  // API states and helpers
+  const [items, setItems] = React.useState<TradeSummaryItem[] | null>(null)
+  const [loading, setLoading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [progress, setProgress] = React.useState(0)
+  const progressTimerRef = React.useRef<number | null>(null)
+  const abortRef = React.useRef<AbortController | null>(null)
+
+  async function postTradeSummary(
+    body: { date: string; symbol: string; mode?: "prefer_cache" | "refresh" },
+    signal?: AbortSignal,
+  ) {
+    const res = await fetch("/api/v1/trade-summary/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const json = (await res.json()) as TradeSummaryResp
+    if (!json.ok) throw new Error(json.error || "unknown error")
+    return json.items
+  }
+
+  function startProgress() {
+    setProgress(0)
+    if (progressTimerRef.current) cancelAnimationFrame(progressTimerRef.current)
+    const start = performance.now()
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / 1200) // ease to ~90%
+      setProgress(5 + 85 * t)
+      if (t < 1 && loading) {
+        progressTimerRef.current = requestAnimationFrame(tick)
+      }
+    }
+    progressTimerRef.current = requestAnimationFrame(tick)
+  }
+
+  function finishProgress() {
+    if (progressTimerRef.current) cancelAnimationFrame(progressTimerRef.current)
+    setProgress(100)
+    setTimeout(() => setProgress(0), 300)
+  }
+
   // Compute labels for headers using selected date
   const prevDateStr = React.useMemo(() => {
     // Derive previous day string for header label
@@ -83,7 +138,7 @@ export default function WarehouseProductsPage() {
     return `${y}-${m}-${day}`
   }, [date])
 
-  // Pivot the static items into 3 rows: Buy / Sell / Total
+  // Pivot the items into 3 rows: Buy / Sell / Total
   const rows: PivotRow[] = React.useMemo(() => {
     const buy = createEmptyRow("Buy")
     const sell = createEmptyRow("Sell")
@@ -101,7 +156,7 @@ export default function WarehouseProductsPage() {
       "过夜": "overnight",
     }
 
-    for (const it of sampleItems) {
+    for (const it of (items ?? sampleItems)) {
       const grpKey = grpMap[it.grp]
       const setKey = setMap[it.settlement]
       if (!grpKey || !setKey) continue
@@ -125,7 +180,7 @@ export default function WarehouseProductsPage() {
     }
 
     return [buy, sell, total]
-  }, [])
+  }, [items])
 
   // Profit cell text color based on sign
   function profitClass(n: number): string {
@@ -134,11 +189,30 @@ export default function WarehouseProductsPage() {
     return "text-foreground"
   }
 
-  // Placeholder refresh click handler (no API calls yet)
-  function onRefresh() {
-    // In the real implementation, trigger API with { symbol, date }
-    // and set state from response. For now, do nothing (static preview).
+  // Refresh handler with caching modes and cancellable request
+  async function onRefresh(mode: "prefer_cache" | "refresh" = "refresh") {
+    if (abortRef.current) abortRef.current.abort()
+    const ctl = new AbortController()
+    abortRef.current = ctl
+    setError(null)
+    setLoading(true)
+    startProgress()
+    try {
+      const data = await postTradeSummary({ date, symbol, mode }, ctl.signal)
+      setItems(data)
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setError(e?.message || "请求失败")
+    } finally {
+      setLoading(false)
+      finishProgress()
+    }
   }
+
+  // 初次加载时尝试从缓存拉取；之后仅在点击“刷新”时请求
+  React.useEffect(() => {
+    onRefresh("prefer_cache")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Build nested structure for row-title layout
   const nested = React.useMemo(() => {
@@ -243,9 +317,17 @@ export default function WarehouseProductsPage() {
               </PopoverContent>
             </Popover>
           </div>
-          {/* 刷新 */}
-          <div className="flex items-center gap-3">
-            <Button className="h-9" onClick={onRefresh}>刷新</Button>
+          {/* 刷新 + 进度条 + 错误提示 */}
+          <div className="flex items-center gap-3 min-w-[260px]">
+            <Button className="h-9" onClick={() => onRefresh("refresh")} disabled={loading}>
+              {loading ? "刷新中..." : "刷新"}
+            </Button>
+            {progress > 0 && (
+              <div className="w-[160px]">
+                <Progress value={progress} />
+              </div>
+            )}
+            {error && <span className="text-sm text-red-600">{error}</span>}
           </div>
         </CardContent>
       </Card>
