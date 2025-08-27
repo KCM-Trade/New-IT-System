@@ -205,7 +205,14 @@ export default function WarehouseProductsPage() {
     try {
       const data = await postTradeSummary({ date, symbol: effectiveSymbol, mode }, ctl.signal)
       setItems(data)
-      setLastUpdated(new Date())
+      const now = new Date()
+      setLastUpdated(now)
+      try {
+        sessionStorage.setItem("warehouse_products_items", JSON.stringify(data))
+        sessionStorage.setItem("warehouse_products_lastUpdated", String(now.getTime()))
+        sessionStorage.setItem("warehouse_products_symbol", effectiveSymbol)
+        sessionStorage.setItem("warehouse_products_date", date)
+      } catch {}
     } catch (e: any) {
       if (e?.name !== "AbortError") setError(e?.message || "请求失败")
     } finally {
@@ -215,6 +222,14 @@ export default function WarehouseProductsPage() {
   }
 
   // 不自动加载；仅点击“刷新”时请求
+  React.useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("warehouse_products_items")
+      const ts = sessionStorage.getItem("warehouse_products_lastUpdated")
+      if (raw) setItems(JSON.parse(raw) as TradeSummaryItem[])
+      if (ts) setLastUpdated(new Date(Number(ts)))
+    } catch {}
+  }, [])
 
   // Build nested structure for row-title layout
   const nested = React.useMemo(() => {
@@ -356,14 +371,14 @@ export default function WarehouseProductsPage() {
             <TableRow>
               <TableHead rowSpan={2} className="w-[200px] align-middle border-r font-semibold text-base">报仓</TableHead>
               <TableHead rowSpan={2} className="w-[140px] align-middle border-r font-semibold text-base">Type</TableHead>
-              <TableHead colSpan={2} className="text-center font-semibold text-base">即日</TableHead>
-              <TableHead colSpan={2} className="text-center font-semibold text-base">过夜</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-base bg-blue-50 dark:bg-blue-900/20 rounded-sm">即日</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20 rounded-sm">过夜</TableHead>
             </TableRow>
             <TableRow>
-              <TableHead className="text-right border-r font-semibold text-base">Volume</TableHead>
-              <TableHead className="text-right border-r font-semibold text-base">Profit</TableHead>
-              <TableHead className="text-right border-r font-semibold text-base">Volume</TableHead>
-              <TableHead className="text-right font-semibold text-base">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base bg-blue-50 dark:bg-blue-900/20">Volume</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base bg-blue-50 dark:bg-blue-900/20">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20">Volume</TableHead>
+              <TableHead className="text-right font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20">Profit</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
