@@ -2,16 +2,14 @@ import * as React from "react"
 
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Calendar as CalendarIcon } from "lucide-react"
+import { Calendar as CalendarIcon, Loader2 } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
+import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
 
 // Static sample data from backend response for preview (no API calls yet)
 const sampleItems = [
@@ -78,9 +76,11 @@ function format2(n: number): string {
 }
 
 export default function WarehouseProductsPage() {
-  // Controlled filters (symbol and date)
-  const [symbol, setSymbol] = React.useState<string>("XAU-CNH")
+  // Controlled filters (product and date)
+  const [selectedProduct, setSelectedProduct] = React.useState<string>("XAU-CNH")
+  const [customSymbol, setCustomSymbol] = React.useState<string>("")
   const [date, setDate] = React.useState<string>("2025-08-27")
+  const effectiveSymbol = selectedProduct === "other" ? customSymbol.trim() : selectedProduct
 
   // API states and helpers
   const [items, setItems] = React.useState<TradeSummaryItem[] | null>(null)
@@ -89,6 +89,7 @@ export default function WarehouseProductsPage() {
   const [progress, setProgress] = React.useState(0)
   const progressTimerRef = React.useRef<number | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
+  const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null)
 
   async function postTradeSummary(
     body: { date: string; symbol: string; mode?: "prefer_cache" | "refresh" },
@@ -184,13 +185,17 @@ export default function WarehouseProductsPage() {
 
   // Profit cell text color based on sign
   function profitClass(n: number): string {
-    if (n > 0) return "text-green-600"
-    if (n < 0) return "text-red-600"
+    if (n > 0) return "text-green-600 dark:text-green-400"
+    if (n < 0) return "text-red-600 dark:text-red-400"
     return "text-foreground"
   }
 
   // Refresh handler with caching modes and cancellable request
   async function onRefresh(mode: "prefer_cache" | "refresh" = "refresh") {
+    if (selectedProduct === "other" && !effectiveSymbol) {
+      setError("请输入产品名称")
+      return
+    }
     if (abortRef.current) abortRef.current.abort()
     const ctl = new AbortController()
     abortRef.current = ctl
@@ -198,8 +203,9 @@ export default function WarehouseProductsPage() {
     setLoading(true)
     startProgress()
     try {
-      const data = await postTradeSummary({ date, symbol, mode }, ctl.signal)
+      const data = await postTradeSummary({ date, symbol: effectiveSymbol, mode }, ctl.signal)
       setItems(data)
+      setLastUpdated(new Date())
     } catch (e: any) {
       if (e?.name !== "AbortError") setError(e?.message || "请求失败")
     } finally {
@@ -208,11 +214,7 @@ export default function WarehouseProductsPage() {
     }
   }
 
-  // 初次加载时尝试从缓存拉取；之后仅在点击“刷新”时请求
-  React.useEffect(() => {
-    onRefresh("prefer_cache")
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // 不自动加载；仅点击“刷新”时请求
 
   // Build nested structure for row-title layout
   const nested = React.useMemo(() => {
@@ -276,27 +278,35 @@ export default function WarehouseProductsPage() {
     <div className="space-y-4 px-4 pb-6 lg:px-6">
       {/* Toolbar Card (一致化 Profit 页样式) */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold">筛选</CardTitle>
-        </CardHeader>
         <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
-          {/* 产品选择 */}
+          {/* 产品选择（Select + 其他时可自定义） */}
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground">产品</span>
-            <select
-              className="h-9 rounded-md border bg-background px-2"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-            >
-              <option value="XAU-CNH">XAU-CNH</option>
-            </select>
+            <Select value={selectedProduct} onValueChange={(v) => setSelectedProduct(v)}>
+              <SelectTrigger className="h-10 w-[180px] rounded-md">
+                <SelectValue placeholder="请选择产品" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="XAU-CNH">XAU-CNH</SelectItem>
+                <SelectItem value="XAUUSD">XAUUSD</SelectItem>
+                <SelectItem value="other">其他</SelectItem>
+              </SelectContent>
+            </Select>
+            {selectedProduct === "other" && (
+              <Input
+                className="h-10 w-[180px]"
+                placeholder="自定义产品"
+                value={customSymbol}
+                onChange={(e) => setCustomSymbol(e.target.value)}
+              />
+            )}
           </div>
           {/* 日期选择（shadcn Calendar 单日） */}
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground">日期</span>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="justify-start gap-2 font-normal">
+                <Button variant="outline" className="h-10 w-[180px] justify-between gap-2 font-normal">
                   <CalendarIcon className="h-4 w-4" />
                   <span>{date}</span>
                 </Button>
@@ -317,10 +327,11 @@ export default function WarehouseProductsPage() {
               </PopoverContent>
             </Popover>
           </div>
-          {/* 刷新 + 进度条 + 错误提示 */}
-          <div className="flex items-center gap-3 min-w-[260px]">
-            <Button className="h-9" onClick={() => onRefresh("refresh")} disabled={loading}>
-              {loading ? "刷新中..." : "刷新"}
+          {/* 刷新 + 进度条 + 错误提示 + 上次刷新时间 */}
+          <div className="flex items-center gap-3 min-w-[360px]">
+            <Button className="h-9 w-[96px] gap-2" onClick={() => onRefresh("refresh")} disabled={loading || (selectedProduct === "other" && !effectiveSymbol)}>
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              刷新
             </Button>
             {progress > 0 && (
               <div className="w-[160px]">
@@ -328,6 +339,9 @@ export default function WarehouseProductsPage() {
               </div>
             )}
             {error && <span className="text-sm text-red-600">{error}</span>}
+            {lastUpdated && (
+              <Badge variant="outline">上次刷新：{lastUpdated.toLocaleString("zh-CN", { hour12: false })}</Badge>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -336,20 +350,20 @@ export default function WarehouseProductsPage() {
       <Card>
         <CardContent className="pt-6">
           <div className="mx-auto w-full max-w-[1280px]">
-            <div className="overflow-hidden rounded-md border">
-              <Table className="min-w-[960px]">
+            <div className="overflow-hidden rounded-md border-2 shadow-md">
+              <Table className="min-w-[780px]">
           <TableHeader>
             <TableRow>
-              <TableHead rowSpan={2} className="w-[200px] align-middle">报仓</TableHead>
-              <TableHead rowSpan={2} className="w-[140px] align-middle">Type</TableHead>
-              <TableHead colSpan={2} className="text-center">即日</TableHead>
-              <TableHead colSpan={2} className="text-center">过夜</TableHead>
+              <TableHead rowSpan={2} className="w-[200px] align-middle border-r font-semibold text-base">报仓</TableHead>
+              <TableHead rowSpan={2} className="w-[140px] align-middle border-r font-semibold text-base">Type</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-base">即日</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-base">过夜</TableHead>
             </TableRow>
             <TableRow>
-              <TableHead className="text-right">Volume</TableHead>
-              <TableHead className="text-right">Profit</TableHead>
-              <TableHead className="text-right">Volume</TableHead>
-              <TableHead className="text-right">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base">Volume</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-base">Volume</TableHead>
+              <TableHead className="text-right font-semibold text-base">Profit</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -362,15 +376,15 @@ export default function WarehouseProductsPage() {
                   {types.map((t, tIdx) => {
                     const d = computeDisplay(block, t)
                     return (
-                      <TableRow key={t}>
+                      <TableRow key={t} className={`${t === "Total" ? "bg-blue-50 dark:bg-blue-900/30" : ""}`}>
                         {tIdx === 0 && (
-                          <TableCell rowSpan={3} className="align-top font-medium">{groupLabel}</TableCell>
+                          <TableCell rowSpan={3} className="align-top font-medium border-r border-2 dark:border-white/20">{groupLabel}</TableCell>
                         )}
-                        <TableCell>{t}</TableCell>
-                        <TableCell className="text-right tabular-nums">{format2(d.dayVol)}</TableCell>
-                        <TableCell className={`text-right tabular-nums ${profitClass(d.dayPft)}`}>{format2(d.dayPft)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{format2(d.overVol)}</TableCell>
-                        <TableCell className={`text-right tabular-nums ${profitClass(d.overPft)}`}>{format2(d.overPft)}</TableCell>
+                        <TableCell className={`border-r ${t === "Total" ? "font-semibold" : ""}`}>{t}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r ${profitClass(d.dayPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayPft)}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums ${profitClass(d.overPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overPft)}</TableCell>
                       </TableRow>
                     )
                   })}
