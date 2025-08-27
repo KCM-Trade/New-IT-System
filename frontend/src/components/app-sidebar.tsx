@@ -7,9 +7,7 @@ import {
   IconFileAi,
   IconFileDescription,
   IconFileWord,
-  IconFolder,
   IconHelp,
-  IconInnerShadowTop,
   IconListDetails,
   IconReport,
   IconSearch,
@@ -26,9 +24,6 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
 const data = {
@@ -42,8 +37,15 @@ const data = {
     { title: "黄金报价", url: "/gold", icon: IconReport },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
-    { title: "报仓数据", url: "/warehouse", icon: IconChartBar },
-    { title: "实时全仓报表", url: "/positions", icon: IconFolder },
+    {
+      title: "报仓数据",
+      icon: IconChartBar,
+      children: [
+        { title: "产品报仓", url: "/warehouse/products" },
+        { title: "全仓报表", url: "/positions" },
+        { title: "其他", url: "/warehouse/others" },
+      ],
+    },
     { title: "Login IP监测", url: "/login-ips", icon: IconUsers },
     { title: "利润分析", url: "/profit", icon: IconReport },
   ],

@@ -81,8 +81,8 @@ export default function ProfitPage() {
   const [loading, setLoading] = useState(true)
   // fresh grad: date range via single Popover + range Calendar
   const [range, setRange] = useState<DateRange | undefined>({
-    from: new Date(2025, 4, 1), // 2025-05-01
-    to: new Date(2025, 7, 18),  // 2025-08-18
+    from: new Date(2025, 7, 1), // 2025-08-01
+    to: new Date(2025, 7, 7),  // 2025-08-10
   })
   const [agg, setAgg] = useState<AggKey>("timeline")
   const [tz, setTz] = useState<TzKey>("+8")

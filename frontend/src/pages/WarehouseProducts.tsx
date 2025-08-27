@@ -1,0 +1,307 @@
+import * as React from "react"
+
+import { Button } from "@/components/ui/button"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar } from "@/components/ui/calendar"
+import { Calendar as CalendarIcon } from "lucide-react"
+
+// Static sample data from backend response for preview (no API calls yet)
+const sampleItems = [
+  { grp: "正在持仓", settlement: "过夜", direction: "buy", total_volume: 11.22, total_profit: -216.6099999999999 },
+  { grp: "正在持仓", settlement: "过夜", direction: "sell", total_volume: 14.7, total_profit: -789.6500000000001 },
+  { grp: "昨日已平", settlement: "过夜", direction: "sell", total_volume: 34.76, total_profit: -4955.52 },
+  { grp: "昨日已平", settlement: "过夜", direction: "buy", total_volume: 155, total_profit: 72797.41 },
+  { grp: "当日已平", settlement: "过夜", direction: "sell", total_volume: 237.76, total_profit: 29739.25 },
+  { grp: "正在持仓", settlement: "当天", direction: "buy", total_volume: 80.23, total_profit: -6163.829999999999 },
+  { grp: "正在持仓", settlement: "当天", direction: "sell", total_volume: 28.22, total_profit: 147.94999999999987 },
+  { grp: "昨日已平", settlement: "当天", direction: "sell", total_volume: 69.7, total_profit: -3340.7799999999993 },
+  { grp: "昨日已平", settlement: "当天", direction: "buy", total_volume: 199.31, total_profit: 81233.08 },
+  { grp: "当日已平", settlement: "当天", direction: "sell", total_volume: 245.83, total_profit: 31473.5 },
+  { grp: "当日已平", settlement: "当天", direction: "buy", total_volume: 8, total_profit: 268.21 },
+]
+
+type DirectionType = "Buy" | "Sell" | "Total"
+
+type MetricKeys =
+  | "current_day_volume" | "current_day_profit" | "current_overnight_volume" | "current_overnight_profit"
+  | "closedToday_day_volume" | "closedToday_day_profit" | "closedToday_overnight_volume" | "closedToday_overnight_profit"
+  | "closedYesterday_day_volume" | "closedYesterday_day_profit" | "closedYesterday_overnight_volume" | "closedYesterday_overnight_profit"
+
+type PivotRow = {
+  type: DirectionType
+} & Record<MetricKeys, number>
+
+function createEmptyRow(type: DirectionType): PivotRow {
+  // Create an empty row with all metrics set to 0
+  return {
+    type,
+    current_day_volume: 0,
+    current_day_profit: 0,
+    current_overnight_volume: 0,
+    current_overnight_profit: 0,
+    closedToday_day_volume: 0,
+    closedToday_day_profit: 0,
+    closedToday_overnight_volume: 0,
+    closedToday_overnight_profit: 0,
+    closedYesterday_day_volume: 0,
+    closedYesterday_day_profit: 0,
+    closedYesterday_overnight_volume: 0,
+    closedYesterday_overnight_profit: 0,
+  }
+}
+
+function toCap(dir: string): DirectionType {
+  return dir === "buy" ? "Buy" : dir === "sell" ? "Sell" : "Total"
+}
+
+function format2(n: number): string {
+  // Always show 2 decimal places with grouping separators
+  return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+export default function WarehouseProductsPage() {
+  // Controlled filters (symbol and date)
+  const [symbol, setSymbol] = React.useState<string>("XAU-CNH")
+  const [date, setDate] = React.useState<string>("2025-08-27")
+
+  // Compute labels for headers using selected date
+  const prevDateStr = React.useMemo(() => {
+    // Derive previous day string for header label
+    const d = new Date(date)
+    const prev = new Date(d)
+    prev.setDate(d.getDate() - 1)
+    const y = prev.getFullYear()
+    const m = String(prev.getMonth() + 1).padStart(2, "0")
+    const day = String(prev.getDate()).padStart(2, "0")
+    return `${y}-${m}-${day}`
+  }, [date])
+
+  // Pivot the static items into 3 rows: Buy / Sell / Total
+  const rows: PivotRow[] = React.useMemo(() => {
+    const buy = createEmptyRow("Buy")
+    const sell = createEmptyRow("Sell")
+
+    // Map grp -> key prefix
+    const grpMap: Record<string, "current" | "closedToday" | "closedYesterday"> = {
+      "正在持仓": "current",
+      "当日已平": "closedToday",
+      "昨日已平": "closedYesterday",
+    }
+
+    // Map settlement -> suffix
+    const setMap: Record<string, "day" | "overnight"> = {
+      "当天": "day",
+      "过夜": "overnight",
+    }
+
+    for (const it of sampleItems) {
+      const grpKey = grpMap[it.grp]
+      const setKey = setMap[it.settlement]
+      if (!grpKey || !setKey) continue
+
+      const volKey = `${grpKey}_${setKey}_volume` as MetricKeys
+      const pftKey = `${grpKey}_${setKey}_profit` as MetricKeys
+
+      const target = toCap(it.direction) === "Buy" ? buy : sell
+      target[volKey] += it.total_volume || 0
+      target[pftKey] += it.total_profit || 0
+    }
+
+    const total = createEmptyRow("Total")
+    const allKeys: MetricKeys[] = [
+      "current_day_volume", "current_day_profit", "current_overnight_volume", "current_overnight_profit",
+      "closedToday_day_volume", "closedToday_day_profit", "closedToday_overnight_volume", "closedToday_overnight_profit",
+      "closedYesterday_day_volume", "closedYesterday_day_profit", "closedYesterday_overnight_volume", "closedYesterday_overnight_profit",
+    ]
+    for (const k of allKeys) {
+      total[k] = buy[k] + sell[k]
+    }
+
+    return [buy, sell, total]
+  }, [])
+
+  // Profit cell text color based on sign
+  function profitClass(n: number): string {
+    if (n > 0) return "text-green-600"
+    if (n < 0) return "text-red-600"
+    return "text-foreground"
+  }
+
+  // Placeholder refresh click handler (no API calls yet)
+  function onRefresh() {
+    // In the real implementation, trigger API with { symbol, date }
+    // and set state from response. For now, do nothing (static preview).
+  }
+
+  // Build nested structure for row-title layout
+  const nested = React.useMemo(() => {
+    const [buy, sell, total] = rows
+    function pick(group: "current" | "closedToday" | "closedYesterday") {
+      return {
+        Buy: {
+          day: { volume: buy[`${group}_day_volume` as MetricKeys], profit: buy[`${group}_day_profit` as MetricKeys] },
+          overnight: { volume: buy[`${group}_overnight_volume` as MetricKeys], profit: buy[`${group}_overnight_profit` as MetricKeys] },
+        },
+        Sell: {
+          day: { volume: sell[`${group}_day_volume` as MetricKeys], profit: sell[`${group}_day_profit` as MetricKeys] },
+          overnight: { volume: sell[`${group}_overnight_volume` as MetricKeys], profit: sell[`${group}_overnight_profit` as MetricKeys] },
+        },
+        Total: {
+          day: { volume: total[`${group}_day_volume` as MetricKeys], profit: total[`${group}_day_profit` as MetricKeys] },
+          overnight: { volume: total[`${group}_overnight_volume` as MetricKeys], profit: total[`${group}_overnight_profit` as MetricKeys] },
+        },
+      }
+    }
+    return {
+      current: pick("current"),
+      closedToday: pick("closedToday"),
+      closedYesterday: pick("closedYesterday"),
+    }
+  }, [rows])
+
+  function computeDisplay(block: {
+    Buy: { day: { volume: number; profit: number }; overnight: { volume: number; profit: number } }
+    Sell: { day: { volume: number; profit: number }; overnight: { volume: number; profit: number } }
+    Total: { day: { volume: number; profit: number }; overnight: { volume: number; profit: number } }
+  }, type: DirectionType) {
+    const buy = block.Buy
+    const sell = block.Sell
+    if (type === "Buy") {
+      return {
+        dayVol: buy.day.volume,
+        dayPft: buy.day.profit,
+        overVol: buy.overnight.volume,
+        overPft: buy.overnight.profit,
+      }
+    }
+    if (type === "Sell") {
+      return {
+        dayVol: -sell.day.volume,
+        dayPft: sell.day.profit,
+        overVol: -sell.overnight.volume,
+        overPft: sell.overnight.profit,
+      }
+    }
+    // Total: Volume = Buy - Sell; Profit = Buy + Sell
+    return {
+      dayVol: buy.day.volume - sell.day.volume,
+      dayPft: buy.day.profit + sell.day.profit,
+      overVol: buy.overnight.volume - sell.overnight.volume,
+      overPft: buy.overnight.profit + sell.overnight.profit,
+    }
+  }
+
+  return (
+    <div className="space-y-4 px-4 pb-6 lg:px-6">
+      {/* Toolbar Card (一致化 Profit 页样式) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-2xl font-bold">筛选</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+          {/* 产品选择 */}
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">产品</span>
+            <select
+              className="h-9 rounded-md border bg-background px-2"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+            >
+              <option value="XAU-CNH">XAU-CNH</option>
+            </select>
+          </div>
+          {/* 日期选择（shadcn Calendar 单日） */}
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">日期</span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="justify-start gap-2 font-normal">
+                  <CalendarIcon className="h-4 w-4" />
+                  <span>{date}</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={new Date(date)}
+                  onSelect={(d) => {
+                    if (!d) return
+                    const y = d.getFullYear()
+                    const m = String(d.getMonth() + 1).padStart(2, "0")
+                    const day = String(d.getDate()).padStart(2, "0")
+                    setDate(`${y}-${m}-${day}`)
+                  }}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+          {/* 刷新 */}
+          <div className="flex items-center gap-3">
+            <Button className="h-9" onClick={onRefresh}>刷新</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Table Card */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="mx-auto w-full max-w-[1280px]">
+            <div className="overflow-hidden rounded-md border">
+              <Table className="min-w-[960px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead rowSpan={2} className="w-[200px] align-middle">报仓</TableHead>
+              <TableHead rowSpan={2} className="w-[140px] align-middle">Type</TableHead>
+              <TableHead colSpan={2} className="text-center">即日</TableHead>
+              <TableHead colSpan={2} className="text-center">过夜</TableHead>
+            </TableRow>
+            <TableRow>
+              <TableHead className="text-right">Volume</TableHead>
+              <TableHead className="text-right">Profit</TableHead>
+              <TableHead className="text-right">Volume</TableHead>
+              <TableHead className="text-right">Profit</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(["current", "closedToday", "closedYesterday"] as const).map((gKey) => {
+              const groupLabel = gKey === "current" ? "正在持仓" : gKey === "closedToday" ? `当日已平（${date}）` : `昨日已平（${prevDateStr}）`
+              const block = nested[gKey]
+              const types: DirectionType[] = ["Buy", "Sell", "Total"]
+              return (
+                <React.Fragment key={gKey}>
+                  {types.map((t, tIdx) => {
+                    const d = computeDisplay(block, t)
+                    return (
+                      <TableRow key={t}>
+                        {tIdx === 0 && (
+                          <TableCell rowSpan={3} className="align-top font-medium">{groupLabel}</TableCell>
+                        )}
+                        <TableCell>{t}</TableCell>
+                        <TableCell className="text-right tabular-nums">{format2(d.dayVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums ${profitClass(d.dayPft)}`}>{format2(d.dayPft)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{format2(d.overVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums ${profitClass(d.overPft)}`}>{format2(d.overPft)}</TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </React.Fragment>
+              )
+            })}
+          </TableBody>
+          </Table>
+        </div>
+      </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+

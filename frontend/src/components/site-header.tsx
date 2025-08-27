@@ -10,6 +10,8 @@ const titleMap: Record<string, string> = {
   "/basis": "基差分析",
   "/downloads": "数据下载",
   "/warehouse": "报仓数据",
+  "/warehouse/products": "产品报仓",
+  "/warehouse/others": "其他报仓",
   "/positions": "实时全仓报表",
   "/login-ips": "Login IP监测",
   "/profit": "利润分析",
