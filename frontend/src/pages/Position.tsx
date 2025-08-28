@@ -60,9 +60,9 @@ function StatCard({
         <div className={`rounded-xl p-2 ${iconBoxClass}`}>
           <Icon className="h-5 w-5" />
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="text-sm text-muted-foreground">{title}</div>
-          <div className={`mt-1 text-2xl font-semibold tabular-nums ${valueClass}`}>{prefix}{value}</div>
+          <div className={`mt-1 font-semibold tabular-nums ${valueClass} text-xl sm:text-2xl truncate whitespace-nowrap`}>{prefix}{value}</div>
           <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
             {positive ? (
               <ArrowUpRight className="h-3.5 w-3.5 text-green-600" />
@@ -231,13 +231,16 @@ export default function PositionPage() {
             {lastUpdated && <Badge variant="outline">上次刷新：{lastUpdated.toLocaleString("zh-CN", { hour12: false })}</Badge>}
             {items && !error && <span className="text-muted-foreground">记录数：{items.length}</span>}
           </div>
+          <div className="text-xs text-muted-foreground">
+            数据说明：刷新后展示的是“截止当前”的所有未平仓产品情况。
+          </div>
         </CardContent>
       </Card>
 
       {/* 表格：两行表头，默认按 Profit Total 升序 */}
       <Card>
         <CardContent className="pt-6">
-          <div className="mx-auto w-full max-w-[1280px]">
+          <div className="w-full">
             <div className="overflow-hidden rounded-md border-2 shadow-md">
               <Table className="min-w-[860px]">
                 <TableHeader>
@@ -247,14 +250,32 @@ export default function PositionPage() {
                         <TableHead
                           key={header.id}
                           colSpan={header.colSpan}
-                          className={`align-middle ${header.colSpan > 1 ? "text-center" : ""}`}
+                          className={`align-middle border-b-2 ${header.colSpan > 1 ? "text-center" : ""} ${
+                            header.colSpan > 1 && typeof header.column.columnDef.header === "string" && header.column.columnDef.header === "Volume"
+                              ? "bg-sky-50 dark:bg-sky-950/20"
+                              : ""
+                          } ${
+                            header.colSpan > 1 && typeof header.column.columnDef.header === "string" && header.column.columnDef.header === "Profit"
+                              ? "bg-amber-50 dark:bg-amber-950/20"
+                              : ""
+                          } ${
+                            header.colSpan === 1 && ["volume_buy", "volume_sell"].includes(header.column.id)
+                              ? "bg-sky-50 dark:bg-sky-950/20"
+                              : ""
+                          } ${
+                            header.colSpan === 1 && ["profit_buy", "profit_sell", "profit_total"].includes(header.column.id)
+                              ? "bg-amber-50 dark:bg-amber-950/20"
+                              : ""
+                          }`}
                         >
                           {header.isPlaceholder ? null : (
                             <div
-                              className={`flex ${
+                              className={`flex w-full ${
                                 header.colSpan > 1
                                   ? "justify-center"
-                                  : ""
+                                  : typeof header.column.columnDef.header === "string"
+                                  ? ""
+                                  : "justify-end"
                               } ${typeof header.column.columnDef.header === "string" ? "font-semibold text-base" : ""}`}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
