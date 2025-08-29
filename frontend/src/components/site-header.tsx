@@ -9,6 +9,7 @@ const titleMap: Record<string, string> = {
   "/gold": "黄金报价",
   "/basis": "基差分析",
   "/downloads": "数据下载",
+  "/warehouse/agent-global": "代理统计Global",
   "/warehouse": "报仓数据",
   "/warehouse/products": "产品报仓",
   "/warehouse/others": "其他报仓",

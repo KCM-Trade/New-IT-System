@@ -37,6 +37,7 @@ const data = {
     { title: "黄金报价", url: "/gold", icon: IconReport },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
+    { title: "代理统计Global", url: "/warehouse/agent-global", icon: IconReport },
     {
       title: "报仓数据",
       icon: IconChartBar,

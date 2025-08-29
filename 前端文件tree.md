@@ -37,6 +37,22 @@
 - `eslint.config.js`：ESLint 规则（代码质量/风格）配置。
 - `components.json`：shadcn UI 的 CLI 配置（组件生成偏好、路径、样式系统等）。不用 CLI 时可忽略。
 
+### 页面标题与浏览器标签（Site Header）
+- 位置：`src/components/site-header.tsx`
+- 机制：根据当前路由在 `titleMap` 中映射页面名，并拼接浏览器标题：
+  - `fullTitle = "KCM Analytics System | ${pageTitle}"`
+  - `useEffect(() => { document.title = fullTitle })`
+- 如何新增标题：在 `titleMap` 增加路由键值即可：
+```ts
+const titleMap: Record<string, string> = {
+  "/template": "模板",
+  "/downloads": "数据下载",
+  "/warehouse/agent-global": "代理统计Global", // 新增示例
+  "/position": "全仓报表",
+  "/profit": "利润分析",
+}
+```
+
 ### 资源与静态文件
 - `public/`：静态公开资源目录，构建时会原样复制到输出根目录（通过 `/xxx.ext` 直接访问）。
 - `src/assets/`：通过打包器（Vite）处理的资源（可被 import、会走哈希指纹等）。
