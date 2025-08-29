@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { ArrowUpDown, ArrowDownRight, ArrowUpRight, DollarSign, TrendingUp } from "lucide-react"
 import { ColumnDef, SortingState, flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table"
 
@@ -26,6 +27,29 @@ function profitClass(n: number): string {
   if (n > 0) return "text-green-600 dark:text-green-400"
   if (n < 0) return "text-red-600 dark:text-red-400"
   return "text-foreground"
+}
+
+// Format volume with 2 significant digits for better readability
+// Examples: 0.00048 → 0.00048, 1.4000000000000001 → 1.4, 213.33000000000035 → 213.33
+function formatVolume(n: number): string {
+  if (n === 0) return "0"
+  const abs = Math.abs(n)
+  if (abs < 0.01) {
+    // For very small numbers, show up to 5 decimal places
+    return n.toFixed(5).replace(/\.?0+$/, '')
+  } else if (abs < 1) {
+    // For numbers < 1, show up to 4 decimal places
+    return n.toFixed(4).replace(/\.?0+$/, '')
+  } else if (abs < 10) {
+    // For numbers < 10, show up to 3 decimal places
+    return n.toFixed(3).replace(/\.?0+$/, '')
+  } else if (abs < 100) {
+    // For numbers < 100, show up to 2 decimal places
+    return n.toFixed(2).replace(/\.?0+$/, '')
+  } else {
+    // For larger numbers, show up to 1 decimal place
+    return n.toFixed(1).replace(/\.?0+$/, '')
+  }
 }
 
 function StatCard({
@@ -85,9 +109,18 @@ export default function PositionPage() {
   const [sorting, setSorting] = React.useState<SortingState>([
     { id: "profit_total", desc: false },
   ])
+  // Data source capsule toggle: 'mt4_live' | 'mt4_live2'
+  const [source, setSource] = React.useState<"mt4_live" | "mt4_live2">(() => {
+    try {
+      const s = sessionStorage.getItem("position_source") as "mt4_live" | "mt4_live2" | null
+      return s === "mt4_live2" ? "mt4_live2" : "mt4_live"
+    } catch {
+      return "mt4_live"
+    }
+  })
 
   async function fetchOpenPositions(signal?: AbortSignal) {
-    const res = await fetch("/api/v1/open-positions/today", { method: "GET", headers: { accept: "application/json" }, signal })
+    const res = await fetch(`/api/v1/open-positions/today?source=${source}`, { method: "GET", headers: { accept: "application/json" }, signal })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const json = (await res.json()) as OpenPositionsResp
     if (!json.ok) throw new Error(json.error || "unknown error")
@@ -104,6 +137,7 @@ export default function PositionPage() {
       try {
         sessionStorage.setItem("position_items", JSON.stringify(data))
         sessionStorage.setItem("position_lastUpdated", String(Date.now()))
+        sessionStorage.setItem("position_source", source)
       } catch {}
     } catch (e: any) {
       setError(e?.message || "请求失败")
@@ -146,14 +180,14 @@ export default function PositionPage() {
             header: ({ column }) => (
               <Button variant="ghost" className="px-0" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>Buy<ArrowUpDown className="ml-2 h-4 w-4" /></Button>
             ),
-            cell: ({ row }) => <div className="text-right tabular-nums">{format2(row.original.volume_buy)}</div>,
+            cell: ({ row }) => <div className="text-right tabular-nums">{formatVolume(row.original.volume_buy)}</div>,
           },
           {
             accessorKey: "volume_sell",
             header: ({ column }) => (
               <Button variant="ghost" className="px-0" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>Sell<ArrowUpDown className="ml-2 h-4 w-4" /></Button>
             ),
-            cell: ({ row }) => <div className="text-right tabular-nums">{format2(row.original.volume_sell)}</div>,
+            cell: ({ row }) => <div className="text-right tabular-nums">{formatVolume(row.original.volume_sell)}</div>,
           },
         ],
       },
@@ -212,20 +246,44 @@ export default function PositionPage() {
     <div className="relative space-y-4 px-4 pb-6 lg:px-6">
       {/* 顶部统计卡片（5个） */}
       <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-5">
-        <StatCard title="Volume Buy" value={format2(totals.volume_buy)} positive={totals.volume_buy >= 0} icon={TrendingUp} variant="neutral" />
-        <StatCard title="Volume Sell" value={format2(totals.volume_sell)} positive={totals.volume_sell >= 0} icon={TrendingUp} variant="neutral" />
+        <StatCard title="Volume Buy" value={formatVolume(totals.volume_buy)} positive={totals.volume_buy >= 0} icon={TrendingUp} variant="neutral" />
+        <StatCard title="Volume Sell" value={formatVolume(totals.volume_sell)} positive={totals.volume_sell >= 0} icon={TrendingUp} variant="neutral" />
         <StatCard title="Profit Buy" value={format2(totals.profit_buy)} positive={totals.profit_buy >= 0} variant="profit" />
         <StatCard title="Profit Sell" value={format2(totals.profit_sell)} positive={totals.profit_sell >= 0} variant="profit" />
         <StatCard title="Profit Total" value={format2(totals.profit_total)} positive={totals.profit_total >= 0} variant="profit" />
       </div>
 
-      {/* Toolbar：仅居中刷新 + 状态显示 */}
+      {/* Toolbar：数据源胶囊 + 刷新按钮 + 状态显示 */}
       <Card>
         <CardContent className="flex flex-col items-center gap-3 py-6">
-          <Button className="h-9 w-[120px] gap-2" onClick={onRefresh} disabled={loading}>
-            {loading && <ArrowUpDown className="h-4 w-4 animate-spin" />}
-            刷新
-          </Button>
+          {/* Data source capsule toggle + refresh button (same row) */}
+          <div className="flex items-center gap-4">
+            <ToggleGroup
+              type="single"
+              value={source}
+              onValueChange={(v: string) => v && setSource(v as "mt4_live" | "mt4_live2")}
+              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+            >
+              <ToggleGroupItem
+                value="mt4_live"
+                className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground
+                           data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+              >
+                mt4_live
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="mt4_live2"
+                className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground
+                           data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+              >
+                mt4_live2
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Button className="h-9 w-[120px] gap-2" onClick={onRefresh} disabled={loading}>
+              {loading && <ArrowUpDown className="h-4 w-4 animate-spin" />}
+              刷新
+            </Button>
+          </div>
           <div className="flex items-center gap-3 text-sm">
             {error && <span className="text-red-600">{error}</span>}
             {lastUpdated && <Badge variant="outline">上次刷新：{lastUpdated.toLocaleString("zh-CN", { hour12: false })}</Badge>}

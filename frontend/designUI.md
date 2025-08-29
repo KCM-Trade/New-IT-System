@@ -1,3 +1,68 @@
+# 前端设计规范文档
+
+## 胶囊切换组件设计标准
+
+### 使用场景
+- 二选一或多选一的切换场景
+- 需要保持选中状态的交互元素
+- 数据源、时区、聚合类型等配置切换
+
+### 标准实现方式
+
+#### 1. 导入组件
+```tsx
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+```
+
+#### 2. 状态管理
+```tsx
+const [value, setValue] = useState<"option1" | "option2">("option1")
+```
+
+#### 3. 标准样式类
+```tsx
+<ToggleGroup
+  type="single"
+  value={value}
+  onValueChange={(v: string) => v && setValue(v as "option1" | "option2")}
+  className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+>
+  <ToggleGroupItem
+    value="option1"
+    className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground
+               data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+  >
+    Option 1
+  </ToggleGroupItem>
+  <ToggleGroupItem
+    value="option2"
+    className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground
+               data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+  >
+    Option 2
+  </ToggleGroupItem>
+</ToggleGroup>
+```
+
+### 关键样式特点
+- **容器**: `w-[240px]` 固定宽度，`bg-muted p-1` 背景与内边距
+- **圆角**: `rounded-full` 完全圆形，`first:rounded-l-full last:rounded-r-full` 首尾圆角
+- **选中状态**: `data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow`
+- **文字**: `text-sm text-muted-foreground` 默认状态，选中时变为 `text-foreground`
+- **布局**: `flex-1` 等宽分布，`text-center` 居中对齐
+
+### 使用示例
+参考 `Profit.tsx` 中的实现：
+- 聚合类型切换：Open Time / Close Time
+- 聚合维度切换：时间轴（小时）/ 小时段(0-23)
+- 时区切换：UTC+3 / UTC+8
+
+### 注意事项
+- 始终使用 `type="single"` 确保单选
+- 状态类型要明确（如 `"mt4_live" | "mt4_live2"`）
+- 保持 240px 标准宽度以维持视觉一致性
+- 选中状态使用 `data-[state=on]` 伪类，配合 shadcn/ui 主题系统
+
 ### 页面与组件风格（可复用模板）
 
 - **总体布局**

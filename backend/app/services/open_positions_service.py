@@ -7,15 +7,17 @@ import pymysql
 from ..core.config import Settings
 
 
-def get_open_positions_today(settings: Settings) -> dict[str, Any]:
+def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> dict[str, Any]:
     """
     Query all open positions (CLOSE_TIME = '1970-01-01 00:00:00') for today.
     Aggregate per symbol with separate buy/sell volume and profit, and total profit.
     Exclude test accounts according to business rules seen elsewhere.
     """
 
-    sql = (
-        """
+    # Choose source schema/table
+    schema = "mt4_live2" if source == "mt4_live2" else "mt4_live"
+
+    sql = f"""
         SELECT
           t.symbol AS symbol,
           SUM(CASE WHEN t.cmd = 0 THEN t.volume / POW(10, t.DIGITS) ELSE 0 END) AS volume_buy,
@@ -23,12 +25,12 @@ def get_open_positions_today(settings: Settings) -> dict[str, Any]:
           SUM(CASE WHEN t.cmd = 0 THEN t.profit ELSE 0 END)      AS profit_buy,
           SUM(CASE WHEN t.cmd = 1 THEN t.profit ELSE 0 END)      AS profit_sell,
           SUM(t.profit)                                          AS profit_total
-        FROM mt4_live.mt4_trades t
+        FROM {schema}.mt4_trades t
         WHERE t.CLOSE_TIME = '1970-01-01 00:00:00'
           AND t.cmd IN (0,1)
           AND NOT EXISTS (
             SELECT 1
-            FROM mt4_live.mt4_users u
+            FROM {schema}.mt4_users u
             WHERE u.LOGIN = t.login
               AND (
                 u.name LIKE %(like_test)s
@@ -41,7 +43,6 @@ def get_open_positions_today(settings: Settings) -> dict[str, Any]:
         GROUP BY t.symbol
         ORDER BY t.symbol
         """
-    )
 
     params = {
         "like_test": "%test%",

@@ -13,8 +13,9 @@ router = APIRouter(prefix="/open-positions")
 @router.get("/today", response_model=OpenPositionsResponse)
 def get_open_positions(
     settings: Settings = Depends(get_settings),
+    source: str = "mt4_live",
 ):
-    return get_open_positions_today(settings)
+    return get_open_positions_today(settings, source=source)
 
 
 
