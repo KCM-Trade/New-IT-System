@@ -13,7 +13,7 @@ def post_aggregate_to_json(
     req: AggregateRequest,
     settings: Settings = Depends(get_settings),
 ):
-    result = aggregate_to_json(settings, req.symbol, req.start, req.end)
+    result = aggregate_to_json(settings, req.symbol, req.start, req.end, basis=req.basis)
     return result
 
 

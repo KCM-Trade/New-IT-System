@@ -12,6 +12,8 @@ services:
       - "8001:8001"
     volumes:
       - .:/app
+      # 将宿主机 frontend 目录挂载到容器 /frontend，便于服务把 JSON 写到 /frontend/public 并在宿主机可见
+      - ../frontend:/frontend
     env_file:
       - .env
     environment:
