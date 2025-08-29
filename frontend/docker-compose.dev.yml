@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: new-it-frontend-dev
+    working_dir: /app
+    command: sh -lc "[ -d node_modules ] || npm ci; npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"  
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - VITE_API_PROXY_TARGET=http://host.docker.internal:8001
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+

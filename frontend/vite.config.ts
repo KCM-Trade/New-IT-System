@@ -14,7 +14,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://localhost:8001",
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:8001",
         changeOrigin: true,
         // 如后端没有 /api 前缀，可启用以下行：
         // rewrite: (p) => p.replace(/^\/api/, ""),

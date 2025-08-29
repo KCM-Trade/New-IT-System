@@ -1,8 +1,8 @@
 import { useState } from "react"
-import { IconCirclePlusFilled, IconMail, IconChevronDown, type Icon } from "@tabler/icons-react"
-import { Link } from "react-router-dom"
+import { IconChevronDown, type Icon } from "@tabler/icons-react"
+import { Link, useLocation } from "react-router-dom"
+import { cn } from "@/lib/utils"
 
-import { Button } from "@/components/ui/button"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -26,6 +26,7 @@ export function NavMain({
 }) {
   // Local open/close state keyed by item title
   const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({})
+  const { pathname } = useLocation()
 
   function toggle(key: string) {
     setOpenKeys((prev: Record<string, boolean>) => ({ ...prev, [key]: !prev[key] }))
@@ -34,34 +35,21 @@ export function NavMain({
   return (
     <SidebarGroup>
       <SidebarGroupContent className="flex flex-col gap-2">
-        <SidebarMenu>
-          <SidebarMenuItem className="flex items-center gap-2">
-            <SidebarMenuButton
-              tooltip="Quick Create"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear"
-            >
-              <IconCirclePlusFilled />
-              <span>Quick Create</span>
-            </SidebarMenuButton>
-            <Button
-              size="icon"
-              className="size-8 group-data-[collapsible=icon]:opacity-0"
-              variant="outline"
-            >
-              <IconMail />
-              <span className="sr-only">Inbox</span>
-            </Button>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        
         <SidebarMenu>
           {items.map((item) => {
             const hasChildren = !!item.children && item.children.length > 0
             const isOpen = !!openKeys[item.title]
 
             if (!hasChildren) {
+              const isActive = !!item.url && pathname.startsWith(item.url)
               return (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title}>
+                  <SidebarMenuButton
+                    asChild
+                    tooltip={item.title}
+                    className={cn(isActive && "bg-muted shadow-sm")}
+                  >
                     <Link to={item.url ?? "#"}>
                       {item.icon && <item.icon />}
                       <span>{item.title}</span>
@@ -71,6 +59,7 @@ export function NavMain({
               )
             }
 
+            const groupActive = !!item.children?.some((c) => pathname.startsWith(c.url))
             return (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton
@@ -78,6 +67,7 @@ export function NavMain({
                   onClick={() => toggle(item.title)}
                   aria-expanded={isOpen}
                   data-state={isOpen ? "open" : "closed"}
+                  className={cn(groupActive && "bg-muted shadow-sm")}
                 >
                   {item.icon && <item.icon />}
                   <span>{item.title}</span>
@@ -87,15 +77,18 @@ export function NavMain({
                   className={`overflow-hidden transition-[max-height,opacity] duration-300 ${isOpen ? "max-h-96 opacity-100" : "max-h-0 opacity-0"}`}
                 >
                   <SidebarMenuSub>
-                    {item.children!.map((sub) => (
-                      <SidebarMenuSubItem key={sub.title}>
-                        <SidebarMenuSubButton asChild>
-                          <Link to={sub.url}>
-                            <span>{sub.title}</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    ))}
+                    {item.children!.map((sub) => {
+                      const isSubActive = pathname.startsWith(sub.url)
+                      return (
+                        <SidebarMenuSubItem key={sub.title}>
+                          <SidebarMenuSubButton asChild className={cn(isSubActive && "bg-muted shadow-sm")}>
+                            <Link to={sub.url}>
+                              <span>{sub.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )
+                    })}
                   </SidebarMenuSub>
                 </div>
               </SidebarMenuItem>

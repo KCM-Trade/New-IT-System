@@ -79,7 +79,15 @@ export default function WarehouseProductsPage() {
   // Controlled filters (product and date)
   const [selectedProduct, setSelectedProduct] = React.useState<string>("XAU-CNH")
   const [customSymbol, setCustomSymbol] = React.useState<string>("")
-  const [date, setDate] = React.useState<string>("2025-08-27")
+  // Initialize date to today's local date (format: yyyy-mm-dd)
+  // Use function initializer so it's computed only once on mount
+  const [date, setDate] = React.useState<string>(() => {
+    const d = new Date()
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    return `${y}-${m}-${day}`
+  })
   const effectiveSymbol = selectedProduct === "other" ? customSymbol.trim() : selectedProduct
 
   // API states and helpers
@@ -129,10 +137,11 @@ export default function WarehouseProductsPage() {
 
   // Compute labels for headers using selected date
   const prevDateStr = React.useMemo(() => {
-    // Derive previous day string for header label
+    // Derive "yesterday" label: if selected date is Monday, use last Friday (d-3); else d-1.
     const d = new Date(date)
     const prev = new Date(d)
-    prev.setDate(d.getDate() - 1)
+    const isMonday = d.getDay() === 1
+    prev.setDate(d.getDate() - (isMonday ? 3 : 1))
     const y = prev.getFullYear()
     const m = String(prev.getMonth() + 1).padStart(2, "0")
     const day = String(prev.getDate()).padStart(2, "0")
