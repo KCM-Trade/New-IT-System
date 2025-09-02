@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Calendar as CalendarIcon, Download, Loader2 } from "lucide-react"
+import { Calendar as CalendarIcon, Download, Loader2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react"
 import { DateRange } from "react-day-picker"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
 import {
   ColumnDef,
   ColumnFiltersState,
@@ -95,6 +96,7 @@ export default function DownloadsPage() {
     try { return Number(localStorage.getItem("downloads_page_size") || 50) } catch { return 50 }
   })
   const [pageIndex, setPageIndex] = React.useState<number>(0)
+  const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null)
 
   // defaults for visibility/order
 
@@ -131,6 +133,8 @@ export default function DownloadsPage() {
       if (!json.ok) throw new Error(json.error || "unknown error")
       const items = json.items as DownloadRow[]
       setRows(items)
+      const now = new Date()
+      setLastUpdated(now)
       // persist last query & data in session
       try {
         sessionStorage.setItem("downloads_rows", JSON.stringify(items))
@@ -144,6 +148,7 @@ export default function DownloadsPage() {
             rangeTo: range?.to?.toISOString?.(),
           }),
         )
+        sessionStorage.setItem("downloads_lastUpdated", String(now.getTime()))
       } catch {}
     } catch (e: any) {
       setError(e?.message || "请求失败")
@@ -218,51 +223,108 @@ export default function DownloadsPage() {
     { id: "ticket", accessorKey: "ticket", header: "Ticket", enableHiding: true, enableSorting: true },
     { id: "account_id", accessorKey: "account_id", header: "AccountID" },
     { id: "client_id", accessorKey: "client_id", header: "ClientID" },
-    { id: "symbol", accessorKey: "symbol", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Symbol</div>
-        <Input className="h-8 w-[140px]" placeholder="筛选..." value={(column.getFilterValue() as string) ?? ""} onChange={(e) => column.setFilterValue(e.target.value)} />
-      </div>
-    ) },
-    { id: "open_time", accessorKey: "open_time", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Open Time</div>
-        <Input className="h-8 w-[160px]" placeholder="起(YYYY-MM-DD HH:mm:ss)" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), from: e.target.value })} />
-        <Input className="h-8 w-[160px]" placeholder="止(YYYY-MM-DD HH:mm:ss)" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), to: e.target.value })} />
-      </div>
-    ), cell: ({ row }) => formatDateTime(row.getValue("open_time")), filterFn: filterFns.dateRange as any },
-    { id: "close_time", accessorKey: "close_time", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Close Time</div>
-        <Input className="h-8 w-[160px]" placeholder="起" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), from: e.target.value })} />
-        <Input className="h-8 w-[160px]" placeholder="止" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), to: e.target.value })} />
-      </div>
-    ), cell: ({ row }) => formatDateTime(row.getValue("close_time")), filterFn: filterFns.dateRange as any },
-    { id: "modify_time", accessorKey: "modify_time", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Modify Time</div>
-        <Input className="h-8 w-[160px]" placeholder="起" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), from: e.target.value })} />
-        <Input className="h-8 w-[160px]" placeholder="止" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), to: e.target.value })} />
-      </div>
-    ), cell: ({ row }) => formatDateTime(row.getValue("modify_time")), filterFn: filterFns.dateRange as any },
-    { id: "volume", accessorKey: "volume", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Volume</div>
-        <div className="flex items-center gap-1">
-          <Input className="h-8 w-[80px]" placeholder=">=min" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), min: e.target.value ? Number(e.target.value) : undefined })} />
-          <Input className="h-8 w-[80px]" placeholder="<=max" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), max: e.target.value ? Number(e.target.value) : undefined })} />
+    { id: "symbol", accessorKey: "symbol", header: "Symbol" },
+    { id: "open_time", accessorKey: "open_time", header: ({ column }) => {
+      const fv = (column.getFilterValue() as any) || {}
+      const selected: DateRange = {
+        from: fv?.from ? new Date(fv.from) : undefined,
+        to: fv?.to ? new Date(fv.to) : undefined,
+      }
+      const label = selected.from && selected.to
+        ? `${selected.from.getFullYear()}-${String(selected.from.getMonth()+1).padStart(2,'0')}-${String(selected.from.getDate()).padStart(2,'0')} ~ ${selected.to.getFullYear()}-${String(selected.to.getMonth()+1).padStart(2,'0')}-${String(selected.to.getDate()).padStart(2,'0')}`
+        : "筛选日期"
+      return (
+        <div className="flex flex-col gap-1">
+          <div>Open Time</div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-8 px-2 text-xs justify-start">{label}</Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="range"
+                selected={selected}
+                onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
+                numberOfMonths={2}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
         </div>
-      </div>
-    ), cell: ({ row }) => format2(row.getValue("volume")), filterFn: filterFns.numberRange as any },
-    { id: "profit", accessorKey: "profit", header: ({ column }) => (
-      <div className="flex flex-col gap-1">
-        <div>Profit</div>
-        <div className="flex items-center gap-1">
-          <Input className="h-8 w-[80px]" placeholder=">=min" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), min: e.target.value ? Number(e.target.value) : undefined })} />
-          <Input className="h-8 w-[80px]" placeholder="<=max" onChange={(e) => column.setFilterValue({ ...(column.getFilterValue() as any), max: e.target.value ? Number(e.target.value) : undefined })} />
+      )
+    }, cell: ({ row }) => formatDateTime(row.getValue("open_time")), filterFn: filterFns.dateRange as any },
+    { id: "close_time", accessorKey: "close_time", header: ({ column }) => {
+      const fv = (column.getFilterValue() as any) || {}
+      const selected: DateRange = {
+        from: fv?.from ? new Date(fv.from) : undefined,
+        to: fv?.to ? new Date(fv.to) : undefined,
+      }
+      const label = selected.from && selected.to
+        ? `${selected.from.getFullYear()}-${String(selected.from.getMonth()+1).padStart(2,'0')}-${String(selected.from.getDate()).padStart(2,'0')} ~ ${selected.to.getFullYear()}-${String(selected.to.getMonth()+1).padStart(2,'0')}-${String(selected.to.getDate()).padStart(2,'0')}`
+        : "筛选日期"
+      return (
+        <div className="flex flex-col gap-1">
+          <div>Close Time</div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-8 px-2 text-xs justify-start">{label}</Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="range"
+                selected={selected}
+                onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
+                numberOfMonths={2}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
         </div>
-      </div>
-    ), cell: ({ row }) => (<span className={`${profitClass(row.getValue("profit"))}`}>{format2(row.getValue("profit"))}</span>), filterFn: filterFns.numberRange as any },
+      )
+    }, cell: ({ row }) => formatDateTime(row.getValue("close_time")), filterFn: filterFns.dateRange as any },
+    { id: "modify_time", accessorKey: "modify_time", header: ({ column }) => {
+      const fv = (column.getFilterValue() as any) || {}
+      const selected: DateRange = {
+        from: fv?.from ? new Date(fv.from) : undefined,
+        to: fv?.to ? new Date(fv.to) : undefined,
+      }
+      const label = selected.from && selected.to
+        ? `${selected.from.getFullYear()}-${String(selected.from.getMonth()+1).padStart(2,'0')}-${String(selected.from.getDate()).padStart(2,'0')} ~ ${selected.to.getFullYear()}-${String(selected.to.getMonth()+1).padStart(2,'0')}-${String(selected.to.getDate()).padStart(2,'0')}`
+        : "筛选日期"
+      return (
+        <div className="flex flex-col gap-1">
+          <div>Modify Time</div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-8 px-2 text-xs justify-start">{label}</Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="range"
+                selected={selected}
+                onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
+                numberOfMonths={2}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
+      )
+    }, cell: ({ row }) => formatDateTime(row.getValue("modify_time")), filterFn: filterFns.dateRange as any },
+    { id: "volume", accessorKey: "volume", header: ({ column }) => {
+      const s = column.getIsSorted()
+      const Icon = s === "asc" ? ArrowUp : s === "desc" ? ArrowDown : ArrowUpDown
+      return (
+        <Button variant="ghost" className="h-8 px-2 gap-1" onClick={() => column.toggleSorting(s === "asc")}>Volume <Icon className="h-3 w-3" /></Button>
+      )
+    }, cell: ({ row }) => format2(row.getValue("volume")) },
+    { id: "profit", accessorKey: "profit", header: ({ column }) => {
+      const s = column.getIsSorted()
+      const Icon = s === "asc" ? ArrowUp : s === "desc" ? ArrowDown : ArrowUpDown
+      return (
+        <Button variant="ghost" className="h-8 px-2 gap-1" onClick={() => column.toggleSorting(s === "asc")}>Profit <Icon className="h-3 w-3" /></Button>
+      )
+    }, cell: ({ row }) => (<span className={`${profitClass(row.getValue("profit"))}`}>{format2(row.getValue("profit"))}</span>) },
     { id: "cmd", accessorKey: "cmd", header: ({ column }) => (
       <div className="flex flex-col gap-1">
         <div>Type</div>
@@ -371,6 +433,8 @@ export default function DownloadsPage() {
   // restore last query params & data (session)
   React.useEffect(() => {
     try {
+      const ts = sessionStorage.getItem("downloads_lastUpdated")
+      if (ts) setLastUpdated(new Date(Number(ts)))
       const qRaw = sessionStorage.getItem("downloads_query_params")
       if (qRaw) {
         const q = JSON.parse(qRaw) as any
@@ -496,53 +560,68 @@ export default function DownloadsPage() {
         </CardContent>
       </Card>
 
+      {/* Columns & Status Card */}
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-4">
+          <div className="text-sm text-muted-foreground text-center">列显示</div>
+          <div className="flex flex-wrap justify-center gap-3 items-center text-xs w-full">
+            {(() => {
+              const labels: Record<string, string> = {
+                ticket: "Ticket",
+                account_id: "AccountID",
+                client_id: "ClientID",
+                symbol: "Symbol",
+                open_time: "Open Time",
+                close_time: "Close Time",
+                modify_time: "Modify Time",
+                volume: "Volume",
+                profit: "Profit",
+                cmd: "Type",
+                open_price: "Open Price",
+                close_price: "Close Price",
+                swaps: "Swaps",
+                comment: "Comment",
+                sl: "SL",
+                tp: "TP",
+                ibid: "IBID",
+              }
+              const order = [
+                "account_id","client_id","symbol","open_time","close_time","volume","profit","cmd",
+                "ticket","open_price","close_price","modify_time","swaps","comment","sl","tp","ibid",
+              ] as const
+              return order.map((id) => {
+                const col = table.getColumn(id as string)
+                if (!col) return null
+                return (
+                  <div key={id as string} className="flex items-center gap-2">
+                    <Checkbox id={`col-${id as string}`} checked={col.getIsVisible()} onCheckedChange={(v) => col.toggleVisibility(Boolean(v))} />
+                    <Label htmlFor={`col-${id as string}`} className="text-xs cursor-pointer select-none">{labels[id as string]}</Label>
+                  </div>
+                )
+              })
+            })()}
+          </div>
+          <div className="mt-2 flex flex-wrap justify-center items-center gap-3 text-sm w-full">
+            {lastUpdated && (
+              <Badge variant="outline">上次刷新：{lastUpdated.toLocaleString("zh-CN", { hour12: false })}</Badge>
+            )}
+            <Badge variant="outline">记录数：{table.getFilteredRowModel().rows.length}</Badge>
+            <Badge variant="outline">产品：{symbol === "other" ? (customSymbol || "-") : symbol}</Badge>
+            {range?.from && range?.to && (
+              <Badge variant="outline">
+                时间：{range.from.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" })}
+                ~{range.to.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" })}
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Table */}
       <Card>
         <CardContent className="pt-6">
           <div className="mx-auto w-[90%] max-w-[1600px]">
             {/* Filters now per-column in headers via TanStack */}
-            {/* Column visibility controls (mapped from tanstack state) */}
-            <div className="mb-3 flex flex-wrap gap-3 items-center text-xs">
-              {(() => {
-                const labels: Record<string, string> = {
-                  ticket: "Ticket",
-                  account_id: "AccountID",
-                  client_id: "ClientID",
-                  symbol: "Symbol",
-                  open_time: "Open Time",
-                  close_time: "Close Time",
-                  modify_time: "Modify Time",
-                  volume: "Volume",
-                  profit: "Profit",
-                  cmd: "Type",
-                  open_price: "Open Price",
-                  close_price: "Close Price",
-                  swaps: "Swaps",
-                  comment: "Comment",
-                  sl: "SL",
-                  tp: "TP",
-                  ibid: "IBID",
-                }
-                const order = [
-                  "ticket","account_id","client_id","symbol",
-                  "open_time","close_time","modify_time",
-                  "volume","profit","cmd",
-                  "open_price","close_price",
-                  "swaps","comment","sl","tp","ibid",
-                ] as const
-
-                return order.map((id) => {
-                  const col = table.getColumn(id as string)
-                  if (!col) return null
-                  return (
-                    <div key={id as string} className="flex items-center gap-2">
-                      <Checkbox id={`col-${id as string}`} checked={col.getIsVisible()} onCheckedChange={(v) => col.toggleVisibility(Boolean(v))} />
-                      <Label htmlFor={`col-${id as string}`} className="text-xs cursor-pointer select-none">{labels[id as string]}</Label>
-                    </div>
-                  )
-                })
-              })()}
-            </div>
             <div className="overflow-hidden rounded-md border-2 shadow-md">
               <Table className="min-w-[960px]">
                 <TableHeader>
