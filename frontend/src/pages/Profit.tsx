@@ -103,6 +103,7 @@ export default function ProfitPage() {
 
   // removed: custom input apply handler
 
+  // Note: The dataset rendered on this page is XAU-CNH (exported by backend aggregate to /public JSON files).
   // fresh grad: source file is NDJSON (one JSON object per line), not a JSON array
   useEffect(() => {
     let cancelled = false
