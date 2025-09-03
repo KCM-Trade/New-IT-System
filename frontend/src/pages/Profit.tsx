@@ -80,15 +80,14 @@ export default function ProfitPage() {
   const [rows, setRows] = useState<ProfitRow[]>([])
   const [loading, setLoading] = useState(true)
   // fresh grad: date range via single Popover + range Calendar
-  const [range, setRange] = useState<DateRange | undefined>({
-    from: new Date(2025, 7, 1), // 2025-08-01
-    to: new Date(2025, 7, 7),  // 2025-08-10
-  })
+  const [range, setRange] = useState<DateRange | undefined>(undefined)
   const [agg, setAgg] = useState<AggKey>("timeline")
   const [tz, setTz] = useState<TzKey>("+8")
   const [aggType, setAggType] = useState<AggTypeKey>("open")
   // fresh grad: detect mobile to adjust layout/Chart
   const [isMobile, setIsMobile] = useState(false)
+  // last refreshed tag (shared across users via backend marker)
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null)
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640) // 640px ~ tailwind sm breakpoint
@@ -134,6 +133,7 @@ export default function ProfitPage() {
   // Note: The dataset rendered on this page is XAU-CNH (exported by backend aggregate to /public JSON files).
   // fresh grad: source file is NDJSON (one JSON object per line), not a JSON array
   useEffect(() => {
+    if (!range?.from || !range?.to) return
     let cancelled = false
     ;(async () => {
       if (cancelled) return
@@ -142,7 +142,41 @@ export default function ProfitPage() {
     return () => {
       cancelled = true
     }
-  }, [fetchRows])
+  }, [fetchRows, range])
+
+  // load last refresh marker on mount and after refresh
+  const setRangeFromRefreshed = (ref: string) => {
+    // fresh grad: ref format "YYYY-MM-DD HH:MM:SS" at UTC+3; use only date part for calendar
+    const [datePart] = ref.split(" ")
+    const [y, m, d] = datePart.split("-").map((v) => parseInt(v, 10))
+    if (!y || !m || !d) return
+    const to = new Date(y, m - 1, d)
+    const from = new Date(to)
+    from.setDate(from.getDate() - 7)
+    setRange({ from, to })
+  }
+
+  const loadLastRefresh = async (): Promise<string | null> => {
+    try {
+      const res = await fetch('/api/v1/aggregate/last-refresh')
+      const json = await res.json()
+      const refreshedAt: string | null = json?.refreshed_at ?? null
+      setLastRefreshed(refreshedAt)
+      return refreshedAt
+    } catch {
+      setLastRefreshed(null)
+      return null
+    }
+  }
+  useEffect(() => {
+    ;(async () => {
+      const ref = await loadLastRefresh()
+      if (ref && !range) {
+        setRangeFromRefreshed(ref)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // fresh grad: click to refresh backend aggregation then reload NDJSON
   const onRefresh = async () => {
@@ -153,6 +187,8 @@ export default function ProfitPage() {
       // ignore
     } finally {
       await fetchRows()
+      const ref = await loadLastRefresh()
+      if (ref) setRangeFromRefreshed(ref)
     }
   }
 
@@ -256,7 +292,7 @@ export default function ProfitPage() {
       {/* Toolbar */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl font-bold">筛选与视图</CardTitle>
+          <CardTitle className="text-2xl font-bold">筛选与视图（XAU-CNH）</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
           {/* 时间范围（单按钮 + Range 日历） */}
@@ -362,6 +398,9 @@ export default function ProfitPage() {
             <Button onClick={onRefresh} disabled={loading}>
               {loading ? "刷新中…" : "刷新"}
             </Button>
+            {lastRefreshed && (
+              <span className="text-xs text-muted-foreground">上次刷新(UTC+3)：{lastRefreshed}</span>
+            )}
           </div>
         </CardContent>
       </Card>

@@ -240,6 +240,14 @@ def refresh_aggregations(settings: Settings, symbol: str = "XAUUSD") -> dict:
 		basis="close",
 	)
 
+	# Persist a public marker of last refresh time for multi-user visibility
+	public_dir: Path = settings.public_export_dir
+	marker = public_dir / "profit_last_refresh.txt"
+	try:
+		marker.write_text(_format_dt(end_dt), encoding="utf-8")
+	except Exception:
+		pass
+
 	return {
 		"ok": bool(open_result.get("ok") and close_result.get("ok")),
 		"open": {
@@ -252,4 +260,5 @@ def refresh_aggregations(settings: Settings, symbol: str = "XAUUSD") -> dict:
 			"end": _format_dt(end_dt),
 			"result": close_result,
 		},
+		"refreshed_at": _format_dt(end_dt),
 	}

@@ -30,5 +30,10 @@ class RefreshResponse(BaseModel):
     ok: bool
     open: RefreshInnerResult
     close: RefreshInnerResult
+    refreshed_at: str | None = None
+
+
+class LastRefreshResponse(BaseModel):
+    refreshed_at: str | None = None
 
 

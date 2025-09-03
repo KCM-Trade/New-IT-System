@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ....core.config import Settings, get_settings
-from ....schemas.aggregation import AggregateRequest, AggregateResponse, RefreshResponse
+from ....schemas.aggregation import AggregateRequest, AggregateResponse, RefreshResponse, LastRefreshResponse
 from ....services.aggregation_service import aggregate_to_json, refresh_aggregations
 
 
@@ -29,4 +29,18 @@ def post_refresh(
     """
     result = refresh_aggregations(settings)
     return result
+
+
+@router.get("/last-refresh", response_model=LastRefreshResponse)
+def get_last_refresh(
+    settings: Settings = Depends(get_settings),
+):
+    marker = settings.public_export_dir / "profit_last_refresh.txt"
+    refreshed_at = None
+    try:
+        if marker.exists():
+            refreshed_at = marker.read_text(encoding="utf-8").strip()
+    except Exception:
+        refreshed_at = None
+    return {"refreshed_at": refreshed_at}
 
