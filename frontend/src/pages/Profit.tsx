@@ -103,16 +103,13 @@ export default function ProfitPage() {
 
   // removed: custom input apply handler
 
-  // Note: The dataset rendered on this page is XAU-CNH (exported by backend aggregate to /public JSON files).
-  // fresh grad: source file is NDJSON (one JSON object per line), not a JSON array
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
+  // fresh grad: shared loader to fetch NDJSON according to aggType
+  const fetchRows = useMemo(() => {
+    return async () => {
       setLoading(true)
       const url = aggType === "open" ? "/profit_xauusd_hourly.json" : "/profit_xauusd_hourly_close.json"
       const res = await fetch(url)
       const text = await res.text()
-      if (cancelled) return
       const lines = text.split(/\r?\n/).filter(Boolean)
       const data: ProfitRow[] = []
       for (const line of lines) {
@@ -132,11 +129,32 @@ export default function ProfitPage() {
       setRows(data)
       setLoading(false)
     }
-    load()
+  }, [aggType])
+
+  // Note: The dataset rendered on this page is XAU-CNH (exported by backend aggregate to /public JSON files).
+  // fresh grad: source file is NDJSON (one JSON object per line), not a JSON array
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (cancelled) return
+      await fetchRows()
+    })()
     return () => {
       cancelled = true
     }
-  }, [aggType])
+  }, [fetchRows])
+
+  // fresh grad: click to refresh backend aggregation then reload NDJSON
+  const onRefresh = async () => {
+    setLoading(true)
+    try {
+      await fetch("/api/v1/aggregate/refresh", { method: "POST" })
+    } catch {
+      // ignore
+    } finally {
+      await fetchRows()
+    }
+  }
 
   // fresh grad: memoized rows with UTC timestamp
   const withUtc = useMemo(
@@ -338,6 +356,12 @@ export default function ProfitPage() {
                 UTC+8
               </ToggleGroupItem>
             </ToggleGroup>
+          </div>
+          {/* 刷新按钮（紧挨着时区） */}
+          <div className="flex items-center gap-3">
+            <Button onClick={onRefresh} disabled={loading}>
+              {loading ? "刷新中…" : "刷新"}
+            </Button>
           </div>
         </CardContent>
       </Card>

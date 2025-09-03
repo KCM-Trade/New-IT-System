@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import duckdb
 import pandas as pd
@@ -157,3 +159,97 @@ def aggregate_to_json(settings: Settings, symbol: str, start: str, end: str, bas
 	return {"ok": True, "json": str(json_path), "rows": int(df.shape[0])}
 
 
+
+
+def _read_latest_datetime_from_json(json_path: Path) -> datetime | None:
+	"""
+	Read existing NDJSON (DuckDB COPY FORMAT JSON) and get the latest (date,hour) as aware datetime in UTC+03:00.
+	Return None if file does not exist or empty.
+	"""
+	if not json_path.exists():
+		return None
+
+	con = duckdb.connect()
+	try:
+		# Use DuckDB to efficiently read and sort; cast types explicitly
+		res = con.execute(
+			f"""
+			SELECT
+			  CAST(date AS DATE) AS d,
+			  CAST(hour AS INTEGER) AS h
+			FROM read_json_auto('{str(json_path)}')
+			ORDER BY d DESC, h DESC
+			LIMIT 1
+			"""
+		).fetchone()
+		if not res:
+			return None
+		latest_date, latest_hour = res[0], int(res[1])
+		# Build timezone-aware datetime at UTC+3
+		tz3 = ZoneInfo("Etc/GMT-3")
+		# Note: Etc/GMT-3 means UTC+3
+		return datetime(latest_date.year, latest_date.month, latest_date.day, latest_hour, 0, 0, tzinfo=tz3)
+	finally:
+		con.close()
+
+
+def _now_in_utc_plus_3() -> datetime:
+	"""Compute current time in UTC+03:00 from system time (which may be UTC+8)."""
+	# Always base on UTC to avoid local tz ambiguity, then convert to +03:00
+	utc_now = datetime.now(timezone.utc)
+	return utc_now.astimezone(ZoneInfo("Etc/GMT-3"))
+
+
+def _format_dt(dt: datetime) -> str:
+	"""Format datetime as 'YYYY-MM-DD HH:MM:SS' in its own timezone."""
+	return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def refresh_aggregations(settings: Settings, symbol: str = "XAUUSD") -> dict:
+	"""
+	Determine start (from existing JSON, UTC+3 last hour + 1h) and end (now at UTC+3),
+	then update both 'open' and 'close' aggregations.
+	"""
+	public_dir: Path = settings.public_export_dir
+	open_json = public_dir / "profit_xauusd_hourly.json"
+	close_json = public_dir / "profit_xauusd_hourly_close.json"
+
+	latest_open = _read_latest_datetime_from_json(open_json)
+	latest_close = _read_latest_datetime_from_json(close_json)
+
+	# If no existing data, start from 1970-01-01 at UTC+3 to allow full backfill
+	tz3 = ZoneInfo("Etc/GMT-3")
+	default_start = datetime(1970, 1, 1, 0, 0, 0, tzinfo=tz3)
+
+	start_open = (latest_open + timedelta(hours=1)) if latest_open else default_start
+	start_close = (latest_close + timedelta(hours=1)) if latest_close else default_start
+	end_dt = _now_in_utc_plus_3()
+
+	open_result = aggregate_to_json(
+		settings,
+		symbol,
+		_format_dt(start_open),
+		_format_dt(end_dt),
+		basis="open",
+	)
+	close_result = aggregate_to_json(
+		settings,
+		symbol,
+		_format_dt(start_close),
+		_format_dt(end_dt),
+		basis="close",
+	)
+
+	return {
+		"ok": bool(open_result.get("ok") and close_result.get("ok")),
+		"open": {
+			"start": _format_dt(start_open),
+			"end": _format_dt(end_dt),
+			"result": open_result,
+		},
+		"close": {
+			"start": _format_dt(start_close),
+			"end": _format_dt(end_dt),
+			"result": close_result,
+		},
+	}

@@ -19,3 +19,16 @@ class AggregateResponse(BaseModel):
     error: str | None = None
 
 
+
+class RefreshInnerResult(BaseModel):
+    start: str
+    end: str
+    result: AggregateResponse
+
+
+class RefreshResponse(BaseModel):
+    ok: bool
+    open: RefreshInnerResult
+    close: RefreshInnerResult
+
+
