@@ -2,6 +2,9 @@
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/providers/auth-provider"
 import { LoginForm } from "@/components/login-form"
+import BlurText from "@/components/blur-text"
+
+
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -28,7 +31,20 @@ export default function LoginPage() {
         />
       </div>
       <div className="flex items-center justify-center p-6">
-        <LoginForm onSubmit={handleSubmit} />
+        <div className="w-full max-w-sm">
+          <div className="mb-6 text-center">
+            {/* Animated page title */}
+            <BlurText
+              text="Welcome to KCM Trade Analytics System"
+              delay={150}
+              animateBy="words"
+              direction="top"
+              className="text-3xl font-bold tracking-tight justify-center"
+              repeatEveryMs={5000}
+            />
+          </div>
+          <LoginForm onSubmit={handleSubmit} />
+        </div>
       </div>
     </div>
   )
