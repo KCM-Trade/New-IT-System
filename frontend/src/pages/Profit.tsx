@@ -80,7 +80,13 @@ export default function ProfitPage() {
   const [rows, setRows] = useState<ProfitRow[]>([])
   const [loading, setLoading] = useState(true)
   // fresh grad: date range via single Popover + range Calendar
-  const [range, setRange] = useState<DateRange | undefined>(undefined)
+  const [range, setRange] = useState<DateRange | undefined>(() => {
+    // fresh grad: default to the last 7 days on first load
+    const to = new Date()
+    const from = new Date()
+    from.setDate(from.getDate() - 7)
+    return { from, to }
+  })
   const [agg, setAgg] = useState<AggKey>("timeline")
   const [tz, setTz] = useState<TzKey>("+8")
   const [aggType, setAggType] = useState<AggTypeKey>("open")
@@ -106,27 +112,34 @@ export default function ProfitPage() {
   const fetchRows = useMemo(() => {
     return async () => {
       setLoading(true)
-      const url = aggType === "open" ? "/profit_xauusd_hourly.json" : "/profit_xauusd_hourly_close.json"
-      const res = await fetch(url)
-      const text = await res.text()
-      const lines = text.split(/\r?\n/).filter(Boolean)
-      const data: ProfitRow[] = []
-      for (const line of lines) {
-        try {
-          const obj = JSON.parse(line)
-          if (
-            typeof obj?.date === "string" &&
-            typeof obj?.hour === "number" &&
-            typeof obj?.profit === "number"
-          ) {
-            data.push({ date: obj.date, hour: obj.hour, profit: obj.profit })
+      try {
+        const url = aggType === "open" ? "/profit_xauusd_hourly.json" : "/profit_xauusd_hourly_close.json"
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`Failed to load NDJSON: ${res.status}`)
+        const text = await res.text()
+        const lines = text.split(/\r?\n/).filter(Boolean)
+        const data: ProfitRow[] = []
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line)
+            if (
+              typeof obj?.date === "string" &&
+              typeof obj?.hour === "number" &&
+              typeof obj?.profit === "number"
+            ) {
+              data.push({ date: obj.date, hour: obj.hour, profit: obj.profit })
+            }
+          } catch {
+            // skip bad line
           }
-        } catch {
-          // skip bad line
         }
+        setRows(data)
+      } catch {
+        // fresh grad: on any error, clear data and continue; loading will stop in finally
+        setRows([])
+      } finally {
+        setLoading(false)
       }
-      setRows(data)
-      setLoading(false)
     }
   }, [aggType])
 

@@ -10,7 +10,7 @@ export default function DashboardLayout() {
   return (
     <SidebarProvider style={{ "--header-height": "3.5rem" } as React.CSSProperties}>
       <AppSidebar />
-      <SidebarInset>
+      <SidebarInset className="relative">
         <SiteHeader />
         <div className="flex items-center justify-end px-4 py-2 lg:px-6">
           <ModeToggle />
