@@ -645,18 +645,14 @@ export default function ClientTradingAnalyticsPage() {
       </Card>
 
       {/* 指标卡片区 */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs dark:*:data-[slot=card]:bg-card">
         {kpis.map((k) => (
-          <Card key={k.label}>
+          <Card key={k.label} className="@container/card">
             <CardHeader>
               <CardDescription>{k.label}</CardDescription>
-              <CardTitle className={
-                k.tone === "pos"
-                  ? "text-green-600"
-                  : k.tone === "neg"
-                  ? "text-red-600"
-                  : undefined
-              }>
+              <CardTitle className={`text-2xl font-semibold tabular-nums @[250px]/card:text-3xl ${
+                k.tone === "pos" ? "text-green-600" : k.tone === "neg" ? "text-red-600" : ""
+              }`}>
                 {k.trend}{
                   typeof k.value === "number" && k.unit === "%"
                     ? `${Math.round(k.value * 100) / 1}%`
