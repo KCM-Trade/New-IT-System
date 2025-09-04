@@ -34,7 +34,7 @@ const data = {
   },
   navMain: [
     { title: "模板", url: "/template", icon: IconDashboard },
-    { title: "黄金报价", url: "/gold", icon: IconReport },
+    { title: "客户交易分析", url: "/client-trading", icon: IconReport },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
     { title: "代理统计Global", url: "/warehouse/agent-global", icon: IconReport },

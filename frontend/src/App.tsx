@@ -15,6 +15,7 @@ const WarehouseOthersPage = lazy(() => import("@/pages/WarehouseOthers"))
 const LoginIPsPage = lazy(() => import("@/pages/LoginIPs"))
 const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
+const ClientTradingAnalyticsPage = lazy(() => import("@/pages/ClientTradingAnalytics"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
 const SettingsPage = lazy(() => import("@/pages/Settings"))
 const SearchPage = lazy(() => import("@/pages/Search"))
@@ -51,6 +52,7 @@ function App() {
               <Route path="position" element={<PositionPage />} />
               <Route path="login-ips" element={<LoginIPsPage />} />
               <Route path="profit" element={<ProfitPage />} />
+              <Route path="client-trading" element={<ClientTradingAnalyticsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="search" element={<SearchPage />} />
               {/* Configuration routes */}

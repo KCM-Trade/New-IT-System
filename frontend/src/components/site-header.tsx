@@ -17,6 +17,7 @@ const titleMap: Record<string, string> = {
   "/position": "全仓报表",
   "/login-ips": "Login IP监测",
   "/profit": "利润分析",
+  "/client-trading": "客户交易分析",
   "/settings": "Settings",
   "/search": "Search",
 }

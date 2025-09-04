@@ -15,3 +15,5 @@ venv
 .venv
 *.json
 *.svg
+*.txt
+frontend/public/profit_last_refresh.txt
