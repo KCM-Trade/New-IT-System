@@ -3,6 +3,7 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useLocation } from "react-router-dom"
 import { useEffect } from "react"
+import { ModeToggle } from "@/components/mode-toggle"
 
 const titleMap: Record<string, string> = {
   "/template": "模板",
@@ -49,6 +50,7 @@ export function SiteHeader() {
         />
         <h1 className="text-base font-medium">{fullTitle}</h1>
         <div className="ml-auto flex items-center gap-2">
+          <ModeToggle />
           <Button variant="ghost" asChild size="sm" className="hidden sm:flex">
             <a
               href="https://github.com/shadcn-ui/ui/tree/main/apps/v4/app/(examples)/dashboard"
