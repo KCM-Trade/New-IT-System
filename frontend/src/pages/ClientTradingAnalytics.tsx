@@ -40,7 +40,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
-import type { DateRange } from "react-day-picker"
+// removed DateRange (range mode) in favor of dual single calendars
 import {
   ChartContainer,
   ChartLegend,
@@ -49,6 +49,36 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart"
+import {
+  ColumnDef,
+  ColumnFiltersState,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+  VisibilityState,
+} from "@tanstack/react-table"
+import { ArrowUpDown, ChevronDown, MoreHorizontal } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import {
   Area,
   Bar,
@@ -113,6 +143,195 @@ const symbolConfig: ChartConfig = {
   share: { label: "占比", color: "var(--primary)" },
 }
 
+// Orders table static demo data and columns
+type OrderPayment = {
+  id: string
+  amount: number
+  status: "pending" | "processing" | "success" | "failed"
+  email: string
+}
+
+const ordersData: OrderPayment[] = [
+  { id: "m5gr84i9", amount: 316, status: "success", email: "ken99@example.com" },
+  { id: "3u1reuv4", amount: 242, status: "success", email: "Abe45@example.com" },
+  { id: "derv1ws0", amount: 837, status: "processing", email: "Monserrat44@example.com" },
+  { id: "5kma53ae", amount: 874, status: "success", email: "Silas22@example.com" },
+  { id: "bhqecj4p", amount: 721, status: "failed", email: "carmella@example.com" },
+]
+
+const ordersColumns: ColumnDef<OrderPayment>[] = [
+  {
+    id: "select",
+    header: ({ table }) => (
+      <Checkbox
+        checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+        aria-label="Select all"
+      />
+    ),
+    cell: ({ row }) => (
+      <Checkbox
+        checked={row.getIsSelected()}
+        onCheckedChange={(value) => row.toggleSelected(!!value)}
+        aria-label="Select row"
+      />
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
+  {
+    accessorKey: "status",
+    header: "Status",
+    cell: ({ row }) => <div className="capitalize">{row.getValue("status")}</div>,
+  },
+  {
+    accessorKey: "email",
+    header: ({ column }) => (
+      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+        Email
+        <ArrowUpDown />
+      </Button>
+    ),
+    cell: ({ row }) => <div className="lowercase">{row.getValue("email")}</div>,
+  },
+  {
+    accessorKey: "amount",
+    header: () => <div className="text-right">Amount</div>,
+    cell: ({ row }) => {
+      const amount = parseFloat(row.getValue("amount"))
+      const formatted = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount)
+      return <div className="text-right font-medium">{formatted}</div>
+    },
+  },
+  {
+    id: "actions",
+    enableHiding: false,
+    cell: ({ row }) => {
+      const payment = row.original
+      return (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="h-8 w-8 p-0">
+              <span className="sr-only">Open menu</span>
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(payment.id)}>
+              Copy payment ID
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem>View customer</DropdownMenuItem>
+            <DropdownMenuItem>View payment details</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )
+    },
+  },
+]
+
+function OrdersTable() {
+  const [sorting, setSorting] = React.useState<SortingState>([])
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
+  const [rowSelection, setRowSelection] = React.useState({})
+
+  const table = useReactTable({
+    data: ordersData,
+    columns: ordersColumns,
+    onSortingChange: setSorting,
+    onColumnFiltersChange: setColumnFilters,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    onColumnVisibilityChange: setColumnVisibility,
+    onRowSelectionChange: setRowSelection,
+    state: { sorting, columnFilters, columnVisibility, rowSelection },
+  })
+
+  return (
+    <div className="w-full">
+      <div className="flex items-center py-4">
+        <Input
+          placeholder="Filter emails..."
+          value={(table.getColumn("email")?.getFilterValue() as string) ?? ""}
+          onChange={(event) => table.getColumn("email")?.setFilterValue(event.target.value)}
+          className="max-w-sm"
+        />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="ml-auto">
+              Columns <ChevronDown />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {table
+              .getAllColumns()
+              .filter((column) => column.getCanHide())
+              .map((column) => (
+                <DropdownMenuCheckboxItem
+                  key={column.id}
+                  className="capitalize"
+                  checked={column.getIsVisible()}
+                  onCheckedChange={(value) => column.toggleVisibility(!!value)}
+                >
+                  {column.id}
+                </DropdownMenuCheckboxItem>
+              ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <div className="overflow-hidden rounded-md border">
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHead key={header.id}>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHead>
+                ))}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {table.getRowModel().rows?.length ? (
+              table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={ordersColumns.length} className="h-24 text-center">
+                  No results.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <div className="flex items-center justify-end space-x-2 py-4">
+        <div className="text-muted-foreground flex-1 text-sm">
+          {table.getFilteredSelectedRowModel().rows.length} of {table.getFilteredRowModel().rows.length} row(s) selected.
+        </div>
+        <div className="space-x-2">
+          <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
+            Previous
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
+            Next
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ClientTradingAnalyticsPage() {
   // --- Static filters state (for demo only) ---
   type Rule =
@@ -158,23 +377,96 @@ export default function ClientTradingAnalyticsPage() {
   const [selectedCrmTags, setSelectedCrmTags] = React.useState<string[]>([])
   const [tagOperator, setTagOperator] = React.useState<"ANY" | "ALL">("ANY")
 
-  // time filters (static)
-  const [range, setRange] = React.useState<DateRange | undefined>(undefined)
-  const [displayTz, setDisplayTz] = React.useState<"UTC+3" | "UTC+8">("UTC+8")
-  const rangeLabel = React.useMemo(() => {
-    if (!range?.from || !range?.to) return "选择日期范围"
-    const opts: Intl.DateTimeFormatOptions = { month: "short", day: "2-digit", year: "numeric" }
-    return `${range.from.toLocaleDateString("en-US", opts)} - ${range.to.toLocaleDateString("en-US", opts)}`
-  }, [range])
+  // time filters (static, dual single-calendars + quick ranges)
+  // fresh grad: keep two single calendars for start and end with dropdown month/year.
+  const [startDate, setStartDate] = React.useState<Date | undefined>(new Date())
+  const [endDate, setEndDate] = React.useState<Date | undefined>(new Date())
+  const [quickRange, setQuickRange] = React.useState<"last_1w" | "last_1m" | "last_3m" | "all" | "custom">("last_1m")
 
-  // symbols (static multi-select)
+  // fresh grad: when quick range changes, compute start/end based on today
+  const applyQuickRange = React.useCallback((qr: typeof quickRange) => {
+    const today = new Date()
+    // zero time for consistency
+    const d0 = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    if (qr === "all") {
+      setStartDate(undefined)
+      setEndDate(undefined)
+      setQuickRange(qr)
+      return
+    }
+    if (qr === "last_1w") {
+      const s = new Date(d0)
+      s.setDate(s.getDate() - 6)
+      setStartDate(s)
+      setEndDate(d0)
+    } else if (qr === "last_1m") {
+      const s = new Date(d0)
+      s.setMonth(s.getMonth() - 1)
+      s.setDate(s.getDate() + 1) // approx: last 1 month inclusive
+      setStartDate(s)
+      setEndDate(d0)
+    } else if (qr === "last_3m") {
+      const s = new Date(d0)
+      s.setMonth(s.getMonth() - 3)
+      s.setDate(s.getDate() + 1)
+      setStartDate(s)
+      setEndDate(d0)
+    } else if (qr === "custom") {
+      // keep current start/end, only mark as custom
+    }
+    setQuickRange(qr)
+  }, [])
+
+  React.useEffect(() => {
+    // initialize to last_1m
+    applyQuickRange("last_1m")
+  }, [applyQuickRange])
+
+  const rangeLabel = React.useMemo(() => {
+    if (quickRange === "all") return "全部历史"
+    if (quickRange === "last_1w") return "最近 1 周"
+    if (quickRange === "last_1m") return "最近 1 个月"
+    if (quickRange === "last_3m") return "最近 3 个月"
+    if (!startDate || !endDate) return "选择日期范围"
+    const opts: Intl.DateTimeFormatOptions = { month: "short", day: "2-digit", year: "numeric" }
+    return `${startDate.toLocaleDateString("en-US", opts)} - ${endDate.toLocaleDateString("en-US", opts)}`
+  }, [quickRange, startDate, endDate])
+
+  // symbols (static multi-select + custom input)
   const [selectedSymbols, setSelectedSymbols] = React.useState<string[]>([])
+  const [customSymbols, setCustomSymbols] = React.useState<string[]>([])
+  const [customSymbolInput, setCustomSymbolInput] = React.useState("")
+  const combinedSymbols = React.useMemo(() => Array.from(new Set([...
+    sampleSymbols,
+    ...customSymbols,
+  ])), [customSymbols])
   const [ruleType, setRuleType] = React.useState<"customer_ids" | "customer_tags" | "account_ids" | "ib_id">("customer_ids")
   const [symbolsMode, setSymbolsMode] = React.useState<"all" | "custom">("all")
   React.useEffect(() => {
     if (symbolsMode === "all") setSelectedSymbols([])
   }, [symbolsMode])
 
+  // --- preview table (account → customer/tags) ---
+  type PreviewRow = { accountId: string; customerId: number | null; tags: string[] }
+  const accountToCustomer = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const [cidStr, accounts] of Object.entries(sampleAccountsByCustomer)) {
+      const cid = Number(cidStr)
+      for (const a of accounts) map.set(a, cid)
+    }
+    return map
+  }, [])
+  const accountToTags = React.useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const [tag, accounts] of Object.entries(sampleAccountsByTag)) {
+      for (const a of accounts) {
+        const arr = map.get(a) ?? []
+        if (!arr.includes(tag)) arr.push(tag)
+        map.set(a, arr)
+      }
+    }
+    return map
+  }, [])
   // derive accounts from rules (include/exclude with OR semantics)
   const derivedAccounts = React.useMemo(() => {
     const includeSet = new Set<string>()
@@ -216,6 +508,79 @@ export default function ClientTradingAnalyticsPage() {
     for (const ex of excludeSet) includeSet.delete(ex)
     return Array.from(includeSet)
   }, [rules])
+  const previewRows: PreviewRow[] = React.useMemo(() => {
+    return derivedAccounts.map((a) => ({
+      accountId: a,
+      customerId: accountToCustomer.get(a) ?? null,
+      tags: accountToTags.get(a) ?? [],
+    }))
+  }, [derivedAccounts, accountToCustomer, accountToTags])
+
+  const [previewOpen, setPreviewOpen] = React.useState(false)
+  const [previewSorting, setPreviewSorting] = React.useState<SortingState>([])
+  const [previewRowSelection, setPreviewRowSelection] = React.useState<Record<string, boolean>>({})
+
+  // 默认全选：每次列表变化时重置为全选
+  React.useEffect(() => {
+    const next: Record<string, boolean> = {}
+    previewRows.forEach((_, idx) => { next[idx] = true })
+    setPreviewRowSelection(next)
+  }, [previewRows])
+
+  const previewColumns: ColumnDef<PreviewRow>[] = React.useMemo(() => [
+    {
+      id: "select",
+      header: ({ table }) => (
+        <Checkbox
+          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+          onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+          aria-label="Select all"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(value) => row.toggleSelected(!!value)}
+          aria-label="Select row"
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+    },
+    { accessorKey: "accountId", header: "Account ID" },
+    {
+      accessorKey: "customerId",
+      header: "Client ID",
+      cell: ({ row }) => <div>{row.original.customerId ?? "-"}</div>,
+    },
+    {
+      accessorKey: "tags",
+      header: "Tags",
+      cell: ({ row }) => {
+        const t = row.original.tags
+        if (!t.length) return <span className="text-muted-foreground">-</span>
+        return (
+          <div className="flex flex-wrap gap-1">
+            {t.map((x) => (
+              <Badge key={x} variant="secondary">{x}</Badge>
+            ))}
+          </div>
+        )
+      },
+    },
+  ], [])
+
+  const previewTable = useReactTable({
+    data: previewRows,
+    columns: previewColumns,
+    onSortingChange: setPreviewSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    onRowSelectionChange: setPreviewRowSelection,
+    state: { sorting: previewSorting, rowSelection: previewRowSelection },
+  })
+
 
   // helpers to add rules
   function addCustomerIdRule() {
@@ -580,7 +945,7 @@ export default function ClientTradingAnalyticsPage() {
           </Dialog>
             </div>
 
-            {/* 时间（Profit 风格：按钮显示范围 + 日历弹层 + 时区选择） */}
+            {/* 时间（按钮显示范围 + 双日历弹层 + 快捷范围选择） */}
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">时间范围：</span>
               <Popover>
@@ -590,14 +955,53 @@ export default function ClientTradingAnalyticsPage() {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-2" align="start">
-                  <Calendar mode="range" selected={range} onSelect={setRange} numberOfMonths={2} initialFocus />
+                  {/* fresh grad: two single calendars for start and end */}
+                  <div className="flex items-start gap-3">
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">开始日期</div>
+                      <Calendar
+                        mode="single"
+                        selected={startDate}
+                        onSelect={(d) => {
+                          if (!d) return
+                          // auto-fix end if start > end
+                          if (endDate && d > endDate) setEndDate(d)
+                          setStartDate(d)
+                          setQuickRange("custom")
+                        }}
+                        className="rounded-md border shadow-sm"
+                        captionLayout="dropdown"
+                        initialFocus
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">结束日期</div>
+                      <Calendar
+                        mode="single"
+                        selected={endDate}
+                        onSelect={(d) => {
+                          if (!d) return
+                          // auto-fix start if end < start
+                          if (startDate && d < startDate) setStartDate(d)
+                          setEndDate(d)
+                          setQuickRange("custom")
+                        }}
+                        className="rounded-md border shadow-sm"
+                        captionLayout="dropdown"
+                      />
+                    </div>
+                  </div>
                 </PopoverContent>
               </Popover>
-              <Select value={displayTz} onValueChange={(v) => setDisplayTz(v as typeof displayTz)}>
-                <SelectTrigger className="w-28"><SelectValue placeholder="时区" /></SelectTrigger>
+              {/* 快捷范围：替代时区选择 */}
+              <Select value={quickRange} onValueChange={(v) => applyQuickRange(v as typeof quickRange)}>
+                <SelectTrigger className="w-36"><SelectValue placeholder="快捷范围" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="UTC+3">UTC+3</SelectItem>
-                  <SelectItem value="UTC+8">UTC+8</SelectItem>
+                  <SelectItem value="last_1w">最近 1 周</SelectItem>
+                  <SelectItem value="last_1m">最近 1 个月</SelectItem>
+                  <SelectItem value="last_3m">最近 3 个月</SelectItem>
+                  <SelectItem value="all">全部历史</SelectItem>
+                  <SelectItem value="custom">自定义</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -619,14 +1023,34 @@ export default function ClientTradingAnalyticsPage() {
                   </PopoverTrigger>
                   <PopoverContent className="w-56 p-2">
                     <div className="grid gap-2">
-                      {sampleSymbols.map((s) => (
+                      {/* fresh grad: show built-in + custom symbols */}
+                      {combinedSymbols.map((s) => (
                         <label key={s} className="flex items-center gap-2">
                           <Checkbox checked={selectedSymbols.includes(s)} onCheckedChange={() => toggleSymbol(s)} />
                           <span className="text-sm">{s}</span>
                         </label>
                       ))}
+                      {/* add custom symbol */}
                       <div className="flex items-center gap-2 pt-1">
-                        <Button size="sm" variant="secondary" onClick={() => setSelectedSymbols(sampleSymbols)}>全选</Button>
+                        <Input
+                          placeholder="自定义品种 如 BTCUSD"
+                          value={customSymbolInput}
+                          onChange={(e) => setCustomSymbolInput(e.target.value.toUpperCase())}
+                        />
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            const v = customSymbolInput.trim().toUpperCase()
+                            if (!v) return
+                            setCustomSymbols((prev) => (prev.includes(v) ? prev : [...prev, v]))
+                            setSelectedSymbols((prev) => (prev.includes(v) ? prev : [...prev, v]))
+                            setCustomSymbolInput("")
+                          }}
+                        >添加</Button>
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <Button size="sm" variant="secondary" onClick={() => setSelectedSymbols(combinedSymbols)}>全选</Button>
                         <Button size="sm" variant="ghost" onClick={() => setSelectedSymbols([])}>清空</Button>
                       </div>
                     </div>
@@ -639,9 +1063,70 @@ export default function ClientTradingAnalyticsPage() {
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span>规则 {rules.length} 条</span>
             <span>账户 {derivedAccounts.length} 个</span>
+            <span>时间 {rangeLabel}</span>
             {symbolsMode === "all" ? <span>品种 全部</span> : (selectedSymbols.length > 0 ? <span>品种 {selectedSymbols.length} 个</span> : <span>品种 未选择</span>)}
           </div>
         </CardContent>
+      </Card>
+
+      {/* 预览与确认（可折叠） */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>预览与确认</CardTitle>
+              <CardDescription>查看命中对象，并可二次选择</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setPreviewOpen((v) => !v)}>
+              {previewOpen ? "收起" : "展开"}
+            </Button>
+          </div>
+        </CardHeader>
+        {previewOpen && (
+          <CardContent>
+            <div className="overflow-hidden rounded-md border">
+              <Table>
+                <TableHeader>
+                  {previewTable.getHeaderGroups().map((headerGroup) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <TableHead key={header.id}>
+                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableHeader>
+                <TableBody>
+                  {previewTable.getRowModel().rows?.length ? (
+                    previewTable.getRowModel().rows.map((row) => (
+                      <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                        {row.getVisibleCells().map((cell) => (
+                          <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={previewColumns.length} className="h-24 text-center">
+                        No results.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex items-center justify-between py-3">
+              <div className="text-muted-foreground text-sm">
+                已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
+              </div>
+              <div className="space-x-2">
+                <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
+                <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
+              </div>
+            </div>
+          </CardContent>
+        )}
       </Card>
 
       {/* 指标卡片区 */}
@@ -666,9 +1151,9 @@ export default function ClientTradingAnalyticsPage() {
         ))}
       </div>
 
-      {/* 第一行：资金曲线 + 回撤阴影图 */}
+      {/* 第一行：资金曲线 + 回撤阴影图 + 订单表（右列） */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
+        <Card className="xl:col-span-1">
           <CardHeader>
             <CardTitle>资金曲线与回撤</CardTitle>
             <CardDescription>静态样例（日维度）</CardDescription>
@@ -685,6 +1170,17 @@ export default function ClientTradingAnalyticsPage() {
                 <Area yAxisId="right" type="monotone" dataKey="drawdown" stroke="var(--color-drawdown)" fill="var(--color-drawdown)" />
               </LineChart>
             </ChartContainer>
+          </CardContent>
+        </Card>
+
+        {/* 订单表（静态示例） */}
+        <Card>
+          <CardHeader>
+            <CardTitle>订单表</CardTitle>
+            <CardDescription>静态示例</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrdersTable />
           </CardContent>
         </Card>
 
