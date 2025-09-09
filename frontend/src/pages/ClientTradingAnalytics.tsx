@@ -338,31 +338,12 @@ export default function ClientTradingAnalyticsPage() {
     | { type: "customer_ids"; ids: number[]; include: boolean }
     | { type: "customer_tags"; source: "local" | "crm"; tags: string[]; operator: "ANY" | "ALL"; include: boolean }
     | { type: "account_ids"; ids: string[]; include: boolean }
-    | { type: "ib_id"; id: number; depth: "all" | "level1" | "level1_2"; include: boolean }
 
-  // sample datasets (static)
-  const sampleAccountsByCustomer: Record<number, string[]> = {
-    1001: ["A-1001", "A-1002"],
-    1002: ["A-2001"],
-    1003: ["A-3001", "A-3002", "A-3003"],
-  }
+  // sample datasets (static) for symbols only
   const sampleTagsLocal = ["VIP", "HighTurnover", "NewUser"]
   const sampleTagsCRM = ["XAU-Focus", "Scalper", "Asia-Desk"]
-  const sampleAccountsByTag: Record<string, string[]> = {
-    VIP: ["A-1001", "A-3001"],
-    HighTurnover: ["A-3002"],
-    NewUser: ["A-2001"],
-    "XAU-Focus": ["A-1002", "A-3003"],
-    Scalper: ["A-3001", "A-3002"],
-    "Asia-Desk": ["A-2001"],
-  }
   const sampleSymbols = ["XAUUSD", "XAGUSD", "EURUSD", "GBPUSD", "US30"]
-  const sampleIbTree: Record<string, string[]> = {
-    // key format: `${ibId}:${depth}` → accounts
-    "137016:all": ["A-1001", "A-1002", "A-2001", "A-3001", "A-3002"],
-    "137016:level1": ["A-1001", "A-1002"],
-    "137016:level1_2": ["A-1001", "A-1002", "A-2001"],
-  }
+  // removed ib tree (not used now)
 
   const [rules, setRules] = React.useState<Rule[]>([])
   // removed: dedicated preview drawer state in compact mode
@@ -370,8 +351,7 @@ export default function ClientTradingAnalyticsPage() {
   // ephemeral inputs for adding rules
   const [inputCustomerId, setInputCustomerId] = React.useState("")
   const [inputAccountId, setInputAccountId] = React.useState("")
-  const [inputIbId, setInputIbId] = React.useState("")
-  const [ibDepth, setIbDepth] = React.useState<"all" | "level1" | "level1_2">("all")
+  // removed ib inputs
   const [tagSource, setTagSource] = React.useState<"local" | "crm">("local")
   const [selectedLocalTags, setSelectedLocalTags] = React.useState<string[]>([])
   const [selectedCrmTags, setSelectedCrmTags] = React.useState<string[]>([])
@@ -440,92 +420,107 @@ export default function ClientTradingAnalyticsPage() {
     sampleSymbols,
     ...customSymbols,
   ])), [customSymbols])
-  const [ruleType, setRuleType] = React.useState<"customer_ids" | "customer_tags" | "account_ids" | "ib_id">("customer_ids")
+  const [ruleType, setRuleType] = React.useState<"customer_ids" | "customer_tags" | "account_ids">("customer_ids")
   const [symbolsMode, setSymbolsMode] = React.useState<"all" | "custom">("all")
   React.useEffect(() => {
     if (symbolsMode === "all") setSelectedSymbols([])
   }, [symbolsMode])
 
   // --- preview table (account → customer/tags) ---
-  type PreviewRow = { accountId: string; customerId: number | null; tags: string[] }
-  const accountToCustomer = React.useMemo(() => {
-    const map = new Map<string, number>()
-    for (const [cidStr, accounts] of Object.entries(sampleAccountsByCustomer)) {
-      const cid = Number(cidStr)
-      for (const a of accounts) map.set(a, cid)
-    }
-    return map
+  type PreviewRow = {
+    accountId: string
+    customerId: number | null
+    cnName: string | null // backend name (pinyin)
+    group: string | null
+    regDate: string | null
+    balance: number | null
+    equity: number | null
+    tags: string[]
+  }
+
+  // server-driven preview state
+  const [serverRows, setServerRows] = React.useState<PreviewRow[]>([])
+  const [serverTotal, setServerTotal] = React.useState<number>(0)
+  const [isLoading, setIsLoading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [tagExpanded, setTagExpanded] = React.useState<Record<string, boolean>>({})
+  const toggleTagExpanded = React.useCallback((id: string) => {
+    setTagExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
   }, [])
-  const accountToTags = React.useMemo(() => {
-    const map = new Map<string, string[]>()
-    for (const [tag, accounts] of Object.entries(sampleAccountsByTag)) {
-      for (const a of accounts) {
-        const arr = map.get(a) ?? []
-        if (!arr.includes(tag)) arr.push(tag)
-        map.set(a, arr)
-      }
-    }
-    return map
-  }, [])
-  // derive accounts from rules (include/exclude with OR semantics)
-  const derivedAccounts = React.useMemo(() => {
-    const includeSet = new Set<string>()
-    const excludeSet = new Set<string>()
 
-    const addAccounts = (arr: string[] | undefined, to: Set<string>) => {
-      if (!arr) return
-      for (const a of arr) to.add(a)
-    }
+  // dialog/drawer open states (controlled) to trigger loading
+  const [dialogOpen, setDialogOpen] = React.useState(false)
+  const [drawerOpen, setDrawerOpen] = React.useState(false)
 
-    for (const r of rules) {
-      if (r.type === "customer_ids") {
-        const accounts = r.ids.flatMap((cid) => sampleAccountsByCustomer[cid] ?? [])
-        ;(r.include ? addAccounts : (arr: string[] | undefined) => addAccounts(arr, excludeSet))(accounts, r.include ? includeSet : excludeSet)
-      } else if (r.type === "account_ids") {
-        ;(r.include ? addAccounts : (arr: string[] | undefined) => addAccounts(arr, excludeSet))(r.ids, r.include ? includeSet : excludeSet)
-      } else if (r.type === "customer_tags") {
-        const allTags = r.tags
-        if (r.operator === "ANY") {
-          const accounts = allTags.flatMap((t) => sampleAccountsByTag[t] ?? [])
-          ;(r.include ? addAccounts : (arr: string[] | undefined) => addAccounts(arr, excludeSet))(accounts, r.include ? includeSet : excludeSet)
-        } else {
-          // ALL: intersection of tag account sets
-          const sets = allTags.map((t) => new Set(sampleAccountsByTag[t] ?? []))
-          const inter = sets.reduce<string[]>((acc, s, idx) => {
-            if (idx === 0) return Array.from(s)
-            return acc.filter((x) => s.has(x))
-          }, [])
-          ;(r.include ? addAccounts : (arr: string[] | undefined) => addAccounts(arr, excludeSet))(inter, r.include ? includeSet : excludeSet)
-        }
-      } else if (r.type === "ib_id") {
-        const key = `${r.id}:${r.depth}`
-        const accounts = sampleIbTree[key] ?? []
-        ;(r.include ? addAccounts : (arr: string[] | undefined) => addAccounts(arr, excludeSet))(accounts, r.include ? includeSet : excludeSet)
-      }
-    }
+  // API helpers (align with WarehouseProducts pattern)
+  type AudiencePreviewResp = { total: number; items: any[] }
+  const abortRef = React.useRef<AbortController | null>(null)
 
-    // OR include then subtract exclude
-    for (const ex of excludeSet) includeSet.delete(ex)
-    return Array.from(includeSet)
+  async function postAudiencePreview(body: { rules: Rule[] }, signal?: AbortSignal) {
+    const res = await fetch("/api/v1/audience/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as AudiencePreviewResp
+  }
+
+  const loadPreview = React.useCallback(async () => {
+    if (abortRef.current) abortRef.current.abort()
+    const ctl = new AbortController()
+    abortRef.current = ctl
+    setIsLoading(true)
+    setError(null)
+    try {
+      const data = await postAudiencePreview({ rules }, ctl.signal)
+      const items: PreviewRow[] = (data.items ?? []).map((it: any) => ({
+        accountId: String(it.account_id),
+        customerId: it.client_id ?? null,
+        cnName: it.name ?? null,
+        group: it.group ?? null,
+        regDate: it.reg_date ?? null,
+        balance: typeof it.balance === "number" ? it.balance : it.balance != null ? Number(it.balance) : null,
+        equity: typeof it.equity === "number" ? it.equity : it.equity != null ? Number(it.equity) : null,
+        tags: Array.isArray(it.tags) ? it.tags : [],
+      }))
+      setServerRows(items)
+      setServerTotal(typeof (data as any).total === "number" ? (data as any).total : items.length)
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setError(e?.message ?? "Failed to load")
+      setServerRows([])
+      setServerTotal(0)
+    } finally {
+      setIsLoading(false)
+    }
   }, [rules])
-  const previewRows: PreviewRow[] = React.useMemo(() => {
-    return derivedAccounts.map((a) => ({
-      accountId: a,
-      customerId: accountToCustomer.get(a) ?? null,
-      tags: accountToTags.get(a) ?? [],
-    }))
-  }, [derivedAccounts, accountToCustomer, accountToTags])
 
-  const [previewOpen, setPreviewOpen] = React.useState(false)
+  React.useEffect(() => {
+    const isOpen = dialogOpen || drawerOpen
+    if (isOpen) loadPreview()
+  }, [dialogOpen, drawerOpen, loadPreview])
+  // derive from server rows
+  const derivedAccounts = React.useMemo(() => serverRows.map((r) => r.accountId), [serverRows])
+  const previewRows: PreviewRow[] = serverRows
+
   const [previewSorting, setPreviewSorting] = React.useState<SortingState>([])
   const [previewRowSelection, setPreviewRowSelection] = React.useState<Record<string, boolean>>({})
 
-  // 默认全选：每次列表变化时重置为全选
-  React.useEffect(() => {
-    const next: Record<string, boolean> = {}
-    previewRows.forEach((_, idx) => { next[idx] = true })
-    setPreviewRowSelection(next)
-  }, [previewRows])
+  // 方案2：移除列表变化时的默认全选，保留用户选择；新增项默认不勾选
+
+  const formatYmd = React.useCallback((s: string | null) => {
+    if (!s) return "-"
+    const part = String(s).split(" ")[0]
+    const d = new Date(s as string)
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, "0")
+      const dd = String(d.getDate()).padStart(2, "0")
+      return `${y}/${m}/${dd}`
+    }
+    return part
+  }, [])
 
   const previewColumns: ColumnDef<PreviewRow>[] = React.useMemo(() => [
     {
@@ -554,21 +549,61 @@ export default function ClientTradingAnalyticsPage() {
       cell: ({ row }) => <div>{row.original.customerId ?? "-"}</div>,
     },
     {
+      accessorKey: "cnName",
+      header: "中文姓名",
+      cell: ({ row }) => <div>{row.original.cnName ?? "-"}</div>,
+    },
+    { accessorKey: "group", header: "Group", cell: ({ row }) => <div className="truncate max-w-[180px]">{row.original.group ?? "-"}</div> },
+    {
+      accessorKey: "regDate",
+      header: "注册时间",
+      cell: ({ row }) => <div>{formatYmd(row.original.regDate)}</div>,
+    },
+    {
+      accessorKey: "balance",
+      header: "Balance",
+      cell: ({ row }) => {
+        const v = row.original.balance
+        return <div className="text-right">{v == null ? "-" : new Intl.NumberFormat().format(v)}</div>
+      },
+    },
+    {
+      accessorKey: "equity",
+      header: "Equity",
+      cell: ({ row }) => {
+        const v = row.original.equity
+        return <div className="text-right">{v == null ? "-" : new Intl.NumberFormat().format(v)}</div>
+      },
+    },
+    {
       accessorKey: "tags",
       header: "Tags",
       cell: ({ row }) => {
+        const id = row.original.accountId
         const t = row.original.tags
         if (!t.length) return <span className="text-muted-foreground">-</span>
+        const expanded = !!tagExpanded[id]
+        const show = expanded ? t : t.slice(0, 2)
+        const remaining = Math.max(0, t.length - show.length)
         return (
-          <div className="flex flex-wrap gap-1">
-            {t.map((x) => (
-              <Badge key={x} variant="secondary">{x}</Badge>
-            ))}
+          <div className="space-y-1">
+            <div className={expanded ? "max-h-24 overflow-auto pr-1" : "flex flex-wrap gap-1"}>
+              {show.map((x) => (
+                <div key={x} className={expanded ? "text-xs" : undefined}>
+                  {expanded ? <Badge variant="secondary" className="mr-1">{x}</Badge> : <Badge variant="secondary">{x}</Badge>}
+                </div>
+              ))}
+            </div>
+            {t.length > 2 && (
+              <button className="text-xs text-muted-foreground hover:underline" onClick={() => toggleTagExpanded(id)}>
+                {expanded ? "收起" : `展开${remaining > 0 ? `（+${remaining}）` : ""}`}
+              </button>
+            )}
           </div>
         )
       },
     },
-  ], [])
+  ], [formatYmd, tagExpanded, toggleTagExpanded])
 
   const previewTable = useReactTable({
     data: previewRows,
@@ -578,8 +613,39 @@ export default function ClientTradingAnalyticsPage() {
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onRowSelectionChange: setPreviewRowSelection,
+    getRowId: (row) => row.accountId,
     state: { sorting: previewSorting, rowSelection: previewRowSelection },
   })
+
+  // 在规则变化导致预览列表变化时：
+  // 1) 保留已存在项的勾选状态
+  // 2) 对于新增项，默认设为选中
+  const prevIdsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    const currentIds = new Set(previewRows.map((r) => r.accountId))
+    const prevIds = prevIdsRef.current
+    const newIds: string[] = []
+    for (const id of currentIds) if (!prevIds.has(id)) newIds.push(id)
+
+    setPreviewRowSelection((prev) => {
+      const next: Record<string, boolean> = {}
+      // 保留仍存在的旧选择
+      for (const id of currentIds) if (prev[id]) next[id] = prev[id]
+      // 新增项默认选中
+      for (const id of newIds) next[id] = true
+      return next
+    })
+
+    prevIdsRef.current = currentIds
+  }, [previewRows])
+
+  // 应用到外层的“生效账户”集合：若未应用则使用 derivedAccounts
+  const [appliedAccounts, setAppliedAccounts] = React.useState<string[] | null>(null)
+  const effectiveAccounts = React.useMemo(
+    () => (appliedAccounts && appliedAccounts.length ? appliedAccounts : derivedAccounts),
+    [appliedAccounts, derivedAccounts]
+  )
+  // no sample details in summary per requirement
 
 
   // helpers to add rules
@@ -595,12 +661,7 @@ export default function ClientTradingAnalyticsPage() {
     setRules((prev) => [...prev, { type: "account_ids", ids: [v], include: true }])
     setInputAccountId("")
   }
-  function addIbRule() {
-    const id = parseInt(inputIbId, 10)
-    if (!id || Number.isNaN(id)) return
-    setRules((prev) => [...prev, { type: "ib_id", id, depth: ibDepth, include: true }])
-    setInputIbId("")
-  }
+  // removed addIbRule
   function addTagRule() {
     const tags = tagSource === "local" ? selectedLocalTags : selectedCrmTags
     if (!tags.length) return
@@ -635,11 +696,11 @@ export default function ClientTradingAnalyticsPage() {
             <span className="text-sm text-muted-foreground">选择对象：</span>
         {/* 对象（Responsive Dialog: desktop=Dialog, mobile=Drawer） */}
         <div className="block sm:hidden">
-          <Drawer>
+          <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
             <DrawerTrigger asChild>
               <Button variant="outline" size="sm">选择对象</Button>
             </DrawerTrigger>
-            <DrawerContent>
+            <DrawerContent className="max-w-[100vw]">
               <DrawerHeader>
                 <DrawerTitle>对象选择</DrawerTitle>
                 <DrawerDescription>通过不同来源添加到对象池，确认后生效（静态演示）</DrawerDescription>
@@ -654,7 +715,6 @@ export default function ClientTradingAnalyticsPage() {
                     <SelectContent>
                       <SelectItem value="customer_ids">客户ID</SelectItem>
                       <SelectItem value="account_ids">账户号</SelectItem>
-                      <SelectItem value="ib_id">IB ID</SelectItem>
                       <SelectItem value="customer_tags">客户Tag</SelectItem>
                     </SelectContent>
                   </Select>
@@ -682,22 +742,7 @@ export default function ClientTradingAnalyticsPage() {
                   </div>
                 )}
 
-                {/* ib_id */}
-                {ruleType === "ib_id" && (
-                  <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
-                    <Label htmlFor="ib_drawer" className="text-sm text-muted-foreground">IB ID</Label>
-                    <Input id="ib_drawer" inputMode="numeric" value={inputIbId} onChange={(e) => setInputIbId(e.target.value)} placeholder="如 137016" className="w-full" />
-                    <Select value={ibDepth} onValueChange={(v) => setIbDepth(v as typeof ibDepth)}>
-                      <SelectTrigger className="w-32"><SelectValue placeholder="层级" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">所有层级</SelectItem>
-                        <SelectItem value="level1">仅一级</SelectItem>
-                        <SelectItem value="level1_2">一级+二级</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button variant="secondary" onClick={addIbRule}>加入对象池</Button>
-                  </div>
-                )}
+                {/* removed ib_id ui */}
 
                 {/* customer_tags */}
                 {ruleType === "customer_tags" && (
@@ -762,7 +807,6 @@ export default function ClientTradingAnalyticsPage() {
                         {r.type === "customer_ids" && `客户ID:${r.ids.join(',')}`}
                         {r.type === "account_ids" && `账户:${r.ids.join(',')}`}
                         {r.type === "customer_tags" && `${r.source} Tags:${r.tags.join(',')}(${r.operator})`}
-                        {r.type === "ib_id" && `IB:${r.id}(${r.depth})`}
                       </span>
                       <button onClick={() => removeRuleAt(idx)} className="text-muted-foreground hover:text-foreground">×</button>
                     </Badge>
@@ -773,23 +817,59 @@ export default function ClientTradingAnalyticsPage() {
                   <Button variant="ghost" size="sm" onClick={clearRules}>清空对象池</Button>
                 </div>
               </div>
-              {/* 账户预览 */}
-              <div>
-                <div className="mb-2 text-sm font-medium">命中账户（示例）{derivedAccounts.length} 个</div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-                  {derivedAccounts.length > 0 ? (
-                    derivedAccounts.map((a) => (
-                      <Badge key={a} variant="outline">{a}</Badge>
-                    ))
-                  ) : (
-                    <span className="text-xs text-muted-foreground">无账户</span>
-                  )}
+              {/* 账户预览（表格，含复选，限定高度滚动） */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">命中账户 {serverTotal} 个（已加载 {previewRows.length}）</div>
+                {isLoading && <div className="text-xs text-muted-foreground">加载中...</div>}
+                {error && <div className="text-xs text-red-500">{error}</div>}
+                <div className="overflow-hidden rounded-md border">
+                  <div className="max-h-64 overflow-auto overflow-x-auto">
+                    <Table className="min-w-[800px] [&_th]:border-r [&_td]:border-r [&_th]:border-b-2 [&_td]:border-muted-foreground/10">
+                      <TableHeader>
+                        {previewTable.getHeaderGroups().map((headerGroup) => (
+                          <TableRow key={headerGroup.id}>
+                            {headerGroup.headers.map((header) => (
+                              <TableHead key={header.id}>
+                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                              </TableHead>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableHeader>
+                      <TableBody>
+                        {previewTable.getRowModel().rows?.length ? (
+                          previewTable.getRowModel().rows.map((row) => (
+                            <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                              {row.getVisibleCells().map((cell) => (
+                                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={previewColumns.length} className="h-24 text-center">
+                              No results.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <div className="text-muted-foreground text-xs">
+                    已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
+                  </div>
+                  <div className="space-x-2">
+                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
+                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
+                  </div>
                 </div>
               </div>
               </div>
               <DrawerFooter>
                 <DrawerClose asChild>
-                  <Button>确认</Button>
+                  <Button onClick={() => setAppliedAccounts(previewTable.getSelectedRowModel().rows.map((r) => r.original.accountId))}>确认</Button>
                 </DrawerClose>
                 <DrawerClose asChild>
                   <Button variant="outline">取消</Button>
@@ -799,11 +879,11 @@ export default function ClientTradingAnalyticsPage() {
           </Drawer>
             </div>
             <div className="hidden sm:block">
-          <Dialog>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm">选择对象</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="w-[95vw] sm:max-w-[1100px]">
               <DialogHeader>
                 <DialogTitle>对象选择</DialogTitle>
                 <DialogDescription>通过不同来源添加到对象池，确认后生效（静态演示）</DialogDescription>
@@ -818,7 +898,6 @@ export default function ClientTradingAnalyticsPage() {
                       <SelectContent>
                         <SelectItem value="customer_ids">客户ID</SelectItem>
                         <SelectItem value="account_ids">账户号</SelectItem>
-                        <SelectItem value="ib_id">IB ID</SelectItem>
                         <SelectItem value="customer_tags">客户Tag</SelectItem>
                       </SelectContent>
                     </Select>
@@ -844,22 +923,7 @@ export default function ClientTradingAnalyticsPage() {
                     </div>
                   )}
 
-                  {/* ib_id */}
-                  {ruleType === "ib_id" && (
-                    <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
-                      <Label htmlFor="ib_dialog" className="text-sm text-muted-foreground">IB ID</Label>
-                      <Input id="ib_dialog" inputMode="numeric" value={inputIbId} onChange={(e) => setInputIbId(e.target.value)} placeholder="如 137016" className="w-full" />
-                      <Select value={ibDepth} onValueChange={(v) => setIbDepth(v as typeof ibDepth)}>
-                        <SelectTrigger className="w-32"><SelectValue placeholder="层级" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">所有层级</SelectItem>
-                          <SelectItem value="level1">仅一级</SelectItem>
-                          <SelectItem value="level1_2">一级+二级</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Button variant="secondary" onClick={addIbRule}>加入对象池</Button>
-                    </div>
-                  )}
+                  {/* removed ib_id ui */}
 
                   {/* customer_tags */}
                   {ruleType === "customer_tags" && (
@@ -924,7 +988,7 @@ export default function ClientTradingAnalyticsPage() {
                           {r.type === "customer_ids" && `客户ID:${r.ids.join(',')}`}
                           {r.type === "account_ids" && `账户:${r.ids.join(',')}`}
                           {r.type === "customer_tags" && `${r.source} Tags:${r.tags.join(',')}(${r.operator})`}
-                          {r.type === "ib_id" && `IB:${r.id}(${r.depth})`}
+                          
                         </span>
                         <button onClick={() => removeRuleAt(idx)} className="text-muted-foreground hover:text-foreground">×</button>
                       </Badge>
@@ -933,9 +997,58 @@ export default function ClientTradingAnalyticsPage() {
                   </div>
                 </div>
               </div>
+              {/* 账户预览（表格，含复选，限定高度滚动） */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">命中账户 {serverTotal} 个（已加载 {previewRows.length}）</div>
+                {isLoading && <div className="text-xs text-muted-foreground">加载中...</div>}
+                {error && <div className="text-xs text-red-500">{error}</div>}
+                <div className="overflow-hidden rounded-md border">
+                  <div className="max-h-64 overflow-auto overflow-x-auto">
+                    <Table className="min-w-[1200px] [&_th]:border-r [&_td]:border-r [&_th]:border-b-2 [&_td]:border-muted-foreground/10">
+                      <TableHeader>
+                        {previewTable.getHeaderGroups().map((headerGroup) => (
+                          <TableRow key={headerGroup.id}>
+                            {headerGroup.headers.map((header) => (
+                              <TableHead key={header.id}>
+                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                              </TableHead>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableHeader>
+                      <TableBody>
+                        {previewTable.getRowModel().rows?.length ? (
+                          previewTable.getRowModel().rows.map((row) => (
+                            <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                              {row.getVisibleCells().map((cell) => (
+                                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={previewColumns.length} className="h-24 text-center">
+                              No results.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <div className="text-muted-foreground text-xs">
+                    已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
+                  </div>
+                  <div className="space-x-2">
+                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
+                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
+                  </div>
+                </div>
+              </div>
               <DialogFooter className="pt-2">
                 <DialogClose asChild>
-                  <Button>确认</Button>
+                  <Button onClick={() => setAppliedAccounts(previewTable.getSelectedRowModel().rows.map((r) => r.original.accountId))}>确认</Button>
                 </DialogClose>
                 <DialogClose asChild>
                   <Button variant="outline">取消</Button>
@@ -1059,75 +1172,16 @@ export default function ClientTradingAnalyticsPage() {
               )}
             </div>
           </div>
-          {/* 简要提示 */}
+          {/* 简要提示（仅统计，不展示细节） */}
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <span>规则 {rules.length} 条</span>
-            <span>账户 {derivedAccounts.length} 个</span>
-            <span>时间 {rangeLabel}</span>
-            {symbolsMode === "all" ? <span>品种 全部</span> : (selectedSymbols.length > 0 ? <span>品种 {selectedSymbols.length} 个</span> : <span>品种 未选择</span>)}
+            <span>选中账户 {effectiveAccounts.length} 个</span>
+            <span>时间范围：{rangeLabel}</span>
+            <span>选中 Symbol：{symbolsMode === "all" ? "全部" : (selectedSymbols.length > 0 ? `${selectedSymbols.length} 个` : "未选择")}</span>
           </div>
         </CardContent>
       </Card>
 
-      {/* 预览与确认（可折叠） */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>预览与确认</CardTitle>
-              <CardDescription>查看命中对象，并可二次选择</CardDescription>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => setPreviewOpen((v) => !v)}>
-              {previewOpen ? "收起" : "展开"}
-            </Button>
-          </div>
-        </CardHeader>
-        {previewOpen && (
-          <CardContent>
-            <div className="overflow-hidden rounded-md border">
-              <Table>
-                <TableHeader>
-                  {previewTable.getHeaderGroups().map((headerGroup) => (
-                    <TableRow key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => (
-                        <TableHead key={header.id}>
-                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableHeader>
-                <TableBody>
-                  {previewTable.getRowModel().rows?.length ? (
-                    previewTable.getRowModel().rows.map((row) => (
-                      <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
-                        {row.getVisibleCells().map((cell) => (
-                          <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                        ))}
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={previewColumns.length} className="h-24 text-center">
-                        No results.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex items-center justify-between py-3">
-              <div className="text-muted-foreground text-sm">
-                已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
-              </div>
-              <div className="space-x-2">
-                <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
-                <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
-              </div>
-            </div>
-          </CardContent>
-        )}
-      </Card>
+      {/* 已移除：底部预览卡片（整合进 Drawer） */}
 
       {/* 指标卡片区 */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs dark:*:data-[slot=card]:bg-card">

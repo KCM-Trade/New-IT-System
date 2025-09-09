@@ -105,11 +105,13 @@ const data = {
   ],
   documents: [
     { name: "Managers", url: "/cfg/managers", icon: IconDatabase },
+    { name: "自定义组别", url: "/cfg/custom-groups", icon: IconSettings },
     { name: "Reports", url: "/cfg/reports", icon: IconReport },
     { name: "Financial", url: "/cfg/financial", icon: IconFileWord },
     { name: "Clients", url: "/cfg/clients", icon: IconDatabase },
     { name: "Tasks", url: "/cfg/tasks", icon: IconReport },
     { name: "Marketing", url: "/cfg/marketing", icon: IconFileWord },
+    
   ],
 }
 
