@@ -61,7 +61,7 @@ import {
   useReactTable,
   VisibilityState,
 } from "@tanstack/react-table"
-import { ArrowUpDown, ChevronDown, MoreHorizontal } from "lucide-react"
+import { ArrowUpDown, ChevronDown, MoreHorizontal, Search, Loader2 } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -451,6 +451,11 @@ export default function ClientTradingAnalyticsPage() {
   // dialog/drawer open states (controlled) to trigger loading
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [drawerOpen, setDrawerOpen] = React.useState(false)
+  
+  // analysis states
+  const [isAnalyzing, setIsAnalyzing] = React.useState(false)
+  const [analysisData, setAnalysisData] = React.useState<any>(null)
+  const [analysisError, setAnalysisError] = React.useState<string | null>(null)
 
   // API helpers (align with WarehouseProducts pattern)
   type AudiencePreviewResp = { total: number; items: any[] }
@@ -683,22 +688,76 @@ export default function ClientTradingAnalyticsPage() {
     setSelectedSymbols((prev) => (prev.includes(sym) ? prev.filter((s) => s !== sym) : [...prev, sym]))
   }
 
+  // analysis API call
+  async function postAnalysisRequest(body: {
+    accounts: string[]
+    startDate: Date | undefined
+    endDate: Date | undefined
+    symbols: string[] | null
+  }, signal?: AbortSignal) {
+    const res = await fetch("/api/v1/trading/analysis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  }
+
+  const handleAnalyzeData = React.useCallback(async () => {
+    if (effectiveAccounts.length === 0) return
+    
+    setIsAnalyzing(true)
+    setAnalysisError(null)
+    setAnalysisData(null)
+    
+    try {
+      // 构建分析请求参数
+      const analysisParams = {
+        accounts: effectiveAccounts,
+        startDate: quickRange === "all" ? undefined : startDate,
+        endDate: quickRange === "all" ? undefined : endDate,
+        symbols: symbolsMode === "all" ? null : selectedSymbols
+      }
+      
+      console.log("开始分析，参数：", analysisParams)
+      
+      // 模拟API调用时间（实际开发中移除）
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
+      const result = await postAnalysisRequest(analysisParams)
+      setAnalysisData(result)
+      
+      console.log("分析完成，结果：", result)
+      
+    } catch (error: any) {
+      if (error?.name !== "AbortError") {
+        setAnalysisError(error?.message ?? "分析失败")
+        console.error("分析错误：", error)
+      }
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }, [effectiveAccounts, quickRange, startDate, endDate, symbolsMode, selectedSymbols])
+
   return (
     <div className="space-y-4 px-4 pb-6 lg:px-6">
       {/* 筛选卡片（与 Profit 风格一致） */}
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl font-bold">筛选</CardTitle>
-          
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm text-muted-foreground">选择对象：</span>
-        {/* 对象（Responsive Dialog: desktop=Dialog, mobile=Drawer） */}
-        <div className="block sm:hidden">
-          <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
-            <DrawerTrigger asChild>
-              <Button variant="outline" size="sm">选择对象</Button>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">选择对象：</span>
+              {/* 对象（Responsive Dialog: desktop=Dialog, mobile=Drawer） */}
+              <div className="block sm:hidden">
+                <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
+                  <DrawerTrigger asChild>
+                    <Button variant="outline" className="h-9 px-3">选择对象</Button>
             </DrawerTrigger>
             <DrawerContent className="max-w-[100vw]">
               <DrawerHeader>
@@ -724,7 +783,7 @@ export default function ClientTradingAnalyticsPage() {
 
                 {/* customer_ids */}
                 {ruleType === "customer_ids" && (
-                  <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
+                  <div className="grid w-full max-w-[600px] grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
                     <Label htmlFor="cid_drawer" className="text-sm text-muted-foreground">客户ID</Label>
                     <Input id="cid_drawer" value={inputCustomerId} onChange={(e) => setInputCustomerId(e.target.value)} placeholder="如 1001" className="w-full" />
                     <div />
@@ -734,7 +793,7 @@ export default function ClientTradingAnalyticsPage() {
 
                 {/* account_ids */}
                 {ruleType === "account_ids" && (
-                  <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
+                  <div className="grid w-full max-w-[600px] grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
                     <Label htmlFor="acc_drawer" className="text-sm text-muted-foreground">账户号</Label>
                     <Input id="acc_drawer" value={inputAccountId} onChange={(e) => setInputAccountId(e.target.value)} placeholder="如 A-1001" className="w-full" />
                     <div />
@@ -822,8 +881,8 @@ export default function ClientTradingAnalyticsPage() {
                 <div className="text-sm font-medium">命中账户 {serverTotal} 个（已加载 {previewRows.length}）</div>
                 {isLoading && <div className="text-xs text-muted-foreground">加载中...</div>}
                 {error && <div className="text-xs text-red-500">{error}</div>}
-                <div className="overflow-hidden rounded-md border">
-                  <div className="max-h-64 overflow-auto overflow-x-auto">
+                <div className="overflow-hidden rounded-md border min-w-0">
+                  <div className="max-w-[600px] max-h-64 overflow-x-scroll overflow-y-auto">
                     <Table className="min-w-[800px] [&_th]:border-r [&_td]:border-r [&_th]:border-b-2 [&_td]:border-muted-foreground/10">
                       <TableHeader>
                         {previewTable.getHeaderGroups().map((headerGroup) => (
@@ -877,24 +936,28 @@ export default function ClientTradingAnalyticsPage() {
               </DrawerFooter>
             </DrawerContent>
           </Drawer>
-            </div>
-            <div className="hidden sm:block">
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="sm">选择对象</Button>
-            </DialogTrigger>
-            <DialogContent className="w-[95vw] sm:max-w-[1100px]">
-              <DialogHeader>
+                </div>
+              </div>
+              <div className="hidden sm:block">
+                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="h-9 px-3">选择对象</Button>
+                  </DialogTrigger>
+            <DialogContent className="w-[90vw] sm:max-w-[1100px] max-h-[90vh] flex flex-col">
+              <DialogHeader className="flex-shrink-0">
                 <DialogTitle>对象选择</DialogTitle>
                 <DialogDescription>通过不同来源添加到对象池，确认后生效（静态演示）</DialogDescription>
               </DialogHeader>
-              <div className="space-y-4">
-                {/* 规则类型选择 + 动态输入（紧凑） */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Label className="w-24">类型</Label>
+              
+              <div className="flex-1 overflow-y-auto space-y-4">
+                {/* 规则配置区域 */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Label className="text-sm font-medium min-w-[4rem]">类型</Label>
                     <Select value={ruleType} onValueChange={(v) => setRuleType(v as typeof ruleType)}>
-                      <SelectTrigger className="w-40"><SelectValue placeholder="选择类型" /></SelectTrigger>
+                      <SelectTrigger className="w-40">
+                        <SelectValue placeholder="选择类型" />
+                      </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="customer_ids">客户ID</SelectItem>
                         <SelectItem value="account_ids">账户号</SelectItem>
@@ -905,82 +968,93 @@ export default function ClientTradingAnalyticsPage() {
 
                   {/* customer_ids */}
                   {ruleType === "customer_ids" && (
-                    <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
-                      <Label htmlFor="cid_dialog" className="text-sm text-muted-foreground">客户ID</Label>
-                      <Input id="cid_dialog" value={inputCustomerId} onChange={(e) => setInputCustomerId(e.target.value)} placeholder="如 1001" className="w-full" />
-                      <div />
+                    <div className="flex items-center gap-3">
+                      <Label htmlFor="cid_dialog" className="text-sm min-w-[4rem]">客户ID</Label>
+                      <Input 
+                        id="cid_dialog" 
+                        value={inputCustomerId} 
+                        onChange={(e) => setInputCustomerId(e.target.value)} 
+                        placeholder="如 1001" 
+                        className="flex-1 max-w-xs" 
+                      />
                       <Button variant="secondary" onClick={addCustomerIdRule}>加入对象池</Button>
                     </div>
                   )}
 
                   {/* account_ids */}
                   {ruleType === "account_ids" && (
-                    <div className="grid w-full grid-cols-[6rem_1fr_auto_auto] items-center gap-2">
-                      <Label htmlFor="acc_dialog" className="text-sm text-muted-foreground">账户号</Label>
-                      <Input id="acc_dialog" value={inputAccountId} onChange={(e) => setInputAccountId(e.target.value)} placeholder="如 A-1001" className="w-full" />
-                      <div />
+                    <div className="flex items-center gap-3">
+                      <Label htmlFor="acc_dialog" className="text-sm min-w-[4rem]">账户号</Label>
+                      <Input 
+                        id="acc_dialog" 
+                        value={inputAccountId} 
+                        onChange={(e) => setInputAccountId(e.target.value)} 
+                        placeholder="如 A-1001" 
+                        className="flex-1 max-w-xs" 
+                      />
                       <Button variant="secondary" onClick={addAccountIdRule}>加入对象池</Button>
                     </div>
                   )}
 
-                  {/* removed ib_id ui */}
-
                   {/* customer_tags */}
                   {ruleType === "customer_tags" && (
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <Label className="w-24">Tag来源</Label>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <Label className="text-sm min-w-[4rem]">Tag来源</Label>
                         <Select value={tagSource} onValueChange={(v) => setTagSource(v as typeof tagSource)}>
-                          <SelectTrigger className="w-28"><SelectValue placeholder="来源" /></SelectTrigger>
+                          <SelectTrigger className="w-32">
+                            <SelectValue placeholder="来源" />
+                          </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="local">本地Tag</SelectItem>
                             <SelectItem value="crm">CRM Tag</SelectItem>
                           </SelectContent>
                         </Select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">逻辑</span>
+                        <Label className="text-sm">逻辑</Label>
                         <Select value={tagOperator} onValueChange={(v) => setTagOperator(v as typeof tagOperator)}>
-                          <SelectTrigger className="w-28"><SelectValue placeholder="逻辑" /></SelectTrigger>
+                          <SelectTrigger className="w-32">
+                            <SelectValue placeholder="逻辑" />
+                          </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="ANY">ANY(并集)</SelectItem>
                             <SelectItem value="ALL">ALL(交集)</SelectItem>
                           </SelectContent>
                         </Select>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" size="sm">选择Tag</Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-56 p-2">
+                            <div className="grid gap-2">
+                              {(tagSource === "local" ? sampleTagsLocal : sampleTagsCRM).map((t) => {
+                                const selected = (tagSource === "local" ? selectedLocalTags : selectedCrmTags).includes(t)
+                                return (
+                                  <label key={t} className="flex items-center gap-2">
+                                    <Checkbox
+                                      checked={selected}
+                                      onCheckedChange={(ck) => {
+                                        const upd = (tagSource === "local" ? selectedLocalTags : selectedCrmTags)
+                                        const setUpd = (tagSource === "local" ? setSelectedLocalTags : setSelectedCrmTags)
+                                        if (ck) setUpd([...upd, t])
+                                        else setUpd(upd.filter((x) => x !== t))
+                                      }}
+                                    />
+                                    <span className="text-sm">{t}</span>
+                                  </label>
+                                )
+                              })}
+                              <Button size="sm" onClick={addTagRule}>添加所选</Button>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
                       </div>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" size="sm">选择Tag</Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-56 p-2">
-                          <div className="grid gap-2">
-                            {(tagSource === "local" ? sampleTagsLocal : sampleTagsCRM).map((t) => {
-                              const selected = (tagSource === "local" ? selectedLocalTags : selectedCrmTags).includes(t)
-                              return (
-                                <label key={t} className="flex items-center gap-2">
-                                  <Checkbox
-                                    checked={selected}
-                                    onCheckedChange={(ck) => {
-                                      const upd = (tagSource === "local" ? selectedLocalTags : selectedCrmTags)
-                                      const setUpd = (tagSource === "local" ? setSelectedLocalTags : setSelectedCrmTags)
-                                      if (ck) setUpd([...upd, t])
-                                      else setUpd(upd.filter((x) => x !== t))
-                                    }}
-                                  />
-                                  <span className="text-sm">{t}</span>
-                                </label>
-                              )
-                            })}
-                            <Button size="sm" onClick={addTagRule}>添加所选</Button>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
                     </div>
                   )}
                 </div>
+
                 {/* 规则列表 */}
-                <div>
-                  <div className="mb-2 text-sm font-medium">已选对象规则</div>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">已选对象规则</div>
                   <div className="flex flex-wrap gap-2">
                     {rules.map((r, idx) => (
                       <Badge key={idx} variant="secondary" className="flex items-center gap-2">
@@ -988,7 +1062,6 @@ export default function ClientTradingAnalyticsPage() {
                           {r.type === "customer_ids" && `客户ID:${r.ids.join(',')}`}
                           {r.type === "account_ids" && `账户:${r.ids.join(',')}`}
                           {r.type === "customer_tags" && `${r.source} Tags:${r.tags.join(',')}(${r.operator})`}
-                          
                         </span>
                         <button onClick={() => removeRuleAt(idx)} className="text-muted-foreground hover:text-foreground">×</button>
                       </Badge>
@@ -996,74 +1069,77 @@ export default function ClientTradingAnalyticsPage() {
                     {rules.length === 0 && <span className="text-xs text-muted-foreground">暂无规则</span>}
                   </div>
                 </div>
-              </div>
-              {/* 账户预览（表格，含复选，限定高度滚动） */}
-              <div className="space-y-2">
-                <div className="text-sm font-medium">命中账户 {serverTotal} 个（已加载 {previewRows.length}）</div>
-                {isLoading && <div className="text-xs text-muted-foreground">加载中...</div>}
-                {error && <div className="text-xs text-red-500">{error}</div>}
-                <div className="overflow-hidden rounded-md border">
-                  <div className="max-h-64 overflow-auto overflow-x-auto">
-                    <Table className="min-w-[1200px] [&_th]:border-r [&_td]:border-r [&_th]:border-b-2 [&_td]:border-muted-foreground/10">
-                      <TableHeader>
-                        {previewTable.getHeaderGroups().map((headerGroup) => (
-                          <TableRow key={headerGroup.id}>
-                            {headerGroup.headers.map((header) => (
-                              <TableHead key={header.id}>
-                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                              </TableHead>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableHeader>
-                      <TableBody>
-                        {previewTable.getRowModel().rows?.length ? (
-                          previewTable.getRowModel().rows.map((row) => (
-                            <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
-                              {row.getVisibleCells().map((cell) => (
-                                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+
+                {/* 账户预览表格 */}
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">命中账户 {serverTotal} 个（已加载 {previewRows.length}）</div>
+                  {isLoading && <div className="text-xs text-muted-foreground">加载中...</div>}
+                  {error && <div className="text-xs text-red-500">{error}</div>}
+                  
+                  <div className="border rounded-md overflow-hidden">
+                    <div className="overflow-auto max-h-64">
+                      <Table className="min-w-[800px] [&_th]:border-r [&_td]:border-r [&_th]:border-b-2 [&_td]:border-muted-foreground/10">
+                        <TableHeader>
+                          {previewTable.getHeaderGroups().map((headerGroup) => (
+                            <TableRow key={headerGroup.id}>
+                              {headerGroup.headers.map((header) => (
+                                <TableHead key={header.id}>
+                                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                                </TableHead>
                               ))}
                             </TableRow>
-                          ))
-                        ) : (
-                          <TableRow>
-                            <TableCell colSpan={previewColumns.length} className="h-24 text-center">
-                              No results.
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
+                          ))}
+                        </TableHeader>
+                        <TableBody>
+                          {previewTable.getRowModel().rows?.length ? (
+                            previewTable.getRowModel().rows.map((row) => (
+                              <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                                {row.getVisibleCells().map((cell) => (
+                                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                                ))}
+                              </TableRow>
+                            ))
+                          ) : (
+                            <TableRow>
+                              <TableCell colSpan={previewColumns.length} className="h-24 text-center">
+                                No results.
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <div className="text-muted-foreground text-xs">
-                    已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
-                  </div>
-                  <div className="space-x-2">
-                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
-                    <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
+                  
+                  <div className="flex items-center justify-between py-1">
+                    <div className="text-muted-foreground text-xs">
+                      已选 {previewTable.getFilteredSelectedRowModel().rows.length} / {previewTable.getFilteredRowModel().rows.length}
+                    </div>
+                    <div className="space-x-2">
+                      <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(true)}>全选</Button>
+                      <Button variant="outline" size="sm" onClick={() => previewTable.toggleAllPageRowsSelected(false)}>取消全选</Button>
+                    </div>
                   </div>
                 </div>
               </div>
-              <DialogFooter className="pt-2">
-                <DialogClose asChild>
-                  <Button onClick={() => setAppliedAccounts(previewTable.getSelectedRowModel().rows.map((r) => r.original.accountId))}>确认</Button>
-                </DialogClose>
+              <DialogFooter className="pt-2 flex-row justify-end space-x-2">
                 <DialogClose asChild>
                   <Button variant="outline">取消</Button>
                 </DialogClose>
+                <DialogClose asChild>
+                  <Button onClick={() => setAppliedAccounts(previewTable.getSelectedRowModel().rows.map((r) => r.original.accountId))}>确认</Button>
+                </DialogClose>
               </DialogFooter>
             </DialogContent>
-          </Dialog>
-            </div>
+                </Dialog>
+              </div>
 
             {/* 时间（按钮显示范围 + 双日历弹层 + 快捷范围选择） */}
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">时间范围：</span>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="justify-start gap-2 font-normal">
+                  <Button variant="outline" className="h-9 px-3 justify-start gap-2 font-normal min-w-[140px]">
                     <span>{rangeLabel}</span>
                   </Button>
                 </PopoverTrigger>
@@ -1108,7 +1184,7 @@ export default function ClientTradingAnalyticsPage() {
               </Popover>
               {/* 快捷范围：替代时区选择 */}
               <Select value={quickRange} onValueChange={(v) => applyQuickRange(v as typeof quickRange)}>
-                <SelectTrigger className="w-36"><SelectValue placeholder="快捷范围" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-36"><SelectValue placeholder="快捷范围" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="last_1w">最近 1 周</SelectItem>
                   <SelectItem value="last_1m">最近 1 个月</SelectItem>
@@ -1123,7 +1199,7 @@ export default function ClientTradingAnalyticsPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">交易品种：</span>
               <Select value={symbolsMode} onValueChange={(v) => setSymbolsMode(v as typeof symbolsMode)}>
-                <SelectTrigger className="w-36"><SelectValue placeholder="选择方式" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-36"><SelectValue placeholder="选择方式" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全选（默认）</SelectItem>
                   <SelectItem value="custom">其他（自定义）</SelectItem>
@@ -1132,7 +1208,7 @@ export default function ClientTradingAnalyticsPage() {
               {symbolsMode === "custom" && (
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="outline" size="sm">选择品种</Button>
+                    <Button variant="outline" className="h-9 px-3">选择品种</Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-56 p-2">
                     <div className="grid gap-2">
@@ -1170,7 +1246,50 @@ export default function ClientTradingAnalyticsPage() {
                   </PopoverContent>
                 </Popover>
               )}
+              </div>
             </div>
+
+            {/* 开始分析按钮 - 桌面端同行右对齐，移动端独立行居中 */}
+            <div className="hidden sm:flex">
+              <Button 
+                onClick={handleAnalyzeData}
+                disabled={isAnalyzing || effectiveAccounts.length === 0}
+                className="h-9 gap-2"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    分析中...
+                  </>
+                ) : (
+                  <>
+                    <Search className="size-4" />
+                    开始分析
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* 移动端开始分析按钮 - 独立一行，居中对齐 */}
+          <div className="flex justify-center sm:hidden">
+            <Button 
+              onClick={handleAnalyzeData}
+              disabled={isAnalyzing || effectiveAccounts.length === 0}
+              className="h-9 gap-2"
+            >
+              {isAnalyzing ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  分析中...
+                </>
+              ) : (
+                <>
+                  <Search className="size-4" />
+                  开始分析
+                </>
+              )}
+            </Button>
           </div>
           {/* 简要提示（仅统计，不展示细节） */}
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -1181,11 +1300,53 @@ export default function ClientTradingAnalyticsPage() {
         </CardContent>
       </Card>
 
-      {/* 已移除：底部预览卡片（整合进 Drawer） */}
+      {/* 分析状态提示 */}
+      {analysisError && (
+        <Card className="border-destructive bg-destructive/5">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2 text-destructive">
+              <span className="text-sm font-medium">分析失败</span>
+              <span className="text-sm">{analysisError}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* 指标卡片区 */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs dark:*:data-[slot=card]:bg-card">
-        {kpis.map((k) => (
+      {!analysisData && !isAnalyzing && !analysisError && (
+        <Card className="border-muted bg-muted/5">
+          <CardContent className="pt-6">
+            <div className="text-center text-muted-foreground">
+              <div className="text-sm">请选择筛选条件后点击"开始分析"按钮查看数据分析结果</div>
+              <div className="text-xs mt-1">
+                当前已选择 {effectiveAccounts.length} 个账户 · {rangeLabel} · 
+                {symbolsMode === "all" ? "全部品种" : `${selectedSymbols.length} 个品种`}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 数据分析结果区域 - 仅在有分析数据时显示 */}
+      {(analysisData || isAnalyzing) && (
+        <>
+          {/* 指标卡片区 */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs dark:*:data-[slot=card]:bg-card">
+            {isAnalyzing ? (
+              // 加载状态下显示骨架屏
+              Array.from({ length: 5 }).map((_, i) => (
+                <Card key={i} className="@container/card">
+                  <CardHeader>
+                    <CardDescription>
+                      <div className="h-4 bg-muted animate-pulse rounded"></div>
+                    </CardDescription>
+                    <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+                      <div className="h-8 bg-muted animate-pulse rounded"></div>
+                    </CardTitle>
+                  </CardHeader>
+                </Card>
+              ))
+            ) : (
+              kpis.map((k) => (
           <Card key={k.label} className="@container/card">
             <CardHeader>
               <CardDescription>{k.label}</CardDescription>
@@ -1202,10 +1363,11 @@ export default function ClientTradingAnalyticsPage() {
               </CardTitle>
             </CardHeader>
           </Card>
-        ))}
-      </div>
+              ))
+            )}
+          </div>
 
-      {/* 第一行：资金曲线 + 回撤阴影图 + 订单表（右列） */}
+          {/* 第一行：资金曲线 + 回撤阴影图 + 订单表（右列） */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-1">
           <CardHeader>
@@ -1302,6 +1464,8 @@ export default function ClientTradingAnalyticsPage() {
           </CardContent>
         </Card>
       </div>
+        </>
+      )}
     </div>
   )
 }
