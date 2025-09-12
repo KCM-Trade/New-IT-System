@@ -457,6 +457,65 @@ export default function ClientTradingAnalyticsPage() {
   const [analysisData, setAnalysisData] = React.useState<any>(null)
   const [analysisError, setAnalysisError] = React.useState<string | null>(null)
 
+  // fresh grad: backend response types for /api/v1/trading/analysis
+  type TradingSummaryByAccount = {
+    pnl_signed: number
+    pnl_net_abs: number
+    pnl_magnitude: number
+    total_orders: number
+    buy_orders: number
+    sell_orders: number
+    win_profit_sum: number
+    loss_profit_sum: number
+    loss_profit_abs_sum: number
+    win_trade_count: number
+    loss_trade_count: number
+    win_buy_count: number
+    win_sell_count: number
+    loss_buy_count: number
+    loss_sell_count: number
+    swaps_sum: number
+    buy_swaps_sum: number
+    sell_swaps_sum: number
+    deposit_count: number
+    deposit_amount: number
+    withdrawal_count: number
+    withdrawal_amount: number
+    cash_diff: number
+  }
+
+  type TradingTradeDetail = {
+    login: string
+    ticket: number
+    symbol: string
+    side: string
+    lots: number
+    open_time: string
+    close_time: string
+    open_price: number
+    close_price: number
+    profit: number
+    swaps: number
+  }
+
+  type TradingCashDetail = {
+    login: string
+    ticket: number
+    close_time: string
+    amount_signed: number
+    amount_abs: number
+    cash_type: 'deposit' | 'withdrawal'
+    comment?: string | null
+  }
+
+  type TradingAnalysisResponse = {
+    summaryByAccount: Record<string, TradingSummaryByAccount>
+    cashDetails: TradingCashDetail[]
+    tradeDetails: TradingTradeDetail[]
+    topWinners: TradingTradeDetail[]
+    topLosers: TradingTradeDetail[]
+  }
+
   // API helpers (align with WarehouseProducts pattern)
   type AudiencePreviewResp = { total: number; items: any[] }
   const abortRef = React.useRef<AbortController | null>(null)
@@ -698,11 +757,16 @@ export default function ClientTradingAnalyticsPage() {
     const res = await fetch("/api/v1/trading/analysis", {
       method: "POST",
       headers: { "Content-Type": "application/json", accept: "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        startDate: body.startDate ? new Date(body.startDate).toISOString().slice(0, 19).replace("T", " ") : undefined,
+        endDate: body.endDate ? new Date(body.endDate).toISOString().slice(0, 19).replace("T", " ") : undefined,
+        symbols: body.symbols && body.symbols.length ? body.symbols : null,
+      }),
       signal,
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.json()
+    return (await res.json()) as TradingAnalysisResponse
   }
 
   const handleAnalyzeData = React.useCallback(async () => {
@@ -1329,141 +1393,189 @@ export default function ClientTradingAnalyticsPage() {
       {/* 数据分析结果区域 - 仅在有分析数据时显示 */}
       {(analysisData || isAnalyzing) && (
         <>
-          {/* 指标卡片区 */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs dark:*:data-[slot=card]:bg-card">
-            {isAnalyzing ? (
-              // 加载状态下显示骨架屏
-              Array.from({ length: 5 }).map((_, i) => (
-                <Card key={i} className="@container/card">
-                  <CardHeader>
-                    <CardDescription>
-                      <div className="h-4 bg-muted animate-pulse rounded"></div>
-                    </CardDescription>
-                    <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-                      <div className="h-8 bg-muted animate-pulse rounded"></div>
-                    </CardTitle>
-                  </CardHeader>
-                </Card>
-              ))
-            ) : (
-              kpis.map((k) => (
-          <Card key={k.label} className="@container/card">
+          <Card>
             <CardHeader>
-              <CardDescription>{k.label}</CardDescription>
-              <CardTitle className={`text-2xl font-semibold tabular-nums @[250px]/card:text-3xl ${
-                k.tone === "pos" ? "text-green-600" : k.tone === "neg" ? "text-red-600" : ""
-              }`}>
-                {k.trend}{
-                  typeof k.value === "number" && k.unit === "%"
-                    ? `${Math.round(k.value * 100) / 1}%`
-                    : typeof k.value === "number" && k.unit === "USD"
-                    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(k.value)
-                    : String(k.value)
-                }
-              </CardTitle>
+              <CardTitle>分析概览</CardTitle>
+              <CardDescription>基于选择的账号与时间范围的已平仓统计</CardDescription>
             </CardHeader>
+            <CardContent>
+              {isAnalyzing ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="h-16 bg-muted animate-pulse rounded" />
+                  ))}
+                </div>
+              ) : (
+                (() => {
+                  const s = (analysisData?.summaryByAccount ?? {}) as Record<string, TradingSummaryByAccount>
+                  const agg = Object.values(s).reduce(
+                    (a, x) => ({
+                      pnl: a.pnl + (x.pnl_signed ?? 0),
+                      orders: a.orders + (x.total_orders ?? 0),
+                      win: a.win + (x.win_trade_count ?? 0),
+                      loss: a.loss + (x.loss_trade_count ?? 0),
+                      swaps: a.swaps + (x.swaps_sum ?? 0),
+                      cashdiff: a.cashdiff + (x.cash_diff ?? 0),
+                    }),
+                    { pnl: 0, orders: 0, win: 0, loss: 0, swaps: 0, cashdiff: 0 }
+                  )
+                  const winRate = agg.orders > 0 ? (agg.win / agg.orders) * 100 : 0
+                  return (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
+                      <Card data-slot="card"><CardHeader><CardDescription>净收益 (PnL)</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.pnl)}</CardTitle></CardHeader></Card>
+                      <Card data-slot="card"><CardHeader><CardDescription>订单数</CardDescription><CardTitle className="tabular-nums text-2xl">{agg.orders}</CardTitle></CardHeader></Card>
+                      <Card data-slot="card"><CardHeader><CardDescription>胜率</CardDescription><CardTitle className="tabular-nums text-2xl">{winRate.toFixed(1)}%</CardTitle></CardHeader></Card>
+                      <Card data-slot="card"><CardHeader><CardDescription>隔夜利息 (SWAP)</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.swaps)}</CardTitle></CardHeader></Card>
+                      <Card data-slot="card"><CardHeader><CardDescription>出入金差额</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.cashdiff)}</CardTitle></CardHeader></Card>
+                    </div>
+                  )
+                })()
+              )}
+            </CardContent>
           </Card>
-              ))
-            )}
-          </div>
 
-          {/* 第一行：资金曲线 + 回撤阴影图 + 订单表（右列） */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-1">
-          <CardHeader>
-            <CardTitle>资金曲线与回撤</CardTitle>
-            <CardDescription>静态样例（日维度）</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={equityChartConfig} className="aspect-auto h-[300px] w-full">
-              <LineChart data={equityData}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="t" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
-                <YAxis yAxisId="left" tickFormatter={(v) => new Intl.NumberFormat().format(v)} />
-                <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `${v}%`} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Line yAxisId="left" type="monotone" dataKey="equity" stroke="var(--color-equity)" dot={false} />
-                <Area yAxisId="right" type="monotone" dataKey="drawdown" stroke="var(--color-drawdown)" fill="var(--color-drawdown)" />
-              </LineChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>明细</CardTitle>
+              <CardDescription>交易、资金与 TopN</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <div className="text-sm font-medium">交易明细（已平仓 CMD 0/1）</div>
+                <div className="overflow-hidden rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Login</TableHead>
+                        <TableHead>Ticket</TableHead>
+                        <TableHead>Symbol</TableHead>
+                        <TableHead>Side</TableHead>
+                        <TableHead className="text-right">Lots</TableHead>
+                        <TableHead>Open Time</TableHead>
+                        <TableHead>Close Time</TableHead>
+                        <TableHead className="text-right">Profit</TableHead>
+                        <TableHead className="text-right">Swaps</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {((analysisData?.tradeDetails ?? []) as TradingTradeDetail[]).slice(0, 100).map((r) => (
+                        <TableRow key={`${r.login}-${r.ticket}`}>
+                          <TableCell>{r.login}</TableCell>
+                          <TableCell>{r.ticket}</TableCell>
+                          <TableCell>{r.symbol}</TableCell>
+                          <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
+                          <TableCell className="text-right tabular-nums">{r.lots.toFixed(2)}</TableCell>
+                          <TableCell className="tabular-nums">{r.open_time}</TableCell>
+                          <TableCell className="tabular-nums">{r.close_time}</TableCell>
+                          <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{r.swaps.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {(!analysisData || (analysisData?.tradeDetails ?? []).length === 0) && (
+                        <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground">No trades</TableCell></TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
 
-        {/* 订单表（静态示例） */}
-        <Card>
-          <CardHeader>
-            <CardTitle>订单表</CardTitle>
-            <CardDescription>静态示例</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OrdersTable />
-          </CardContent>
-        </Card>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">资金明细（CMD=6）</div>
+                <div className="overflow-hidden rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Login</TableHead>
+                        <TableHead>Ticket</TableHead>
+                        <TableHead>Close Time</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Comment</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {((analysisData?.cashDetails ?? []) as TradingCashDetail[]).slice(0, 100).map((r) => (
+                        <TableRow key={`${r.login}-${r.ticket}`}>
+                          <TableCell>{r.login}</TableCell>
+                          <TableCell>{r.ticket}</TableCell>
+                          <TableCell className="tabular-nums">{r.close_time}</TableCell>
+                          <TableCell className="text-right tabular-nums">{(r.cash_type === 'withdrawal' ? -Math.abs(r.amount_signed) : Math.abs(r.amount_signed)).toFixed(2)}</TableCell>
+                          <TableCell className={r.cash_type === 'deposit' ? 'text-green-600' : 'text-red-600'}>{r.cash_type}</TableCell>
+                          <TableCell className="truncate max-w-[320px]">{r.comment ?? '-'}</TableCell>
+                        </TableRow>
+                      ))}
+                      {(!analysisData || (analysisData?.cashDetails ?? []).length === 0) && (
+                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No cash rows</TableCell></TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
 
-        {/* 成本拆解（柱状模拟瀑布） */}
-        <Card>
-          <CardHeader>
-            <CardTitle>成本拆解</CardTitle>
-            <CardDescription>点差、佣金、隔夜利息、滑点</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={costChartConfig} className="aspect-auto h-[300px] w-full">
-              <BarChart data={costData}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
-                <YAxis tickFormatter={(v) => new Intl.NumberFormat().format(v)} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="cost" fill="var(--color-cost)" />
-              </BarChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 第二行：品种占比饼图 + 多空占比条形图（静态） */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>交易品种占比</CardTitle>
-            <CardDescription>静态样例</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={symbolConfig} className="aspect-auto h-[280px] w-full">
-              <PieChart>
-                <ChartLegend verticalAlign="top" content={<ChartLegendContent />} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Pie
-                  data={symbolShare}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={50}
-                  outerRadius={100}
-                  strokeWidth={2}
-                />
-              </PieChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>多空方向占比</CardTitle>
-            <CardDescription>静态样例</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={{ long: { label: "多" }, short: { label: "空" } }} className="aspect-auto h-[280px] w-full">
-              <BarChart data={[{ k: "方向", long: 62, short: 38 }]}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="k" tickLine={false} axisLine={false} tickMargin={8} />
-                <YAxis tickFormatter={(v) => `${v}%`} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="long" stackId="a" fill="hsl(150 70% 45%)" />
-                <Bar dataKey="short" stackId="a" fill="hsl(0 80% 60%)" />
-              </BarChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-      </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Top Winners</div>
+                  <div className="overflow-hidden rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Login</TableHead>
+                          <TableHead>Ticket</TableHead>
+                          <TableHead>Symbol</TableHead>
+                          <TableHead>Side</TableHead>
+                          <TableHead className="text-right">Profit</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {((analysisData?.topWinners ?? []) as TradingTradeDetail[]).map((r) => (
+                          <TableRow key={`w-${r.login}-${r.ticket}`}>
+                            <TableCell>{r.login}</TableCell>
+                            <TableCell>{r.ticket}</TableCell>
+                            <TableCell>{r.symbol}</TableCell>
+                            <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
+                            <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
+                          </TableRow>
+                        ))}
+                        {(!analysisData || (analysisData?.topWinners ?? []).length === 0) && (
+                          <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">-</TableCell></TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Top Losers</div>
+                  <div className="overflow-hidden rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Login</TableHead>
+                          <TableHead>Ticket</TableHead>
+                          <TableHead>Symbol</TableHead>
+                          <TableHead>Side</TableHead>
+                          <TableHead className="text-right">Profit</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {((analysisData?.topLosers ?? []) as TradingTradeDetail[]).map((r) => (
+                          <TableRow key={`l-${r.login}-${r.ticket}`}>
+                            <TableCell>{r.login}</TableCell>
+                            <TableCell>{r.ticket}</TableCell>
+                            <TableCell>{r.symbol}</TableCell>
+                            <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
+                            <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
+                          </TableRow>
+                        ))}
+                        {(!analysisData || (analysisData?.topLosers ?? []).length === 0) && (
+                          <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">-</TableCell></TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
