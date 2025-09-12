@@ -42,35 +42,16 @@ import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 // removed DateRange (range mode) in favor of dual single calendars
 import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@/components/ui/chart"
-import {
   ColumnDef,
-  ColumnFiltersState,
   flexRender,
   getCoreRowModel,
-  getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   SortingState,
   useReactTable,
-  VisibilityState,
 } from "@tanstack/react-table"
-import { ArrowUpDown, ChevronDown, MoreHorizontal, Search, Loader2 } from "lucide-react"
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { ArrowUpDown, ChevronDown, Search, Loader2 } from "lucide-react"
+// DropdownMenu components removed as not used in current implementation
 import {
   Table,
   TableBody,
@@ -79,258 +60,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  Area,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  XAxis,
-  YAxis,
-} from "recharts"
+// Recharts components removed as not used in current implementation
 
 // Page: 客户交易分析（静态原型）
 // fresh grad: All data below are static mock data to show layout and style.
 
-// 顶部指标卡静态数据
-const kpis = [
-  { label: "净收益 (PnL)", value: 5000, unit: "USD", trend: "+", tone: "pos" },
-  { label: "盈亏因子", value: 1.6, trend: "=", tone: "neu" },
-  { label: "胜率", value: 0.62, unit: "%", trend: "+", tone: "neu" },
-  { label: "最大回撤", value: -25, unit: "%", trend: "-", tone: "neg" },
-  { label: "Sharpe Ratio", value: 1.2, trend: "=", tone: "neu" },
-]
-
-// 资金曲线与回撤（静态）
-const equityData = Array.from({ length: 24 }).map((_, i) => {
-  const base = 10000
-  const equity = base + i * 120 + (i % 5 === 0 ? -300 : 0)
-  const peak = Math.max(...Array.from({ length: i + 1 }).map((__, j) => base + j * 120 + (j % 5 === 0 ? -300 : 0)))
-  const drawdown = Math.min(0, ((equity - peak) / peak) * 100)
-  return { t: `Day ${i + 1}`, equity, drawdown }
-})
-
-const equityChartConfig: ChartConfig = {
-  equity: { label: "权益", color: "var(--primary)" },
-  drawdown: { label: "回撤%", color: "hsl(0 80% 60%)" },
-}
-
-// 成本拆解（瀑布式条形图的近似，用堆叠柱）
-const costData = [
-  { label: "点差", cost: 1200 },
-  { label: "佣金", cost: 800 },
-  { label: "隔夜利息", cost: 300 },
-  { label: "滑点", cost: 200 },
-]
-
-const costChartConfig: ChartConfig = {
-  cost: { label: "成本", color: "hsl(220 80% 60%)" },
-}
-
-// 品种占比（饼图）
-const symbolShare = [
-  { name: "XAUUSD", value: 45, fill: "hsl(45 90% 55%)" },
-  { name: "XAGUSD", value: 20, fill: "hsl(0 80% 60%)" },
-  { name: "EURUSD", value: 18, fill: "hsl(210 80% 60%)" },
-  { name: "GBPUSD", value: 10, fill: "hsl(280 70% 60%)" },
-  { name: "US30", value: 7, fill: "hsl(150 70% 45%)" },
-]
-
-const symbolConfig: ChartConfig = {
-  share: { label: "占比", color: "var(--primary)" },
-}
-
-// Orders table static demo data and columns
-type OrderPayment = {
-  id: string
-  amount: number
-  status: "pending" | "processing" | "success" | "failed"
-  email: string
-}
-
-const ordersData: OrderPayment[] = [
-  { id: "m5gr84i9", amount: 316, status: "success", email: "ken99@example.com" },
-  { id: "3u1reuv4", amount: 242, status: "success", email: "Abe45@example.com" },
-  { id: "derv1ws0", amount: 837, status: "processing", email: "Monserrat44@example.com" },
-  { id: "5kma53ae", amount: 874, status: "success", email: "Silas22@example.com" },
-  { id: "bhqecj4p", amount: 721, status: "failed", email: "carmella@example.com" },
-]
-
-const ordersColumns: ColumnDef<OrderPayment>[] = [
-  {
-    id: "select",
-    header: ({ table }) => (
-      <Checkbox
-        checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
-        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label="Select all"
-      />
-    ),
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label="Select row"
-      />
-    ),
-    enableSorting: false,
-    enableHiding: false,
-  },
-  {
-    accessorKey: "status",
-    header: "Status",
-    cell: ({ row }) => <div className="capitalize">{row.getValue("status")}</div>,
-  },
-  {
-    accessorKey: "email",
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        Email
-        <ArrowUpDown />
-      </Button>
-    ),
-    cell: ({ row }) => <div className="lowercase">{row.getValue("email")}</div>,
-  },
-  {
-    accessorKey: "amount",
-    header: () => <div className="text-right">Amount</div>,
-    cell: ({ row }) => {
-      const amount = parseFloat(row.getValue("amount"))
-      const formatted = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount)
-      return <div className="text-right font-medium">{formatted}</div>
-    },
-  },
-  {
-    id: "actions",
-    enableHiding: false,
-    cell: ({ row }) => {
-      const payment = row.original
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-8 w-8 p-0">
-              <span className="sr-only">Open menu</span>
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(payment.id)}>
-              Copy payment ID
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>View customer</DropdownMenuItem>
-            <DropdownMenuItem>View payment details</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )
-    },
-  },
-]
-
-function OrdersTable() {
-  const [sorting, setSorting] = React.useState<SortingState>([])
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
-  const [rowSelection, setRowSelection] = React.useState({})
-
-  const table = useReactTable({
-    data: ordersData,
-    columns: ordersColumns,
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    onColumnVisibilityChange: setColumnVisibility,
-    onRowSelectionChange: setRowSelection,
-    state: { sorting, columnFilters, columnVisibility, rowSelection },
-  })
-
-  return (
-    <div className="w-full">
-      <div className="flex items-center py-4">
-        <Input
-          placeholder="Filter emails..."
-          value={(table.getColumn("email")?.getFilterValue() as string) ?? ""}
-          onChange={(event) => table.getColumn("email")?.setFilterValue(event.target.value)}
-          className="max-w-sm"
-        />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="ml-auto">
-              Columns <ChevronDown />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {table
-              .getAllColumns()
-              .filter((column) => column.getCanHide())
-              .map((column) => (
-                <DropdownMenuCheckboxItem
-                  key={column.id}
-                  className="capitalize"
-                  checked={column.getIsVisible()}
-                  onCheckedChange={(value) => column.toggleVisibility(!!value)}
-                >
-                  {column.id}
-                </DropdownMenuCheckboxItem>
-              ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      <div className="overflow-hidden rounded-md border">
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={ordersColumns.length} className="h-24 text-center">
-                  No results.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-      <div className="flex items-center justify-end space-x-2 py-4">
-        <div className="text-muted-foreground flex-1 text-sm">
-          {table.getFilteredSelectedRowModel().rows.length} of {table.getFilteredRowModel().rows.length} row(s) selected.
-        </div>
-        <div className="space-x-2">
-          <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-            Previous
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-            Next
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
+// Static data removed - now using dynamic analysis data from backend
 
 export default function ClientTradingAnalyticsPage() {
   // --- Static filters state (for demo only) ---
@@ -456,6 +191,10 @@ export default function ClientTradingAnalyticsPage() {
   const [isAnalyzing, setIsAnalyzing] = React.useState(false)
   const [analysisData, setAnalysisData] = React.useState<any>(null)
   const [analysisError, setAnalysisError] = React.useState<string | null>(null)
+  
+  // transaction history filter states
+  const [transactionTypeFilter, setTransactionTypeFilter] = React.useState<string>("all")
+  const [amountSort, setAmountSort] = React.useState<string>("desc")
 
   // fresh grad: backend response types for /api/v1/trading/analysis
   type TradingSummaryByAccount = {
@@ -1393,185 +1132,441 @@ export default function ClientTradingAnalyticsPage() {
       {/* 数据分析结果区域 - 仅在有分析数据时显示 */}
       {(analysisData || isAnalyzing) && (
         <>
+          {/* 分析概览 - 美化的卡片布局 */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {/* Total P&L Card */}
+            <Card className="relative overflow-hidden">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs font-medium text-muted-foreground">
+                  TOTAL P&L
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {isAnalyzing ? (
+                  <div className="space-y-2">
+                    <div className="h-8 bg-muted animate-pulse rounded" />
+                    <div className="h-4 bg-muted animate-pulse rounded w-3/4" />
+                  </div>
+                ) : (
+                  (() => {
+                    const s = (analysisData?.summaryByAccount ?? {}) as Record<string, TradingSummaryByAccount>
+                    const agg = Object.values(s).reduce(
+                      (a, x) => ({
+                        pnl: a.pnl + (x.pnl_signed ?? 0),
+                        orders: a.orders + (x.total_orders ?? 0),
+                        win: a.win + (x.win_trade_count ?? 0),
+                        loss: a.loss + (x.loss_trade_count ?? 0),
+                        winProfit: a.winProfit + (x.win_profit_sum ?? 0),
+                        lossProfit: a.lossProfit + (x.loss_profit_abs_sum ?? 0),
+                        buyWin: a.buyWin + (x.win_buy_count ?? 0),
+                        sellWin: a.sellWin + (x.win_sell_count ?? 0),
+                        buyOrders: a.buyOrders + (x.buy_orders ?? 0),
+                        sellOrders: a.sellOrders + (x.sell_orders ?? 0),
+                        deposits: a.deposits + (x.deposit_amount ?? 0),
+                        depositCount: a.depositCount + (x.deposit_count ?? 0),
+                        withdrawals: a.withdrawals + (x.withdrawal_amount ?? 0),
+                        withdrawalCount: a.withdrawalCount + (x.withdrawal_count ?? 0),
+                        cashdiff: a.cashdiff + (x.cash_diff ?? 0),
+                      }),
+                      { 
+                        pnl: 0, orders: 0, win: 0, loss: 0, winProfit: 0, lossProfit: 0,
+                        buyWin: 0, sellWin: 0, buyOrders: 0, sellOrders: 0,
+                        deposits: 0, depositCount: 0, withdrawals: 0, withdrawalCount: 0, cashdiff: 0
+                      }
+                    )
+                    return (
+                      <div className="space-y-2">
+                        <div className={`text-2xl font-bold tabular-nums ${agg.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.pnl)}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          Net: {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.pnl)}
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Win Rate Card */}
+            <Card className="relative overflow-hidden">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs font-medium text-muted-foreground">
+                  WIN RATE DETAILS
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {isAnalyzing ? (
+                  <div className="space-y-2">
+                    <div className="h-8 bg-muted animate-pulse rounded" />
+                    <div className="space-y-1">
+                      <div className="h-3 bg-muted animate-pulse rounded" />
+                      <div className="h-3 bg-muted animate-pulse rounded w-4/5" />
+                      <div className="h-3 bg-muted animate-pulse rounded w-3/5" />
+                    </div>
+                  </div>
+                ) : (
+                  (() => {
+                    const s = (analysisData?.summaryByAccount ?? {}) as Record<string, TradingSummaryByAccount>
+                    const agg = Object.values(s).reduce(
+                      (a, x) => ({
+                        pnl: a.pnl + (x.pnl_signed ?? 0),
+                        orders: a.orders + (x.total_orders ?? 0),
+                        win: a.win + (x.win_trade_count ?? 0),
+                        loss: a.loss + (x.loss_trade_count ?? 0),
+                        buyWin: a.buyWin + (x.win_buy_count ?? 0),
+                        sellWin: a.sellWin + (x.win_sell_count ?? 0),
+                        buyOrders: a.buyOrders + (x.buy_orders ?? 0),
+                        sellOrders: a.sellOrders + (x.sell_orders ?? 0),
+                      }),
+                      { 
+                        pnl: 0, orders: 0, win: 0, loss: 0,
+                        buyWin: 0, sellWin: 0, buyOrders: 0, sellOrders: 0,
+                      }
+                    )
+                    const winRate = agg.orders > 0 ? (agg.win / agg.orders) * 100 : 0
+                    const buyWinRate = agg.buyOrders > 0 ? (agg.buyWin / agg.buyOrders) * 100 : 0
+                    const sellWinRate = agg.sellOrders > 0 ? (agg.sellWin / agg.sellOrders) * 100 : 0
+                    return (
+                      <div className="space-y-2">
+                        <div className="text-2xl font-bold tabular-nums text-blue-600">
+                          {winRate.toFixed(1)}%
+                        </div>
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div>Buy Win Rate: <span className="text-green-600 font-medium">{buyWinRate.toFixed(1)}%</span></div>
+                          <div>Sell Win Rate: <span className="text-red-600 font-medium">{sellWinRate.toFixed(1)}%</span></div>
+                          <div>Total: <span className="font-medium">{agg.win}/{agg.orders}</span></div>
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Cash Flow Card */}
+            <Card className="relative overflow-hidden md:col-span-2 lg:col-span-1">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs font-medium text-muted-foreground">
+                  CASH FLOW
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {isAnalyzing ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <div className="h-4 bg-muted animate-pulse rounded" />
+                        <div className="h-3 bg-muted animate-pulse rounded w-3/4" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="h-4 bg-muted animate-pulse rounded" />
+                        <div className="h-3 bg-muted animate-pulse rounded w-3/4" />
+                      </div>
+                    </div>
+                    <div className="h-6 bg-muted animate-pulse rounded" />
+                  </div>
+                ) : (
+                  (() => {
+                    const s = (analysisData?.summaryByAccount ?? {}) as Record<string, TradingSummaryByAccount>
+                    const agg = Object.values(s).reduce(
+                      (a, x) => ({
+                        deposits: a.deposits + (x.deposit_amount ?? 0),
+                        depositCount: a.depositCount + (x.deposit_count ?? 0),
+                        withdrawals: a.withdrawals + Math.abs(x.withdrawal_amount ?? 0),
+                        withdrawalCount: a.withdrawalCount + (x.withdrawal_count ?? 0),
+                        cashdiff: a.cashdiff + (x.cash_diff ?? 0),
+                      }),
+                      { 
+                        deposits: 0, depositCount: 0, withdrawals: 0, withdrawalCount: 0, cashdiff: 0
+                      }
+                    )
+                    return (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-1">
+                            <div className="font-medium text-green-600 tabular-nums">
+                              {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.deposits)}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Deposits ({agg.depositCount} transactions)
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="font-medium text-red-600 tabular-nums">
+                              {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.withdrawals)}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Withdrawals ({agg.withdrawalCount} transactions)
+                            </div>
+                          </div>
+                        </div>
+                        <div className="pt-2 border-t">
+                          <div className={`font-bold tabular-nums ${agg.cashdiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.cashdiff)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">Net cash flow</div>
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Top 10 Winners & Losers - 响应式布局 */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* Top 10 Winning Trades */}
+            <Card className="relative">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg font-semibold text-green-600">Top 10 Winning Trades</CardTitle>
+                <CardDescription>最佳盈利交易排行</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-hidden rounded-md border-0">
+                  <div className="max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-background">
+                        <TableRow className="border-b">
+                          <TableHead className="text-xs font-medium">Login</TableHead>
+                          <TableHead className="text-xs font-medium">Ticket</TableHead>
+                          <TableHead className="text-xs font-medium">Symbol</TableHead>
+                          <TableHead className="text-xs font-medium">Side</TableHead>
+                          <TableHead className="text-right text-xs font-medium">Profit</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {isAnalyzing ? (
+                          Array.from({ length: 4 }).map((_, i) => (
+                            <TableRow key={i}>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            </TableRow>
+                          ))
+                        ) : (
+                          ((analysisData?.topWinners ?? []) as TradingTradeDetail[]).slice(0, 10).map((r, index) => (
+                            <TableRow key={`w-${r.login}-${r.ticket}`} className={index < 4 ? "bg-green-50/50" : ""}>
+                              <TableCell className="text-xs font-mono">{r.login}</TableCell>
+                              <TableCell className="text-xs font-mono">{r.ticket}</TableCell>
+                              <TableCell className="text-xs font-semibold">{r.symbol}</TableCell>
+                              <TableCell className={`text-xs font-medium ${r.side === 'buy' ? 'text-green-600' : 'text-red-600'}`}>
+                                {r.side.toUpperCase()}
+                              </TableCell>
+                              <TableCell className="text-right text-xs font-bold text-green-600 tabular-nums">
+                                ${r.profit.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                        {(!isAnalyzing && (!analysisData || (analysisData?.topWinners ?? []).length === 0)) && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                              暂无数据
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Top 10 Losing Trades */}
+            <Card className="relative">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg font-semibold text-red-600">Top 10 Losing Trades</CardTitle>
+                <CardDescription>最大亏损交易排行</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-hidden rounded-md border-0">
+                  <div className="max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-background">
+                        <TableRow className="border-b">
+                          <TableHead className="text-xs font-medium">Login</TableHead>
+                          <TableHead className="text-xs font-medium">Ticket</TableHead>
+                          <TableHead className="text-xs font-medium">Symbol</TableHead>
+                          <TableHead className="text-xs font-medium">Side</TableHead>
+                          <TableHead className="text-right text-xs font-medium">Profit</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {isAnalyzing ? (
+                          Array.from({ length: 4 }).map((_, i) => (
+                            <TableRow key={i}>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                              <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            </TableRow>
+                          ))
+                        ) : (
+                          ((analysisData?.topLosers ?? []) as TradingTradeDetail[]).slice(0, 10).map((r, index) => (
+                            <TableRow key={`l-${r.login}-${r.ticket}`} className={index < 4 ? "bg-red-50/50" : ""}>
+                              <TableCell className="text-xs font-mono">{r.login}</TableCell>
+                              <TableCell className="text-xs font-mono">{r.ticket}</TableCell>
+                              <TableCell className="text-xs font-semibold">{r.symbol}</TableCell>
+                              <TableCell className={`text-xs font-medium ${r.side === 'buy' ? 'text-green-600' : 'text-red-600'}`}>
+                                {r.side.toUpperCase()}
+                              </TableCell>
+                              <TableCell className="text-right text-xs font-bold text-red-600 tabular-nums">
+                                ${r.profit.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                        {(!isAnalyzing && (!analysisData || (analysisData?.topLosers ?? []).length === 0)) && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                              暂无数据
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Transaction History */}
           <Card>
             <CardHeader>
-              <CardTitle>分析概览</CardTitle>
-              <CardDescription>基于选择的账号与时间范围的已平仓统计</CardDescription>
+              <CardTitle className="text-lg font-semibold">Transaction History</CardTitle>
+              <CardDescription>完整的资金流水记录</CardDescription>
             </CardHeader>
             <CardContent>
-              {isAnalyzing ? (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="h-16 bg-muted animate-pulse rounded" />
-                  ))}
+              {/* 筛选控件 */}
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-medium">Transaction Type:</Label>
+                  <Select 
+                    value={transactionTypeFilter} 
+                    onValueChange={setTransactionTypeFilter}
+                  >
+                    <SelectTrigger className="w-32 h-8">
+                      <SelectValue placeholder="All Types" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="deposit">Deposit</SelectItem>
+                      <SelectItem value="withdrawal">Withdrawal</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-              ) : (
-                (() => {
-                  const s = (analysisData?.summaryByAccount ?? {}) as Record<string, TradingSummaryByAccount>
-                  const agg = Object.values(s).reduce(
-                    (a, x) => ({
-                      pnl: a.pnl + (x.pnl_signed ?? 0),
-                      orders: a.orders + (x.total_orders ?? 0),
-                      win: a.win + (x.win_trade_count ?? 0),
-                      loss: a.loss + (x.loss_trade_count ?? 0),
-                      swaps: a.swaps + (x.swaps_sum ?? 0),
-                      cashdiff: a.cashdiff + (x.cash_diff ?? 0),
-                    }),
-                    { pnl: 0, orders: 0, win: 0, loss: 0, swaps: 0, cashdiff: 0 }
-                  )
-                  const winRate = agg.orders > 0 ? (agg.win / agg.orders) * 100 : 0
-                  return (
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
-                      <Card data-slot="card"><CardHeader><CardDescription>净收益 (PnL)</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.pnl)}</CardTitle></CardHeader></Card>
-                      <Card data-slot="card"><CardHeader><CardDescription>订单数</CardDescription><CardTitle className="tabular-nums text-2xl">{agg.orders}</CardTitle></CardHeader></Card>
-                      <Card data-slot="card"><CardHeader><CardDescription>胜率</CardDescription><CardTitle className="tabular-nums text-2xl">{winRate.toFixed(1)}%</CardTitle></CardHeader></Card>
-                      <Card data-slot="card"><CardHeader><CardDescription>隔夜利息 (SWAP)</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.swaps)}</CardTitle></CardHeader></Card>
-                      <Card data-slot="card"><CardHeader><CardDescription>出入金差额</CardDescription><CardTitle className="tabular-nums text-2xl">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(agg.cashdiff)}</CardTitle></CardHeader></Card>
-                    </div>
-                  )
-                })()
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>明细</CardTitle>
-              <CardDescription>交易、资金与 TopN</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <div className="text-sm font-medium">交易明细（已平仓 CMD 0/1）</div>
-                <div className="overflow-hidden rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Login</TableHead>
-                        <TableHead>Ticket</TableHead>
-                        <TableHead>Symbol</TableHead>
-                        <TableHead>Side</TableHead>
-                        <TableHead className="text-right">Lots</TableHead>
-                        <TableHead>Open Time</TableHead>
-                        <TableHead>Close Time</TableHead>
-                        <TableHead className="text-right">Profit</TableHead>
-                        <TableHead className="text-right">Swaps</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {((analysisData?.tradeDetails ?? []) as TradingTradeDetail[]).slice(0, 100).map((r) => (
-                        <TableRow key={`${r.login}-${r.ticket}`}>
-                          <TableCell>{r.login}</TableCell>
-                          <TableCell>{r.ticket}</TableCell>
-                          <TableCell>{r.symbol}</TableCell>
-                          <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
-                          <TableCell className="text-right tabular-nums">{r.lots.toFixed(2)}</TableCell>
-                          <TableCell className="tabular-nums">{r.open_time}</TableCell>
-                          <TableCell className="tabular-nums">{r.close_time}</TableCell>
-                          <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{r.swaps.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                      {(!analysisData || (analysisData?.tradeDetails ?? []).length === 0) && (
-                        <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground">No trades</TableCell></TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-medium">Sort by Amount:</Label>
+                  <Select 
+                    value={amountSort} 
+                    onValueChange={setAmountSort}
+                  >
+                    <SelectTrigger className="w-32 h-8">
+                      <SelectValue placeholder="Desc" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="desc">High to Low</SelectItem>
+                      <SelectItem value="asc">Low to High</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="text-sm font-medium">资金明细（CMD=6）</div>
-                <div className="overflow-hidden rounded-md border">
+              {/* 交易历史表格 */}
+              <div className="overflow-hidden rounded-md border">
+                <div className="max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
                   <Table>
-                    <TableHeader>
+                    <TableHeader className="sticky top-0 bg-background">
                       <TableRow>
-                        <TableHead>Login</TableHead>
-                        <TableHead>Ticket</TableHead>
-                        <TableHead>Close Time</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Comment</TableHead>
+                        <TableHead className="font-semibold">Login</TableHead>
+                        <TableHead className="font-semibold">Ticket</TableHead>
+                        <TableHead className="font-semibold">Date & Time</TableHead>
+                        <TableHead className="text-right font-semibold">
+                          Amount 
+                          <Button variant="ghost" size="sm" className="ml-1 h-auto p-1">
+                            <ArrowUpDown className="h-3 w-3" />
+                          </Button>
+                        </TableHead>
+                        <TableHead className="font-semibold">
+                          Type
+                          <Button variant="ghost" size="sm" className="ml-1 h-auto p-1">
+                            <ChevronDown className="h-3 w-3" />
+                          </Button>
+                        </TableHead>
+                        <TableHead className="font-semibold">Comment</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {((analysisData?.cashDetails ?? []) as TradingCashDetail[]).slice(0, 100).map((r) => (
-                        <TableRow key={`${r.login}-${r.ticket}`}>
-                          <TableCell>{r.login}</TableCell>
-                          <TableCell>{r.ticket}</TableCell>
-                          <TableCell className="tabular-nums">{r.close_time}</TableCell>
-                          <TableCell className="text-right tabular-nums">{(r.cash_type === 'withdrawal' ? -Math.abs(r.amount_signed) : Math.abs(r.amount_signed)).toFixed(2)}</TableCell>
-                          <TableCell className={r.cash_type === 'deposit' ? 'text-green-600' : 'text-red-600'}>{r.cash_type}</TableCell>
-                          <TableCell className="truncate max-w-[320px]">{r.comment ?? '-'}</TableCell>
+                      {isAnalyzing ? (
+                        Array.from({ length: 8 }).map((_, i) => (
+                          <TableRow key={i}>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                            <TableCell><div className="h-4 bg-muted animate-pulse rounded" /></TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        (() => {
+                          // 应用筛选和排序逻辑
+                          let filteredData = (analysisData?.cashDetails ?? []) as TradingCashDetail[]
+                          
+                          // 按交易类型筛选
+                          if (transactionTypeFilter !== "all") {
+                            filteredData = filteredData.filter(r => r.cash_type === transactionTypeFilter)
+                          }
+                          
+                          // 按金额排序
+                          filteredData = filteredData.sort((a, b) => {
+                            const amountA = Math.abs(a.amount_signed)
+                            const amountB = Math.abs(b.amount_signed)
+                            return amountSort === "desc" ? amountB - amountA : amountA - amountB
+                          })
+                          
+                          return filteredData.map((r) => (
+                          <TableRow key={`${r.login}-${r.ticket}`} className="hover:bg-muted/50">
+                            <TableCell className="font-mono text-sm">{r.login}</TableCell>
+                            <TableCell className="font-mono text-sm">{r.ticket}</TableCell>
+                            <TableCell className="tabular-nums text-sm">{r.close_time}</TableCell>
+                            <TableCell className={`text-right font-bold tabular-nums ${
+                              r.cash_type === 'deposit' ? 'text-green-600' : 'text-red-600'
+                            }`}>
+                              {r.cash_type === 'deposit' ? '+' : '-'}
+                              ${Math.abs(r.amount_signed).toFixed(2)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge 
+                                variant={r.cash_type === 'deposit' ? 'default' : 'destructive'}
+                                className="text-xs"
+                              >
+                                {r.cash_type === 'deposit' ? 'DEPOSIT' : 'WITHDRAWAL'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="truncate max-w-[280px] text-sm text-muted-foreground">
+                              {r.comment || '-'}
+                            </TableCell>
+                          </TableRow>
+                          ))
+                        })()
+                      )}
+                      {(!isAnalyzing && (!analysisData || (analysisData?.cashDetails ?? []).length === 0)) && (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                            暂无交易记录
+                          </TableCell>
                         </TableRow>
-                      ))}
-                      {(!analysisData || (analysisData?.cashDetails ?? []).length === 0) && (
-                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No cash rows</TableCell></TableRow>
                       )}
                     </TableBody>
                   </Table>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Top Winners</div>
-                  <div className="overflow-hidden rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Login</TableHead>
-                          <TableHead>Ticket</TableHead>
-                          <TableHead>Symbol</TableHead>
-                          <TableHead>Side</TableHead>
-                          <TableHead className="text-right">Profit</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {((analysisData?.topWinners ?? []) as TradingTradeDetail[]).map((r) => (
-                          <TableRow key={`w-${r.login}-${r.ticket}`}>
-                            <TableCell>{r.login}</TableCell>
-                            <TableCell>{r.ticket}</TableCell>
-                            <TableCell>{r.symbol}</TableCell>
-                            <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
-                            <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
-                          </TableRow>
-                        ))}
-                        {(!analysisData || (analysisData?.topWinners ?? []).length === 0) && (
-                          <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">-</TableCell></TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Top Losers</div>
-                  <div className="overflow-hidden rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Login</TableHead>
-                          <TableHead>Ticket</TableHead>
-                          <TableHead>Symbol</TableHead>
-                          <TableHead>Side</TableHead>
-                          <TableHead className="text-right">Profit</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {((analysisData?.topLosers ?? []) as TradingTradeDetail[]).map((r) => (
-                          <TableRow key={`l-${r.login}-${r.ticket}`}>
-                            <TableCell>{r.login}</TableCell>
-                            <TableCell>{r.ticket}</TableCell>
-                            <TableCell>{r.symbol}</TableCell>
-                            <TableCell className={r.side === 'buy' ? 'text-green-600' : 'text-red-600'}>{r.side}</TableCell>
-                            <TableCell className="text-right tabular-nums">{r.profit.toFixed(2)}</TableCell>
-                          </TableRow>
-                        ))}
-                        {(!analysisData || (analysisData?.topLosers ?? []).length === 0) && (
-                          <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">-</TableCell></TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
                 </div>
               </div>
             </CardContent>
