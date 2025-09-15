@@ -28,11 +28,12 @@ def aggregate_close_time_hourly_to_json(symbol: str = "XAUUSD") -> dict:
         "charset": os.environ.get("DB_CHARSET", "utf8mb4"),
     }
 
-    # SQL: filter by CLOSE_TIME only; keep other conditions unchanged
+    # SQL: filter by CLOSE_TIME and CMD; consistent with aggregation_service
     sql = (
         "SELECT ticket, login, symbol, cmd, volume, OPEN_TIME, OPEN_PRICE, CLOSE_TIME, CLOSE_PRICE, swaps, profit "
         "FROM mt4_live.mt4_trades "
         "WHERE symbol = %s "
+        "  AND cmd IN (0,1) "
         "  AND CLOSE_TIME BETWEEN %s AND %s "
         "  AND login NOT IN ("
         "    SELECT LOGIN FROM mt4_live.mt4_users "
