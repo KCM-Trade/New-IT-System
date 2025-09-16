@@ -78,3 +78,44 @@ const titleMap: Record<string, string> = {
   - 全局样式：`src/index.css`，`App.css` 仅在被导入时生效
   - 组件来源：`src/components/**`；主题相关放在 `theme-provider.tsx` 与 `mode-toggle.tsx`
   - 配置：`tsconfig.*`、`vite.config.ts`、`components.json`、`eslint.config.js` 等用于类型、构建、生成组件和代码质量
+
+### 鉴权临时关闭（方案 A 开关）
+- 目的：在登录页面尚未就绪时，临时放行新用户访问，绕过登录跳转；用于内网调试，便于快速联调。
+
+- 代码改动位置：
+  - `src/providers/auth-provider.tsx`
+    - 初始化登录态时增加环境变量开关：当 `VITE_DISABLE_AUTH === 'true'` 时视为已登录。
+      - 关键逻辑：
+        - `const [isAuthenticated, setIsAuthenticated] = useState(() => import.meta.env.VITE_DISABLE_AUTH === 'true' || !!localStorage.getItem('auth_token'))`
+  - `src/App.tsx`
+    - 路由守卫 `PrivateRoute` 在检查登录前，先判断 `VITE_DISABLE_AUTH === 'true'`，为真则直接放行。
+
+- 如何启用（跳过登录）：
+  1) 在前端根目录新增/修改环境文件（根据环境选择其一或都配置）：
+     - `.env.development`
+     - `.env.production`
+  2) 写入：
+     - `VITE_DISABLE_AUTH=true`
+  3) 重启前端开发/预览/生产服务（Vite 需在启动时加载 env）。
+
+- 如何恢复（重新启用登录）：
+  1) 将环境变量改为：`VITE_DISABLE_AUTH=false`（或删除该行）。
+  2) 重启前端服务使之生效。
+  3) 若浏览器中仍保持已登录状态，可清理本地存储令牌：
+     - 浏览器控制台执行：
+       - `localStorage.removeItem('auth_token'); location.reload();`
+
+- 临时替代（仅个人调试，非推荐对用户）：
+  - 在浏览器控制台执行一次：
+    - `localStorage.setItem('auth_token', 'demo-token'); location.reload();`
+  - 作用：不改代码也能被视为已登录；但不可控，勿对他人使用。
+
+- 注意与最佳实践：
+  - 该开关仅用于内网调试，切勿在公网长期开启。
+  - 建议在 CI/CD 中强制检查生产构建时 `VITE_DISABLE_AUTH` 为 `false`。
+  - 恢复登录后，如果用户仍能直接访问，多半是浏览器还保留了 `auth_token`，清除即可。
+
+- 关联文件：
+  - `src/providers/auth-provider.tsx`
+  - `src/App.tsx`
+  - `.env.development` / `.env.production`

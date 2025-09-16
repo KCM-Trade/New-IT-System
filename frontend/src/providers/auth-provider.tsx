@@ -15,7 +15,10 @@ type AuthProviderProps = {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   // Initialize auth from localStorage to persist across refreshes
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!localStorage.getItem("auth_token"))
+  // 支持通过环境变量跳过登录（仅用于临时联调/演示）
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
+    import.meta.env.VITE_DISABLE_AUTH === 'true' || !!localStorage.getItem("auth_token")
+  )
 
   useEffect(() => {
     // Sync state with storage changes in other tabs (optional)
