@@ -30,6 +30,24 @@ def _fetch_all_dicts(cur) -> List[dict]:
     return list(rows or [])
 
 
+def _safe_parse_int(value):
+    """Safely parse value to int; return None for None, empty string, or invalid numeric.
+
+    fresh grad: backend defensive programming—DB 字段可能是空字符串或 NULL，这里统一做健壮转换。
+    """
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(stripped)
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def _union_update(target: Set[str], items: Iterable[str]) -> None:
     for x in items:
         if x is None:
@@ -102,8 +120,13 @@ def _assemble_items(conn, final_logins: Set[str]) -> List[AudiencePreviewItem]:
         cur.execute(sql_users, logins_list)
         rows = _fetch_all_dicts(cur)
 
-    # Collect client_ids for tags lookup
-    client_ids = sorted({int(r["ID"]) for r in rows if r.get("ID") is not None})
+    # Collect client_ids for tags lookup（健壮解析 ID，忽略空/非数字）
+    raw_ids: List[int] = []
+    for r in rows:
+        cid = _safe_parse_int(r.get("ID"))
+        if cid is not None:
+            raw_ids.append(cid)
+    client_ids = sorted(set(raw_ids))
     tags_by_client: Dict[int, List[str]] = {}
     if client_ids:
         sql_tags = (
@@ -123,7 +146,8 @@ def _assemble_items(conn, final_logins: Set[str]) -> List[AudiencePreviewItem]:
 
     items: List[AudiencePreviewItem] = []
     for r in rows:
-        cid_val = int(r["ID"]) if r.get("ID") is not None else None
+        # 使用安全解析，避免 int("") 报错
+        cid_val = _safe_parse_int(r.get("ID"))
         items.append(
             AudiencePreviewItem(
                 account_id=str(r["login"]),

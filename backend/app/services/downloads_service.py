@@ -28,7 +28,7 @@ def query_downloads(settings: Settings, req: Any) -> dict[str, Any]:
         SELECT
           t.TICKET AS ticket,
           t.login AS account_id,
-          u2.id AS client_id,
+          CAST(NULLIF(u2.id, '') AS SIGNED) AS client_id,
           t.symbol AS symbol,
           t.volume / POW(10, t.DIGITS) AS volume,
           t.OPEN_TIME AS open_time,
@@ -104,7 +104,7 @@ def export_downloads_csv(settings: Settings, req: Any) -> dict[str, Any]:
         SELECT
           t.TICKET AS ticket,
           t.login AS account_id,
-          u2.id AS client_id,
+          CAST(NULLIF(u2.id, '') AS SIGNED) AS client_id,
           t.symbol AS symbol,
           t.volume / POW(10, t.DIGITS) AS volume,
           t.OPEN_TIME AS open_time,
