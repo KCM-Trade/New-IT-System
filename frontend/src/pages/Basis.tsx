@@ -41,7 +41,21 @@ export default function BasisPage() {
       <Card className="rounded-none border-b border-l-0 border-r-0 border-t-0">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-xl font-bold">基差分析</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xl font-bold">基差分析</CardTitle>
+              <span className="text-xs text-muted-foreground">
+                （页面还在调试中，若有功能问题请内网访问：
+                <a
+                  href="http://10.6.20.138:8050"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  http://10.6.20.138:8050
+                </a>
+                ）
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               {hasError && (
                 <div className="flex items-center gap-1 text-destructive text-sm">

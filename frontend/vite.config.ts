@@ -122,6 +122,12 @@ export default defineConfig({
         changeOrigin: true,
         timeout: 30000,
       },
+      // Login IP 服务的静态资源（如 /static/images/Logo-01.svg）转发到 8000
+      "/static": {
+        target: "http://10.6.20.138:8000",
+        changeOrigin: true,
+        timeout: 30000,
+      },
     },
   },
 })

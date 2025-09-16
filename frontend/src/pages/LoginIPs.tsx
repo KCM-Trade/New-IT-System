@@ -43,21 +43,40 @@ export default function LoginIPsPage() {
       return
     }
 
-    const rewriteAnchorsAndForms = () => {
-      // 重写 a[href^="/"]
+    const rewriteAttributes = () => {
+      // 链接类
       doc.querySelectorAll('a[href^="/"]').forEach((el) => {
         const a = el as HTMLAnchorElement
         const href = a.getAttribute('href') || ''
         const newHref = addIpmonitorPrefix(href)
         if (newHref !== href) a.setAttribute('href', newHref)
       })
-
-      // 重写 form[action^="/"]
       doc.querySelectorAll('form[action^="/"]').forEach((el) => {
         const f = el as HTMLFormElement
         const action = f.getAttribute('action') || ''
         const newAction = addIpmonitorPrefix(action)
         if (newAction !== action) f.setAttribute('action', newAction)
+      })
+
+      // 资源类（img/script/link/iframe/source/video/audio）
+      const srcSelectors = [
+        'img[src^="/"]',
+        'script[src^="/"]',
+        'iframe[src^="/"]',
+        'source[src^="/"]',
+        'video[src^="/"]',
+        'audio[src^="/"]'
+      ]
+      doc.querySelectorAll(srcSelectors.join(',')).forEach((el) => {
+        const src = (el as HTMLElement).getAttribute('src') || ''
+        const newSrc = addIpmonitorPrefix(src)
+        if (newSrc !== src) (el as HTMLElement).setAttribute('src', newSrc)
+      })
+      // link 标签的 href（CSS 等）
+      doc.querySelectorAll('link[href^="/"]').forEach((el) => {
+        const href = (el as HTMLElement).getAttribute('href') || ''
+        const newHref = addIpmonitorPrefix(href)
+        if (newHref !== href) (el as HTMLElement).setAttribute('href', newHref)
       })
     }
 
@@ -117,7 +136,7 @@ export default function LoginIPsPage() {
         if (m.type === 'childList') {
           m.addedNodes?.forEach?.((node: any) => {
             if (node?.querySelectorAll) {
-              node.querySelectorAll?.('a[href^="/"], form[action^="/"]').forEach((el: Element) => {
+              node.querySelectorAll?.('a[href^="/"], form[action^="/"], img[src^="/"], script[src^="/"], iframe[src^="/"], source[src^="/"], video[src^="/"], audio[src^="/"], link[href^="/"]').forEach((el: Element) => {
                 if (el.tagName === 'A') {
                   const a = el as HTMLAnchorElement
                   const href = a.getAttribute('href') || ''
@@ -128,6 +147,14 @@ export default function LoginIPsPage() {
                   const action = f.getAttribute('action') || ''
                   const newAction = addIpmonitorPrefix(action)
                   if (newAction !== action) f.setAttribute('action', newAction)
+                } else if ((el as HTMLElement).hasAttribute('src')) {
+                  const src = (el as HTMLElement).getAttribute('src') || ''
+                  const newSrc = addIpmonitorPrefix(src)
+                  if (newSrc !== src) (el as HTMLElement).setAttribute('src', newSrc)
+                } else if (el.tagName === 'LINK') {
+                  const href = (el as HTMLElement).getAttribute('href') || ''
+                  const newHref = addIpmonitorPrefix(href)
+                  if (newHref !== href) (el as HTMLElement).setAttribute('href', newHref)
                 }
               })
             }
@@ -140,20 +167,26 @@ export default function LoginIPsPage() {
           } else if (el.tagName === 'FORM' && m.attributeName === 'action') {
             const action = el.getAttribute('action') || ''
             el.setAttribute('action', addIpmonitorPrefix(action))
+          } else if (m.attributeName === 'src' && (el as HTMLElement).hasAttribute('src')) {
+            const src = (el as HTMLElement).getAttribute('src') || ''
+            el.setAttribute('src', addIpmonitorPrefix(src))
+          } else if (el.tagName === 'LINK' && m.attributeName === 'href') {
+            const href = el.getAttribute('href') || ''
+            el.setAttribute('href', addIpmonitorPrefix(href))
           }
         }
       }
     })
 
     // 初始化一次改写
-    rewriteAnchorsAndForms()
+    rewriteAttributes()
 
     // 事件监听（捕获阶段更稳妥）
     doc.addEventListener('click', clickHandler, true)
     doc.addEventListener('submit', submitHandler, true)
 
     // 启动观察
-    observer.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'action'] })
+    observer.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'action', 'src'] })
 
     // 应用 fetch 补丁
     win.__origFetch = originalFetch
@@ -207,7 +240,21 @@ export default function LoginIPsPage() {
       <Card className="rounded-none border-b border-l-0 border-r-0 border-t-0">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-xl font-bold">Login IP监测</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xl font-bold">Login IP监测</CardTitle>
+              <span className="text-xs text-muted-foreground">
+                （页面还在调试中，若有功能问题请内网访问：
+                <a
+                  href="http://10.6.20.138:8000"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  http://10.6.20.138:8000
+                </a>
+                ）
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               {hasError && (
                 <div className="flex items-center gap-1 text-destructive text-sm">
