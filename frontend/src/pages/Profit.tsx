@@ -579,7 +579,7 @@ export default function ProfitPage() {
       {/* Toolbar */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl font-bold">筛选与视图（XAU-CNH）</CardTitle>
+          <CardTitle className="text-2xl font-bold">筛选与视图（XAUUSD）</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
           {/* 时间范围（单按钮 + Range 日历） */}

@@ -33,11 +33,9 @@ const data = {
     avatar: "/avatars/shadcn.jpg",
   },
   navMain: [
-    { title: "模板", url: "/template", icon: IconDashboard },
     { title: "客户交易分析", url: "/client-trading", icon: IconReport },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
-    { title: "代理统计Global", url: "/warehouse/agent-global", icon: IconReport },
     {
       title: "报仓数据",
       icon: IconChartBar,
@@ -49,6 +47,14 @@ const data = {
     },
     { title: "Login IP监测", url: "/login-ips", icon: IconUsers },
     { title: "利润分析", url: "/profit", icon: IconReport },
+    {
+      title: "其他",
+      icon: IconSettings,
+      children: [
+        { title: "模板", url: "/template" },
+        { title: "代理统计Global", url: "/warehouse/agent-global" },
+      ],
+    },
   ],
   navClouds: [
     {

@@ -40,7 +40,7 @@ function App() {
                 </PrivateRoute>
               }
             >
-              <Route index element={<BasisPage />} />
+              <Route index element={<ClientTradingAnalyticsPage />} />
               <Route path="template" element={<DashboardTemplatePage />} />
               <Route path="gold" element={<GoldQuotePage />} />
               <Route path="basis" element={<BasisPage />} />
@@ -59,6 +59,7 @@ function App() {
               <Route path="cfg">
                 <Route path=":" element={<ConfigPlaceholder />} />
                 <Route path="managers" element={<ConfigPlaceholder />} />
+                <Route path="custom-groups" element={<ConfigPlaceholder />} />
                 <Route path="reports" element={<ConfigPlaceholder />} />
                 <Route path="financial" element={<ConfigPlaceholder />} />
                 <Route path="clients" element={<ConfigPlaceholder />} />
