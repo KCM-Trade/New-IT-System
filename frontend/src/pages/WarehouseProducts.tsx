@@ -299,38 +299,40 @@ export default function WarehouseProductsPage() {
   }
 
   return (
-    <div className="space-y-4 px-4 pb-6 lg:px-6">
+    <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
       {/* Toolbar Card (一致化 Profit 页样式) */}
       <Card>
-        <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+        <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
           {/* 产品选择（Select + 其他时可自定义） */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">产品</span>
-            <Select value={selectedProduct} onValueChange={(v) => setSelectedProduct(v)}>
-              <SelectTrigger className="h-10 w-[180px] rounded-md">
-                <SelectValue placeholder="请选择产品" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="XAU-CNH">XAU-CNH</SelectItem>
-                <SelectItem value="XAUUSD">XAUUSD</SelectItem>
-                <SelectItem value="other">其他</SelectItem>
-              </SelectContent>
-            </Select>
-            {selectedProduct === "other" && (
-              <Input
-                className="h-10 w-[180px]"
-                placeholder="自定义产品"
-                value={customSymbol}
-                onChange={(e) => setCustomSymbol(e.target.value)}
-              />
-            )}
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">产品</span>
+            <div className="flex flex-1 items-center gap-2">
+              <Select value={selectedProduct} onValueChange={(v) => setSelectedProduct(v)}>
+                <SelectTrigger className="h-10 flex-1 rounded-md sm:w-[180px] sm:flex-none">
+                  <SelectValue placeholder="请选择产品" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="XAU-CNH">XAU-CNH</SelectItem>
+                  <SelectItem value="XAUUSD">XAUUSD</SelectItem>
+                  <SelectItem value="other">其他</SelectItem>
+                </SelectContent>
+              </Select>
+              {selectedProduct === "other" && (
+                <Input
+                  className="h-10 flex-1 sm:w-[180px] sm:flex-none"
+                  placeholder="自定义产品"
+                  value={customSymbol}
+                  onChange={(e) => setCustomSymbol(e.target.value)}
+                />
+              )}
+            </div>
           </div>
           {/* 日期选择（shadcn Calendar 单日） */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">日期</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">日期</span>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="h-10 w-[180px] justify-between gap-2 font-normal">
+                <Button variant="outline" className="h-10 justify-start gap-2 font-normal flex-1 sm:w-[180px] sm:flex-none">
                   <CalendarIcon className="h-4 w-4" />
                   <span>{date}</span>
                 </Button>
@@ -352,13 +354,13 @@ export default function WarehouseProductsPage() {
             </Popover>
           </div>
           {/* 刷新 + 进度条 + 错误提示 + 上次刷新时间 */}
-          <div className="flex items-center gap-3 min-w-[360px]">
-            <Button className="h-9 w-[96px] gap-2" onClick={() => onRefresh("refresh")} disabled={loading || (selectedProduct === "other" && !effectiveSymbol)}>
+          <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+            <Button className="h-9 gap-2 flex-grow sm:w-[96px] sm:flex-grow-0" onClick={() => onRefresh("refresh")} disabled={loading || (selectedProduct === "other" && !effectiveSymbol)}>
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               刷新
             </Button>
             {progress > 0 && (
-              <div className="w-[160px]">
+              <div className="w-full sm:w-[160px]">
                 <Progress value={progress} />
               </div>
             )}

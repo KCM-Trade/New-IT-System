@@ -243,7 +243,7 @@ export default function PositionPage() {
   }, [])
 
   return (
-    <div className="relative space-y-4 px-4 pb-6 lg:px-6">
+    <div className="relative space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
       {/* 顶部统计卡片（5个） */}
       <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard title="Volume Buy" value={formatVolume(totals.volume_buy)} positive={totals.volume_buy >= 0} icon={TrendingUp} variant="neutral" />
@@ -257,12 +257,12 @@ export default function PositionPage() {
       <Card>
         <CardContent className="flex flex-col items-center gap-3 py-6">
           {/* Data source capsule toggle + refresh button (same row) */}
-          <div className="flex items-center gap-4">
+          <div className="flex w-full flex-col sm:w-auto sm:flex-row items-center gap-4">
             <ToggleGroup
               type="single"
               value={source}
               onValueChange={(v: string) => v && setSource(v as "mt4_live" | "mt4_live2")}
-              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+              className="inline-flex w-full sm:w-[240px] items-center rounded-full bg-muted p-1"
             >
               <ToggleGroupItem
                 value="mt4_live"
@@ -279,7 +279,7 @@ export default function PositionPage() {
                 mt4_live2
               </ToggleGroupItem>
             </ToggleGroup>
-            <Button className="h-9 w-[120px] gap-2" onClick={onRefresh} disabled={loading}>
+            <Button className="h-9 w-full sm:w-[120px] gap-2" onClick={onRefresh} disabled={loading}>
               {loading && <ArrowUpDown className="h-4 w-4 animate-spin" />}
               刷新
             </Button>

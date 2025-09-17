@@ -17,6 +17,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
       - VITE_API_PROXY_TARGET=http://host.docker.internal:8001
+      - VITE_DISABLE_AUTH=true
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -575,19 +575,19 @@ export default function ProfitPage() {
   }, [range])
 
   return (
-    <div className="space-y-4 px-4 pb-6 lg:px-6">
+    <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
       {/* Toolbar */}
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl font-bold">筛选与视图（XAUUSD）</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
           {/* 时间范围（单按钮 + Range 日历） */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">时间范围：</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">时间范围：</span>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="justify-start gap-2 font-normal">
+                <Button variant="outline" className="justify-start gap-2 font-normal flex-1 sm:flex-none sm:w-auto">
                   <CalendarIcon className="h-4 w-4" />
                   <span>{rangeLabel}</span>
                 </Button>
@@ -597,20 +597,20 @@ export default function ProfitPage() {
                   mode="range"
                   selected={range}
                   onSelect={(v) => setRange(v)}
-                  numberOfMonths={2}
+                  numberOfMonths={isMobile ? 1 : 2}
                   initialFocus
                 />
               </PopoverContent>
             </Popover>
           </div>
           {/* 聚合类型（与聚合维度采用一致风格与宽度） */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">聚合类型：</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">聚合类型：</span>
             <ToggleGroup
               type="single"
               value={aggType}
               onValueChange={(v) => v && setAggType(v as AggTypeKey)}
-              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+              className="inline-flex flex-1 rounded-full bg-muted p-1 sm:w-[240px] sm:flex-none"
             >
               <ToggleGroupItem
                 value="open"
@@ -630,13 +630,13 @@ export default function ProfitPage() {
           </div>
 
           {/* 聚合维度（与聚合类型保持一致宽度与风格） */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">聚合维度：</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">聚合维度：</span>
             <ToggleGroup
               type="single"
               value={agg}
               onValueChange={(v) => v && setAgg(v as AggKey)}
-              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+              className="inline-flex flex-1 rounded-full bg-muted p-1 sm:w-[240px] sm:flex-none"
             >
               <ToggleGroupItem
                 value="timeline"
@@ -656,13 +656,13 @@ export default function ProfitPage() {
           </div>
 
           {/* 时区（胶囊式等宽切换） */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">时区：</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">时区：</span>
             <ToggleGroup
               type="single"
               value={tz}
               onValueChange={(v) => v && setTz(v as TzKey)}
-              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+              className="inline-flex flex-1 rounded-full bg-muted p-1 sm:w-[240px] sm:flex-none"
             >
               <ToggleGroupItem
                 value="+3"
@@ -681,8 +681,8 @@ export default function ProfitPage() {
             </ToggleGroup>
           </div>
           {/* 刷新按钮（紧挨着时区） */}
-          <div className="flex items-center gap-3">
-            <Button onClick={onRefresh} disabled={loading}>
+          <div className="flex w-full items-center gap-3 sm:w-auto">
+            <Button onClick={onRefresh} disabled={loading} className="flex-1 sm:flex-none">
               {loading ? "刷新中…" : "刷新"}
             </Button>
             {lastRefreshed && (
@@ -880,8 +880,8 @@ export default function ProfitPage() {
                     <div className="text-xs text-amber-800">
                       <div className="font-semibold mb-1">📊 数据说明</div>
                       <div className="space-y-1">
-                        <div>• <strong>开仓时间聚合</strong>：可能因SWAPS（隔夜利息）动态调整导致与明细数据略有差异</div>
-                        <div>• <strong>平仓时间聚合</strong>：数据与交易明细一致，建议用于精确分析</div>
+                        <div>• <strong>开仓时间聚合</strong>：可能因SWAPS 动态调整导致与明细数据略有差异</div>
+                        <div>• <strong>平仓时间聚合</strong>：数据与交易明细一致</div>
                         <div>• <strong>利润计算</strong>：包含交易盈亏 + SWAPS，排除测试账户和挂单</div>
                       </div>
                     </div>

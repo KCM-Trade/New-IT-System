@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
+import { type DateRange } from "react-day-picker"
 // removed DateRange (range mode) in favor of dual single calendars
 import {
   ColumnDef,
@@ -68,6 +69,18 @@ import {
 // Static data removed - now using dynamic analysis data from backend
 
 export default function ClientTradingAnalyticsPage() {
+  const [isDesktop, setIsDesktop] = React.useState(
+    typeof window !== 'undefined' ? window.matchMedia("(min-width: 640px)").matches : true
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    const handler = () => setIsDesktop(mediaQuery.matches);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
+
   // --- Static filters state (for demo only) ---
   type Rule =
     | { type: "customer_ids"; ids: number[]; include: boolean }
@@ -81,7 +94,7 @@ export default function ClientTradingAnalyticsPage() {
   // removed ib tree (not used now)
 
   const [rules, setRules] = React.useState<Rule[]>([])
-  // removed: dedicated preview drawer state in compact mode
+  // removed: dedicated preview drawer state in compact Flex Wrap
 
   // ephemeral inputs for adding rules
   const [inputCustomerId, setInputCustomerId] = React.useState("")
@@ -94,8 +107,15 @@ export default function ClientTradingAnalyticsPage() {
 
   // time filters (static, dual single-calendars + quick ranges)
   // fresh grad: keep two single calendars for start and end with dropdown month/year.
-  const [startDate, setStartDate] = React.useState<Date | undefined>(new Date())
-  const [endDate, setEndDate] = React.useState<Date | undefined>(new Date())
+  const [dateRange, setDateRange] = React.useState<DateRange | undefined>({
+    from: (() => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 1);
+      d.setDate(d.getDate() + 1);
+      return d;
+    })(),
+    to: new Date(),
+  })
   const [quickRange, setQuickRange] = React.useState<"last_1w" | "last_1m" | "last_3m" | "all" | "custom">("last_1m")
 
   // fresh grad: when quick range changes, compute start/end based on today
@@ -104,28 +124,24 @@ export default function ClientTradingAnalyticsPage() {
     // zero time for consistency
     const d0 = new Date(today.getFullYear(), today.getMonth(), today.getDate())
     if (qr === "all") {
-      setStartDate(undefined)
-      setEndDate(undefined)
+      setDateRange({ from: undefined, to: undefined })
       setQuickRange(qr)
       return
     }
     if (qr === "last_1w") {
       const s = new Date(d0)
       s.setDate(s.getDate() - 6)
-      setStartDate(s)
-      setEndDate(d0)
+      setDateRange({ from: s, to: d0 })
     } else if (qr === "last_1m") {
       const s = new Date(d0)
       s.setMonth(s.getMonth() - 1)
       s.setDate(s.getDate() + 1) // approx: last 1 month inclusive
-      setStartDate(s)
-      setEndDate(d0)
+      setDateRange({ from: s, to: d0 })
     } else if (qr === "last_3m") {
       const s = new Date(d0)
       s.setMonth(s.getMonth() - 3)
       s.setDate(s.getDate() + 1)
-      setStartDate(s)
-      setEndDate(d0)
+      setDateRange({ from: s, to: d0 })
     } else if (qr === "custom") {
       // keep current start/end, only mark as custom
     }
@@ -142,10 +158,10 @@ export default function ClientTradingAnalyticsPage() {
     if (quickRange === "last_1w") return "最近 1 周"
     if (quickRange === "last_1m") return "最近 1 个月"
     if (quickRange === "last_3m") return "最近 3 个月"
-    if (!startDate || !endDate) return "选择日期范围"
+    if (!dateRange?.from || !dateRange?.to) return "选择日期范围"
     const opts: Intl.DateTimeFormatOptions = { month: "short", day: "2-digit", year: "numeric" }
-    return `${startDate.toLocaleDateString("en-US", opts)} - ${endDate.toLocaleDateString("en-US", opts)}`
-  }, [quickRange, startDate, endDate])
+    return `${dateRange.from.toLocaleDateString("en-US", opts)} - ${dateRange.to.toLocaleDateString("en-US", opts)}`
+  }, [quickRange, dateRange])
 
   // symbols (static multi-select + custom input)
   const [selectedSymbols, setSelectedSymbols] = React.useState<string[]>([])
@@ -519,8 +535,8 @@ export default function ClientTradingAnalyticsPage() {
       // 构建分析请求参数
       const analysisParams = {
         accounts: effectiveAccounts,
-        startDate: quickRange === "all" ? undefined : startDate,
-        endDate: quickRange === "all" ? undefined : endDate,
+        startDate: quickRange === "all" ? undefined : dateRange?.from,
+        endDate: quickRange === "all" ? undefined : dateRange?.to,
         symbols: symbolsMode === "all" ? null : selectedSymbols
       }
       
@@ -542,10 +558,10 @@ export default function ClientTradingAnalyticsPage() {
     } finally {
       setIsAnalyzing(false)
     }
-  }, [effectiveAccounts, quickRange, startDate, endDate, symbolsMode, selectedSymbols])
+  }, [effectiveAccounts, quickRange, dateRange, symbolsMode, selectedSymbols])
 
   return (
-    <div className="space-y-4 px-4 pb-6 lg:px-6">
+    <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
       {/* 筛选卡片（与 Profit 风格一致） */}
       <Card>
         <CardHeader>
@@ -553,14 +569,14 @@ export default function ClientTradingAnalyticsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">选择对象：</span>
+            <div className="flex w-full flex-col items-start gap-4 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">选择对象：</span>
               {/* 对象（Responsive Dialog: desktop=Dialog, mobile=Drawer） */}
               <div className="block sm:hidden">
                 <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
                   <DrawerTrigger asChild>
-                    <Button variant="outline" className="h-9 px-3">选择对象</Button>
+                    <Button variant="outline" className="h-9 px-3 flex-1 sm:flex-none">选择对象</Button>
             </DrawerTrigger>
             <DrawerContent className="max-w-[100vw]">
               <DrawerHeader>
@@ -744,7 +760,7 @@ export default function ClientTradingAnalyticsPage() {
               <div className="hidden sm:block">
                 <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="outline" className="h-9 px-3">选择对象</Button>
+                    <Button variant="outline" className="h-9 px-3 flex-1 sm:flex-none">选择对象</Button>
                   </DialogTrigger>
             <DialogContent className="w-[90vw] sm:max-w-[1100px] max-h-[90vh] flex flex-col">
               <DialogHeader className="flex-shrink-0">
@@ -938,56 +954,32 @@ export default function ClientTradingAnalyticsPage() {
               </div>
 
             {/* 时间（按钮显示范围 + 双日历弹层 + 快捷范围选择） */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">时间范围：</span>
+            <div className="flex w-full flex-nowrap items-center gap-2 sm:w-auto sm:flex-wrap">
+              <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">时间范围：</span>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="h-9 px-3 justify-start gap-2 font-normal min-w-[140px]">
+                  <Button variant="outline" className="h-9 px-3 justify-start gap-2 font-normal min-w-0 flex-1 sm:flex-none sm:min-w-[140px]">
                     <span>{rangeLabel}</span>
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-2" align="start">
                   {/* fresh grad: two single calendars for start and end */}
-                  <div className="flex items-start gap-3">
-                    <div>
-                      <div className="mb-1 text-xs text-muted-foreground">开始日期</div>
-                      <Calendar
-                        mode="single"
-                        selected={startDate}
-                        onSelect={(d) => {
-                          if (!d) return
-                          // auto-fix end if start > end
-                          if (endDate && d > endDate) setEndDate(d)
-                          setStartDate(d)
-                          setQuickRange("custom")
-                        }}
-                        className="rounded-md border shadow-sm"
-                        captionLayout="dropdown"
-                        initialFocus
-                      />
-                    </div>
-                    <div>
-                      <div className="mb-1 text-xs text-muted-foreground">结束日期</div>
-                      <Calendar
-                        mode="single"
-                        selected={endDate}
-                        onSelect={(d) => {
-                          if (!d) return
-                          // auto-fix start if end < start
-                          if (startDate && d < startDate) setStartDate(d)
-                          setEndDate(d)
-                          setQuickRange("custom")
-                        }}
-                        className="rounded-md border shadow-sm"
-                        captionLayout="dropdown"
-                      />
-                    </div>
-                  </div>
+                  <Calendar
+                    mode="range"
+                    selected={dateRange}
+                    onSelect={(r) => {
+                      setDateRange(r)
+                      setQuickRange("custom")
+                    }}
+                    numberOfMonths={isDesktop ? 2 : 1}
+                    className="rounded-md border shadow-sm"
+                    initialFocus
+                  />
                 </PopoverContent>
               </Popover>
               {/* 快捷范围：替代时区选择 */}
               <Select value={quickRange} onValueChange={(v) => applyQuickRange(v as typeof quickRange)}>
-                <SelectTrigger className="h-9 w-36"><SelectValue placeholder="快捷范围" /></SelectTrigger>
+                <SelectTrigger className="h-9 min-w-0 flex-1 sm:w-36 sm:flex-none"><SelectValue placeholder="快捷范围" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="last_1w">最近 1 周</SelectItem>
                   <SelectItem value="last_1m">最近 1 个月</SelectItem>
@@ -999,10 +991,10 @@ export default function ClientTradingAnalyticsPage() {
             </div>
 
             {/* 交易品种 */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">交易品种：</span>
+            <div className="flex w-full flex-nowrap items-center gap-2 sm:w-auto sm:flex-wrap">
+              <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">交易品种：</span>
               <Select value={symbolsMode} onValueChange={(v) => setSymbolsMode(v as typeof symbolsMode)}>
-                <SelectTrigger className="h-9 w-36"><SelectValue placeholder="选择方式" /></SelectTrigger>
+                <SelectTrigger className="h-9 min-w-0 flex-1 sm:w-36 sm:flex-none"><SelectValue placeholder="选择方式" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全选（默认）</SelectItem>
                   <SelectItem value="custom">其他（自定义）</SelectItem>
@@ -1011,7 +1003,7 @@ export default function ClientTradingAnalyticsPage() {
               {symbolsMode === "custom" && (
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="outline" className="h-9 px-3">选择品种</Button>
+                    <Button variant="outline" className="h-9 px-3 min-w-0 flex-1 sm:flex-none">选择品种</Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-56 p-2">
                     <div className="grid gap-2">
@@ -1075,11 +1067,11 @@ export default function ClientTradingAnalyticsPage() {
           </div>
 
           {/* 移动端开始分析按钮 - 独立一行，居中对齐 */}
-          <div className="flex justify-center sm:hidden">
+          <div className="sm:hidden">
             <Button 
               onClick={handleAnalyzeData}
               disabled={isAnalyzing || effectiveAccounts.length === 0}
-              className="h-9 gap-2"
+              className="h-9 gap-2 w-full"
             >
               {isAnalyzing ? (
                 <>

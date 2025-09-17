@@ -51,6 +51,17 @@ type DownloadRow = {
 }
 
 export default function DownloadsPage() {
+  const [isDesktop, setIsDesktop] = React.useState(
+    typeof window !== 'undefined' ? window.matchMedia("(min-width: 640px)").matches : true
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    const handler = () => setIsDesktop(mediaQuery.matches);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
   // controlled filters
   const [symbol, setSymbol] = React.useState<string>("XAU-CNH")
   const [customSymbol, setCustomSymbol] = React.useState<string>("")
@@ -245,7 +256,7 @@ export default function DownloadsPage() {
                 mode="range"
                 selected={selected}
                 onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
-                numberOfMonths={2}
+                numberOfMonths={isDesktop ? 2 : 1}
                 initialFocus
               />
             </PopoverContent>
@@ -274,7 +285,7 @@ export default function DownloadsPage() {
                 mode="range"
                 selected={selected}
                 onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
-                numberOfMonths={2}
+                numberOfMonths={isDesktop ? 2 : 1}
                 initialFocus
               />
             </PopoverContent>
@@ -303,7 +314,7 @@ export default function DownloadsPage() {
                 mode="range"
                 selected={selected}
                 onSelect={(v) => column.setFilterValue(v ? { from: v.from?.toISOString?.(), to: v.to?.toISOString?.() } : undefined)}
-                numberOfMonths={2}
+                numberOfMonths={isDesktop ? 2 : 1}
                 initialFocus
               />
             </PopoverContent>
@@ -481,44 +492,46 @@ export default function DownloadsPage() {
   // removed legacy local sorting/filtering/pagination (now TanStack controlled)
 
   return (
-    <div className="space-y-4 px-4 pb-6 lg:px-6">
+    <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
       {/* Toolbar */}
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl font-bold">筛选与下载</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
           {/* 产品选择 + 其他 */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">产品</span>
-            <Select value={symbol} onValueChange={(v) => setSymbol(v)}>
-              <SelectTrigger className="h-10 w-[180px] rounded-md">
-                <SelectValue placeholder="请选择产品" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="XAU-CNH">XAU-CNH</SelectItem>
-                <SelectItem value="XAUUSD">XAUUSD</SelectItem>
-                <SelectItem value="other">其他</SelectItem>
-              </SelectContent>
-            </Select>
-            {symbol === "other" && (
-              <Input
-                className="h-10 w-[180px]"
-                placeholder="自定义产品"
-                value={customSymbol}
-                onChange={(e) => setCustomSymbol(e.target.value)}
-              />
-            )}
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">产品</span>
+            <div className="flex flex-1 items-center gap-2">
+              <Select value={symbol} onValueChange={(v) => setSymbol(v)}>
+                <SelectTrigger className="h-10 flex-1 rounded-md sm:w-[180px] sm:flex-none">
+                  <SelectValue placeholder="请选择产品" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="XAU-CNH">XAU-CNH</SelectItem>
+                  <SelectItem value="XAUUSD">XAUUSD</SelectItem>
+                  <SelectItem value="other">其他</SelectItem>
+                </SelectContent>
+              </Select>
+              {symbol === "other" && (
+                <Input
+                  className="h-10 flex-1 sm:w-[180px] sm:flex-none"
+                  placeholder="自定义产品"
+                  value={customSymbol}
+                  onChange={(e) => setCustomSymbol(e.target.value)}
+                />
+              )}
+            </div>
           </div>
 
           {/* 交易服务器（胶囊式切换） */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">交易服务器</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">交易服务器</span>
             <ToggleGroup
               type="single"
               value={server}
               onValueChange={(v) => v && setServer(v as "mt4_live" | "mt4_live2")}
-              className="inline-flex w-[240px] items-center rounded-full bg-muted p-1"
+              className="inline-flex flex-1 rounded-full bg-muted p-1 sm:w-[240px] sm:flex-none"
             >
               <ToggleGroupItem value="mt4_live" className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow">MT4 Live 1</ToggleGroupItem>
               <ToggleGroupItem value="mt4_live2" className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow">MT4 Live 2</ToggleGroupItem>
@@ -526,11 +539,11 @@ export default function DownloadsPage() {
           </div>
 
           {/* 日期范围（Range 日历） */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">时间范围</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">时间范围</span>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="justify-start gap-2 font-normal">
+                <Button variant="outline" className="h-10 justify-start gap-2 font-normal flex-1 sm:flex-none">
                   <CalendarIcon className="h-4 w-4" />
                   <span>{rangeLabel}</span>
                 </Button>
@@ -540,7 +553,7 @@ export default function DownloadsPage() {
                   mode="range"
                   selected={range}
                   onSelect={(v) => setRange(v)}
-                  numberOfMonths={2}
+                  numberOfMonths={isDesktop ? 2 : 1}
                   initialFocus
                 />
               </PopoverContent>
@@ -548,12 +561,12 @@ export default function DownloadsPage() {
           </div>
 
           {/* 操作按钮 */}
-          <div className="flex items-center gap-3">
-            <Button className="h-9 w-[96px] gap-2" onClick={() => onQuery()} disabled={loading}>
+          <div className="flex w-full items-center gap-3 sm:w-auto">
+            <Button className="h-9 gap-2 flex-1 sm:w-[96px] sm:flex-none" onClick={() => onQuery()} disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               查询
             </Button>
-            <Button className="h-9 w-[120px] gap-2" variant="secondary" onClick={onExport} disabled={loading}>
+            <Button className="h-9 gap-2 flex-1 sm:w-[120px] sm:flex-none" variant="secondary" onClick={onExport} disabled={loading}>
               <Download className="h-4 w-4" /> 导出CSV
             </Button>
           </div>
