@@ -821,14 +821,14 @@ export default function ProfitPage() {
                       <Table>
                         <TableHeader className="xl:sticky xl:top-0 bg-background">
                           <TableRow>
-                            <TableHead className="text-xs font-medium">Login</TableHead>
-                            <TableHead className="text-xs font-medium">Ticket</TableHead>
-                            <TableHead className="text-xs font-medium">Symbol</TableHead>
-                            <TableHead className="text-xs font-medium">Side</TableHead>
-                            <TableHead className="text-xs font-medium">Lots</TableHead>
-                            <TableHead className="text-xs font-medium">Open Time</TableHead>
-                            <TableHead className="text-xs font-medium">Close Time</TableHead>
-                            <TableHead className="text-right text-xs font-medium">
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Login</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Ticket</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Symbol</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Side</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Lots</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Open Time</TableHead>
+                            <TableHead className="text-xs font-medium px-2 py-1 sm:p-4">Close Time</TableHead>
+                            <TableHead className="text-right text-xs font-medium px-2 py-1 sm:p-4">
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -849,16 +849,16 @@ export default function ProfitPage() {
                           {sortedTrades.length > 0 ? (
                             sortedTrades.map((trade, index) => (
                               <TableRow key={`${trade.login}-${trade.ticket}`} className={index < 3 ? "bg-accent/50" : ""}>
-                                <TableCell className="text-xs font-mono">{trade.login}</TableCell>
-                                <TableCell className="text-xs font-mono">{trade.ticket}</TableCell>
-                                <TableCell className="text-xs font-semibold">{trade.symbol}</TableCell>
-                                <TableCell className={`text-xs font-medium ${trade.side === 'buy' ? 'text-green-600' : 'text-red-600'}`}>
+                                <TableCell className="text-xs font-mono px-2 py-1 sm:p-4">{trade.login}</TableCell>
+                                <TableCell className="text-xs font-mono px-2 py-1 sm:p-4">{trade.ticket}</TableCell>
+                                <TableCell className="text-xs font-semibold px-2 py-1 sm:p-4">{trade.symbol}</TableCell>
+                                <TableCell className={`text-xs font-medium px-2 py-1 sm:p-4 ${trade.side === 'buy' ? 'text-green-600' : 'text-red-600'}`}>
                                   {trade.side.toUpperCase()}
                                 </TableCell>
-                                <TableCell className="text-xs tabular-nums">{trade.lots.toFixed(2)}</TableCell>
-                                <TableCell className="text-xs tabular-nums">{trade.open_time}</TableCell>
-                                <TableCell className="text-xs tabular-nums">{trade.close_time}</TableCell>
-                                <TableCell className={`text-right text-xs font-bold tabular-nums ${trade.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                <TableCell className="text-xs tabular-nums px-2 py-1 sm:p-4">{trade.lots.toFixed(2)}</TableCell>
+                                <TableCell className="text-xs tabular-nums px-2 py-1 sm:p-4">{trade.open_time}</TableCell>
+                                <TableCell className="text-xs tabular-nums px-2 py-1 sm:p-4">{trade.close_time}</TableCell>
+                                <TableCell className={`text-right text-xs font-bold tabular-nums px-2 py-1 sm:p-4 ${trade.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                   ${trade.profit.toFixed(2)}
                                 </TableCell>
                               </TableRow>

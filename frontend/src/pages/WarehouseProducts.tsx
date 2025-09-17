@@ -380,16 +380,16 @@ export default function WarehouseProductsPage() {
               <Table className="min-w-[780px]">
           <TableHeader>
             <TableRow>
-              <TableHead rowSpan={2} className="w-[200px] align-middle border-r font-semibold text-base">报仓</TableHead>
-              <TableHead rowSpan={2} className="w-[140px] align-middle border-r font-semibold text-base">Type</TableHead>
-              <TableHead colSpan={2} className="text-center font-semibold text-base bg-blue-50 dark:bg-blue-900/20 rounded-sm">即日</TableHead>
-              <TableHead colSpan={2} className="text-center font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20 rounded-sm">过夜</TableHead>
+              <TableHead rowSpan={2} className="w-[200px] align-middle border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4">报仓</TableHead>
+              <TableHead rowSpan={2} className="w-[140px] align-middle border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4">Type</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-blue-50 dark:bg-blue-900/20 rounded-sm">即日</TableHead>
+              <TableHead colSpan={2} className="text-center font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-sm">过夜</TableHead>
             </TableRow>
             <TableRow>
-              <TableHead className="text-right border-r font-semibold text-base bg-blue-50 dark:bg-blue-900/20">Volume</TableHead>
-              <TableHead className="text-right border-r font-semibold text-base bg-blue-50 dark:bg-blue-900/20">Profit</TableHead>
-              <TableHead className="text-right border-r font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20">Volume</TableHead>
-              <TableHead className="text-right font-semibold text-base bg-yellow-50 dark:bg-yellow-900/20">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-blue-50 dark:bg-blue-900/20">Volume</TableHead>
+              <TableHead className="text-right border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-blue-50 dark:bg-blue-900/20">Profit</TableHead>
+              <TableHead className="text-right border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20">Volume</TableHead>
+              <TableHead className="text-right font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20">Profit</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -404,13 +404,13 @@ export default function WarehouseProductsPage() {
                     return (
                       <TableRow key={t} className={`${t === "Total" ? "bg-blue-50 dark:bg-blue-900/30" : ""}`}>
                         {tIdx === 0 && (
-                          <TableCell rowSpan={3} className="align-top font-medium border-r border-2 dark:border-white/20">{groupLabel}</TableCell>
+                          <TableCell rowSpan={3} className="align-top font-medium border-r border-2 dark:border-white/20 px-2 py-1 sm:p-4 text-xs sm:text-sm">{groupLabel}</TableCell>
                         )}
-                        <TableCell className={`border-r ${t === "Total" ? "font-semibold" : ""}`}>{t}</TableCell>
-                        <TableCell className={`text-right tabular-nums border-r ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayVol)}</TableCell>
-                        <TableCell className={`text-right tabular-nums border-r ${profitClass(d.dayPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayPft)}</TableCell>
-                        <TableCell className={`text-right tabular-nums border-r ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overVol)}</TableCell>
-                        <TableCell className={`text-right tabular-nums ${profitClass(d.overPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overPft)}</TableCell>
+                        <TableCell className={`border-r px-2 py-1 sm:p-4 text-xs sm:text-sm ${t === "Total" ? "font-semibold" : ""}`}>{t}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r px-2 py-1 sm:p-4 text-xs sm:text-sm ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r px-2 py-1 sm:p-4 text-xs sm:text-sm ${profitClass(d.dayPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.dayPft)}</TableCell>
+                        <TableCell className={`text-right tabular-nums border-r px-2 py-1 sm:p-4 text-xs sm:text-sm ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overVol)}</TableCell>
+                        <TableCell className={`text-right tabular-nums px-2 py-1 sm:p-4 text-xs sm:text-sm ${profitClass(d.overPft)} ${t === "Total" ? "font-semibold" : ""}`}>{format2(d.overPft)}</TableCell>
                       </TableRow>
                     )
                   })}

@@ -308,7 +308,7 @@ export default function PositionPage() {
                         <TableHead
                           key={header.id}
                           colSpan={header.colSpan}
-                          className={`align-middle border-b-2 ${header.colSpan > 1 ? "text-center" : ""} ${
+                          className={`align-middle border-b-2 px-2 py-1 sm:p-4 text-xs sm:text-sm ${header.colSpan > 1 ? "text-center" : ""} ${
                             header.colSpan > 1 && typeof header.column.columnDef.header === "string" && header.column.columnDef.header === "Volume"
                               ? "bg-sky-50 dark:bg-sky-950/20"
                               : ""
@@ -334,7 +334,7 @@ export default function PositionPage() {
                                   : typeof header.column.columnDef.header === "string"
                                   ? ""
                                   : "justify-end"
-                              } ${typeof header.column.columnDef.header === "string" ? "font-semibold text-base" : ""}`}
+                              } ${typeof header.column.columnDef.header === "string" ? "font-semibold text-xs sm:text-sm" : ""}`}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                             </div>
@@ -349,7 +349,7 @@ export default function PositionPage() {
                     table.getRowModel().rows.map((row) => (
                       <TableRow key={row.id} className="odd:bg-muted/30 dark:odd:bg-muted/10">
                         {row.getVisibleCells().map((cell) => (
-                          <TableCell key={cell.id} className="align-middle">
+                          <TableCell key={cell.id} className="align-middle px-2 py-1 sm:p-4 text-xs sm:text-sm">
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </TableCell>
                         ))}

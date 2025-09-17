@@ -660,7 +660,7 @@ export default function DownloadsPage() {
                             setColumnOrder(next)
                             dragCol.current = null
                           }}
-                          className="align-middle border-r font-semibold text-base"
+                          className="align-middle border-r font-semibold text-xs sm:text-sm px-2 py-1 sm:p-4"
                         >
                           {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                         </TableHead>
@@ -677,7 +677,7 @@ export default function DownloadsPage() {
                     table.getRowModel().rows.map((row) => (
                       <TableRow key={row.id}>
                         {row.getVisibleCells().map((cell) => (
-                          <TableCell key={cell.id} className="border-r tabular-nums">
+                          <TableCell key={cell.id} className="border-r tabular-nums text-xs sm:text-sm px-2 py-1 sm:p-4">
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </TableCell>
                         ))}
