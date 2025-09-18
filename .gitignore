@@ -11,8 +11,8 @@ node_modules
 .env.test
 .env.production
 __pycache__
-venv
-.venv
+*venv
+*.venv
 *.json
 *.svg
 *.txt
