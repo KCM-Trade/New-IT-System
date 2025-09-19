@@ -4,6 +4,22 @@ import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Settings2, Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react"
+import {
+  ColumnDef,
+  ColumnFiltersState,
+  SortingState,
+  VisibilityState,
+  ColumnOrderState,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getSortedRowModel,
+  useReactTable,
+  ColumnResizeMode,
+} from "@tanstack/react-table"
 
 // backend API response schema aligned with reporting pnl_summary
 interface PnlSummaryRow {
@@ -56,16 +72,289 @@ export default function CustomerPnLMonitor() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
 
-  // sorting state
-  type SortKey =
-    | "user_name"
-    | "balance"
-    | "total_closed_pnl"
-    | "floating_pnl"
-    | "total_closed_volume"
-    | "total_closed_trades"
-  const [sortKey, setSortKey] = useState<SortKey | null>(null)
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+  // TanStack Table 状态管理
+  const [sorting, setSorting] = useState<SortingState>([])
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [globalFilter, setGlobalFilter] = useState("")
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
+    login: true,
+    user_name: true,
+    balance: true,
+    total_closed_pnl: true,
+    floating_pnl: true,
+    total_closed_volume: true,
+    total_closed_trades: true,
+    last_updated: true,
+  })
+  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([
+    "login", "user_name", "balance", "total_closed_pnl", 
+    "floating_pnl", "total_closed_volume", "total_closed_trades", "last_updated"
+  ])
+
+  // TanStack Table 列定义 - 响应式比例宽度设置
+  // 📍 宽度设置说明：
+  // - 桌面端：所有列的 size 值总和约为 1000，每列按比例分配表格宽度，占满整个容器
+  // - 移动端：表格设置了最小宽度 880px，确保内容不会溢出到相邻列，提供水平滚动
+  // - 最小宽度分配：客户ID(80px) + 客户名称(120px) + 余额(100px) + 平仓总盈亏(120px) + 持仓浮动盈亏(120px) + 总成交量(90px) + 平仓交易笔数(100px) + 更新时间(150px) = 880px
+  // - 用户仍可拖拽调整列宽，在设定的最小宽度和最大宽度(500px)之间调整
+  const columns = useMemo<ColumnDef<PnlSummaryRow>[]>(() => [
+    {
+      id: "login",
+      accessorKey: "login",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            客户ID <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 100,        // 📍 初始宽度 (比例: 约10%)
+      minSize: 80,      // 📍 最小宽度 (确保客户ID完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => <span className="font-medium">{row.getValue("login")}</span>,
+    },
+    {
+      id: "user_name", 
+      accessorKey: "user_name",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            客户名称 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 200,        // 📍 初始宽度 (比例: 约20%)
+      minSize: 150,     // 📍 最小宽度 (确保客户名称基本显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => (
+        <span className="max-w-[180px] truncate">
+          {row.getValue("user_name") || `客户-${row.getValue("login")}`}
+        </span>
+      ),
+    },
+    {
+      id: "balance",
+      accessorKey: "balance", 
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            余额 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 120,        // 📍 初始宽度 (比例: 约12%)
+      minSize: 100,     // 📍 最小宽度 (确保货币格式完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => {
+        const value = toNumber(row.getValue("balance"))
+        return (
+          <span 
+            className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+          >
+            {formatCurrency(value)}
+          </span>
+        )
+      },
+    },
+    {
+      id: "total_closed_pnl",
+      accessorKey: "total_closed_pnl",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            平仓总盈亏 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 150,        // 📍 初始宽度 (比例: 约15%)
+      minSize: 120,     // 📍 最小宽度 (确保盈亏金额完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => {
+        const value = toNumber(row.getValue("total_closed_pnl"))
+        return (
+          <span 
+            className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+          >
+            {formatCurrency(value)}
+          </span>
+        )
+      },
+    },
+    {
+      id: "floating_pnl",
+      accessorKey: "floating_pnl",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            持仓浮动盈亏 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 150,        // 📍 初始宽度 (比例: 约15%)
+      minSize: 120,     // 📍 最小宽度 (确保浮动盈亏金额完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => {
+        const value = toNumber(row.getValue("floating_pnl"))
+        return (
+          <span 
+            className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+          >
+            {formatCurrency(value)}
+          </span>
+        )
+      },
+    },
+    {
+      id: "total_closed_volume",
+      accessorKey: "total_closed_volume",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            总成交量 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 100,        // 📍 初始宽度 (比例: 约10%)
+      minSize: 90,      // 📍 最小宽度 (确保成交量数字完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => (
+        <span className="text-right tabular-nums">
+          {toNumber(row.getValue("total_closed_volume")).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "total_closed_trades",
+      accessorKey: "total_closed_trades",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            平仓交易笔数 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 120,        // 📍 初始宽度 (比例: 约12%)
+      minSize: 100,     // 📍 最小宽度 (确保交易笔数完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => (
+        <span className="text-right tabular-nums">
+          {toNumber(row.getValue("total_closed_trades")).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "last_updated",
+      accessorKey: "last_updated",
+      header: "更新时间",
+      size: 80,         // 📍 初始宽度 (比例: 约8%)
+      minSize: 200,     // 📍 最小宽度 (确保完整时间格式显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      enableColumnFilter: false,
+      cell: ({ row }) => (
+        <span className="whitespace-nowrap text-muted-foreground">
+          {row.getValue("last_updated") ? new Date(row.getValue("last_updated") as string).toLocaleString() : ""}
+        </span>
+      ),
+    },
+  ], [])
+
+  // TanStack Table 实例
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: {
+      sorting,
+      columnFilters,
+      globalFilter,
+      columnVisibility,
+      columnOrder,
+    },
+    onSortingChange: setSorting,
+    onColumnFiltersChange: setColumnFilters,
+    onGlobalFilterChange: setGlobalFilter,
+    onColumnVisibilityChange: setColumnVisibility,
+    onColumnOrderChange: setColumnOrder,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableColumnResizing: true,
+    columnResizeMode: "onChange" as ColumnResizeMode,
+  })
+
+  // 持久化表格状态
+  useEffect(() => {
+    try {
+      const tableState = {
+        columnVisibility,
+        columnOrder,
+        sorting,
+      }
+      localStorage.setItem("pnl_table_state", JSON.stringify(tableState))
+    } catch {}
+  }, [columnVisibility, columnOrder, sorting])
+
+  // 恢复表格状态
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("pnl_table_state")
+      if (saved) {
+        const state = JSON.parse(saved)
+        if (state.columnVisibility) setColumnVisibility(state.columnVisibility)
+        if (state.columnOrder) setColumnOrder(state.columnOrder)
+        if (state.sorting) setSorting(state.sorting)
+      }
+    } catch {}
+  }, [])
 
   // GET 拉取后端数据（不触发同步）
   const fetchData = useCallback(async () => {
@@ -158,37 +447,6 @@ export default function CustomerPnLMonitor() {
     return () => clearInterval(t)
   }, [server, symbol, fetchData])
 
-  // apply client-side sorting
-  const sortedRows = useMemo(() => {
-    if (!sortKey) return rows
-    const mul = sortDir === "asc" ? 1 : -1
-    const dup = [...rows]
-    dup.sort((a, b) => {
-      const va = a[sortKey] as unknown
-      const vb = b[sortKey] as unknown
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * mul
-      const na = toNumber(va)
-      const nb = toNumber(vb)
-      if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * mul
-      return String(va ?? "").localeCompare(String(vb ?? "")) * mul
-    })
-    return dup
-  }, [rows, sortKey, sortDir])
-
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
-    } else {
-      setSortKey(key)
-      setSortDir("desc")
-    }
-  }
-
-  const sortIcon = (key: SortKey) => {
-    if (sortKey !== key) return "↕"
-    return sortDir === "asc" ? "↑" : "↓"
-  }
-
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
       {/* filter & actions card: responsive layout per guide */}
@@ -273,70 +531,160 @@ export default function CustomerPnLMonitor() {
         </div>
       )}
 
-      {/* fresh grad note: full-height scroll area with single scroll container for table */}
+      {/* 表格控制卡片 - 全局搜索、列选择、分页设置 */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            {/* 左侧：全局搜索 */}
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <Input
+                placeholder="全局搜索..."
+                value={globalFilter ?? ""}
+                onChange={(e) => setGlobalFilter(e.target.value)}
+                className="h-9 flex-1"
+              />
+              {globalFilter && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setGlobalFilter("")}
+                  className="h-9 px-2 text-muted-foreground hover:text-foreground"
+                >
+                  清除
+                </Button>
+              )}
+            </div>
+            
+            {/* 右侧：控制按钮组 */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* 列显示选择 */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="h-9 gap-2 whitespace-nowrap">
+                    <Settings2 className="h-4 w-4" />
+                    列设置
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>显示列</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {table.getAllLeafColumns()
+                    .filter((column) => column.getCanHide())
+                    .map((column) => {
+                      const columnLabels: Record<string, string> = {
+                        login: "客户ID",
+                        user_name: "客户名称", 
+                        balance: "余额",
+                        total_closed_pnl: "平仓总盈亏",
+                        floating_pnl: "持仓浮动盈亏",
+                        total_closed_volume: "总成交量",
+                        total_closed_trades: "平仓交易笔数",
+                        last_updated: "更新时间",
+                      }
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={column.id}
+                          checked={column.getIsVisible()}
+                          onCheckedChange={(value) => column.toggleVisibility(!!value)}
+                        >
+                          {columnLabels[column.id] || column.id}
+                        </DropdownMenuCheckboxItem>
+                      )
+                    })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          {/* 状态信息 */}
+          <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-muted-foreground">
+            <span>共 {table.getFilteredRowModel().rows.length} 条记录</span>
+            {globalFilter && (
+              <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/20 rounded text-blue-700 dark:text-blue-300">
+                搜索: "{globalFilter}"
+              </span>
+            )}
+            {sorting.length > 0 && (
+              <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
+                排序: {sorting.map(s => `${s.id} ${s.desc ? '↓' : '↑'}`).join(', ')}
+              </span>
+            )}
+            {Object.values(columnVisibility).filter(v => !v).length > 0 && (
+              <span className="px-2 py-1 bg-orange-100 dark:bg-orange-900/20 rounded text-orange-700 dark:text-orange-300">
+                隐藏了 {Object.values(columnVisibility).filter(v => !v).length} 列
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* TanStack Table with column resizing */}
       <div className="border rounded-md overflow-hidden flex-1">
         <div className="overflow-auto h-full">
-          <Table className="min-w-[960px]">
+          <Table
+            style={{
+              width: "100%",
+              minWidth: "880px", // 所有列最小宽度总和，确保移动端内容不溢出
+              tableLayout: "fixed", // 使用固定表格布局以支持比例分配
+            }}
+          >
             <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="whitespace-nowrap">客户ID</TableHead>
-                <TableHead className="whitespace-nowrap">客户名称
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("user_name")}>{sortIcon("user_name")}</Button>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      key={header.id}
+                      className="whitespace-nowrap border-r"
+                      style={{
+                        width: `${(header.getSize() / 1000) * 100}%`, // 转换为百分比宽度
+                        position: "relative",
+                      }}
+                    >
+                      {header.isPlaceholder ? null : (
+                        <div>
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </div>
+                      )}
+                      {/* Column Resizer - 列宽调整手柄 */}
+                      {header.column.getCanResize() && (
+                        <div
+                          className="absolute right-0 top-0 h-full w-1 bg-border hover:bg-blue-500 cursor-col-resize select-none touch-none"
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          style={{
+                            transform: header.column.getIsResizing() ? 'scaleX(2)' : 'scaleX(1)',
+                            transition: 'transform 0.1s ease-in-out',
+                          }}
+                          title="拖拽调整列宽"
+                        />
+                      )}
                 </TableHead>
-                <TableHead className="whitespace-nowrap text-right">余额
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("balance")}>{sortIcon("balance")}</Button>
-                </TableHead>
-                <TableHead className="whitespace-nowrap text-right">平仓总盈亏
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("total_closed_pnl")}>{sortIcon("total_closed_pnl")}</Button>
-                </TableHead>
-                <TableHead className="whitespace-nowrap text-right">持仓浮动盈亏
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("floating_pnl")}>{sortIcon("floating_pnl")}</Button>
-                </TableHead>
-                <TableHead className="whitespace-nowrap text-right">总成交量
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("total_closed_volume")}>{sortIcon("total_closed_volume")}</Button>
-                </TableHead>
-                <TableHead className="whitespace-nowrap text-right">平仓交易笔数
-                  <Button variant="ghost" size="sm" className="h-6 px-1 ml-1"
-                          aria-label="排序" title="排序"
-                          onClick={() => handleSort("total_closed_trades")}>{sortIcon("total_closed_trades")}</Button>
-                </TableHead>
-                <TableHead className="whitespace-nowrap">更新时间</TableHead>
+                  ))}
               </TableRow>
+              ))}
             </TableHeader>
             <TableBody>
-              {sortedRows.length === 0 ? (
+              {table.getRowModel().rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={table.getAllLeafColumns().length} className="text-center text-sm text-muted-foreground py-8">
                     {error ? `加载失败：${error}` : "暂无数据"}
                   </TableCell>
                 </TableRow>
               ) : (
-                sortedRows.map((r) => (
-                  <TableRow key={`${r.login}-${r.symbol}`}>
-                    <TableCell>{r.login}</TableCell>
-                    <TableCell className="max-w-[220px] truncate">{r.user_name || `客户-${r.login}`}</TableCell>
-                    <TableCell className={`${toNumber(r.balance) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"} text-right`}>
-                      {formatCurrency(toNumber(r.balance))}
+                table.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell
+                        key={cell.id}
+                        className="border-r"
+                        style={{
+                          width: `${(cell.column.getSize() / 1000) * 100}%`, // 转换为百分比宽度
+                        }}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
-                    <TableCell className={`${toNumber(r.total_closed_pnl) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"} text-right`}>
-                      {formatCurrency(toNumber(r.total_closed_pnl))}
-                    </TableCell>
-                    <TableCell className={`${toNumber(r.floating_pnl) < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"} text-right`}>
-                      {formatCurrency(toNumber(r.floating_pnl))}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{toNumber(r.total_closed_volume).toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums">{toNumber(r.total_closed_trades).toLocaleString()}</TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">{r.last_updated ? new Date(r.last_updated).toLocaleString() : ""}</TableCell>
+                    ))}
                   </TableRow>
                 ))
               )}
