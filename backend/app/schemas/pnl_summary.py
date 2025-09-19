@@ -16,6 +16,14 @@ class RefreshResponse(BaseModel):
     message: str
     server: str
     symbol: str
+    # ETL执行结果详情
+    processed_rows: int = 0
+    duration_seconds: float = 0.0
+    new_max_deal_id: int = 0
+    error_details: Optional[str] = None
+    # 新增：区分新交易和浮动盈亏更新
+    new_trades_count: int = 0
+    floating_only_count: int = 0
 
 
 class PnlSummaryItem(BaseModel):

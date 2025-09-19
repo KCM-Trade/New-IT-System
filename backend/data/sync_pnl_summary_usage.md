@@ -1,5 +1,30 @@
 # ETL 脚本 `sync_pnl_summary.py` 使用指南
 
+
+
+
+    CREATE TABLE public.pnl_summary (
+        login BIGINT NOT NULL,
+        symbol VARCHAR(32) NOT NULL,
+        user_group VARCHAR(64),
+        user_name VARCHAR(128),
+        country VARCHAR(64),
+        balance NUMERIC(16, 2),
+        total_closed_trades INT DEFAULT 0,
+        buy_trades_count INT DEFAULT 0,
+        sell_trades_count INT DEFAULT 0,
+        total_closed_volume NUMERIC(18, 4) DEFAULT 0.0000,
+        buy_closed_volume NUMERIC(18, 4) DEFAULT 0.0000,
+        sell_closed_volume NUMERIC(18, 4) DEFAULT 0.0000,
+        total_closed_pnl NUMERIC(16, 2) DEFAULT 0.00,
+        floating_pnl NUMERIC(16, 2) DEFAULT 0.00,
+        last_updated TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (login, symbol)
+    );
+    CREATE INDEX idx_pnl_summary_symbol ON public.pnl_summary (symbol);
+
+
+
 本文档提供 `sync_pnl_summary.py` 脚本的详细使用说明，该脚本用于将 MT5 的交易数据从源 MySQL 数据库同步到 PostgreSQL 报表数据库。
 
 ## 1. 功能概述

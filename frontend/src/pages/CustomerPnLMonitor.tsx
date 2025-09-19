@@ -53,6 +53,7 @@ export default function CustomerPnLMonitor() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
 
   // sorting state
@@ -80,25 +81,44 @@ export default function CustomerPnLMonitor() {
     setIsRefreshing(true)
     try {
       setError(null)
-      // 1) 触发后端增量同步（设置超时，避免长时间卡住）
-      try {
-        await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ server, symbol }),
-        }, 10000)
-      } catch (e) {
-        // 同步触发失败也尝试拉取一次现有数据
-        setError(e instanceof Error ? e.message : "触发刷新失败")
+      setSuccessMessage(null)
+      
+      // 1) 执行ETL同步（现在是同步等待完成）
+      const refreshResponse = await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ server, symbol }),
+      }, 30000) // 增加超时时间到30秒，因为现在是同步等待ETL完成
+      
+      const refreshResult = await refreshResponse.json()
+      
+      // 显示ETL执行结果信息
+      if (refreshResult.status === "success") {
+        const details = []
+        if (refreshResult.processed_rows > 0) {
+          details.push(`处理了 ${refreshResult.processed_rows} 行数据`)
+        } else {
+          details.push("无新数据需要处理")
+        }
+        if (refreshResult.duration_seconds > 0) {
+          details.push(`耗时 ${refreshResult.duration_seconds.toFixed(1)} 秒`)
+        }
+        const successMsg = `${refreshResult.message}${details.length > 0 ? ` (${details.join(', ')})` : ''}`
+        setSuccessMessage(successMsg)
+        // 成功消息10秒后自动清除
+        setTimeout(() => setSuccessMessage(null), 10000)
+      } else {
+        setError(`${refreshResult.message}${refreshResult.error_details ? `: ${refreshResult.error_details}` : ''}`)
       }
-      // 可选：等待短暂时间，让 ETL 子进程启动
-      await new Promise((r) => setTimeout(r, 500))
-      // 2) 拉取最新数据
+      
+      // 2) 拉取最新数据（ETL已完成，无需等待）
       const data = await fetchData()
       setRows(data)
       setLastUpdated(new Date())
+      
     } catch (e) {
       setError(e instanceof Error ? e.message : "刷新失败")
+      setSuccessMessage(null)
     } finally {
       setIsRefreshing(false)
     }
@@ -110,12 +130,14 @@ export default function CustomerPnLMonitor() {
     ;(async () => {
       try {
         setError(null)
+        setSuccessMessage(null) // 清除之前的成功消息
         const data = await fetchData()
         setRows(data)
         setLastUpdated(new Date())
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
+        setSuccessMessage(null)
       }
     })()
     const t = setInterval(() => {
@@ -124,9 +146,12 @@ export default function CustomerPnLMonitor() {
           const data = await fetchData()
           setRows(data)
           setLastUpdated(new Date())
+          // 自动刷新成功时清除之前的错误消息（但不显示成功消息，避免干扰）
+          if (error) setError(null)
         } catch (e) {
           // 自动刷新失败仅记录错误，不打断页面
           setError(e instanceof Error ? e.message : "自动刷新失败")
+          setSuccessMessage(null)
         }
       })()
     }, AUTO_REFRESH_MS)
@@ -198,6 +223,7 @@ export default function CustomerPnLMonitor() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="XAUUSD.kcmc">XAUUSD.kcmc</SelectItem>
+                    <SelectItem value="XAUUSD.kcm">XAUUSD.kcm</SelectItem>
                     <SelectItem value="others" disabled>其他（开发中）</SelectItem>
                   </SelectContent>
                 </Select>
@@ -210,11 +236,8 @@ export default function CustomerPnLMonitor() {
                 默认每10分钟自动刷新{lastUpdated ? `，上次：${lastUpdated.toLocaleString()}` : ""}
               </div>
               <Button onClick={refreshNow} disabled={isRefreshing} className="h-9 w-full sm:w-auto">
-                {isRefreshing ? "刷新中..." : "立即刷新"}
+                {isRefreshing ? "同步数据中..." : "立即刷新"}
               </Button>
-              {error ? (
-                <div className="text-xs text-red-600">{error}</div>
-              ) : null}
             </div>
           </div>
 
@@ -224,6 +247,31 @@ export default function CustomerPnLMonitor() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 刷新结果消息显示区域 */}
+      {(successMessage || error) && (
+        <div className="px-1 sm:px-0">
+          {successMessage ? (
+            <div className="flex items-center gap-2 px-4 py-3 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded-lg">
+              <div className="flex-shrink-0">
+                <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <p className="text-sm text-green-800 dark:text-green-200">{successMessage}</p>
+            </div>
+          ) : error ? (
+            <div className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <div className="flex-shrink-0">
+                <svg className="w-4 h-4 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {/* fresh grad note: full-height scroll area with single scroll container for table */}
       <div className="border rounded-md overflow-hidden flex-1">

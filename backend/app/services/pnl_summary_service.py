@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
-import sys
-import subprocess
 from typing import List, Tuple
 
 import psycopg2
 
 from ..core.config import get_settings
+from .etl_service import run_pnl_etl_sync, EtlResult
 
 
 def get_pnl_summary_from_db(symbol: str) -> Tuple[List[dict], int]:
@@ -35,35 +33,29 @@ def get_pnl_summary_from_db(symbol: str) -> Tuple[List[dict], int]:
             return [dict(r) for r in rows], len(rows)
 
 
-def trigger_pnl_summary_sync(server: str, symbol: str) -> str:
-    """异步触发后端 ETL 同步。
+def trigger_pnl_summary_sync(server: str, symbol: str) -> EtlResult:
+    """同步执行ETL任务并返回详细结果。
 
     - 只允许 MT5，其他 server 直接跳过。
-    - 使用 subprocess.Popen 异步执行，不阻塞当前请求。
+    - 现在改为同步执行，等待ETL完成后返回详细结果。
     """
     if server != "MT5":
-        return "Server not supported; skip trigger"
+        # 为不支持的服务器返回空结果
+        from datetime import datetime
+        now = datetime.now()
+        return EtlResult(
+            success=False,
+            processed_rows=0,
+            new_max_deal_id=0,
+            start_time=now,
+            end_time=now,
+            error_message="Server not supported; only MT5 is currently supported",
+            new_trades_count=0,
+            floating_only_count=0
+        )
 
-    settings = get_settings()
-
-    # 找到仓库根，拼出脚本路径
-    repo_root = settings.repo_root
-    script_path = repo_root / "backend" / "data" / "sync_pnl_summary.py"
-
-    # 构建命令：使用当前进程解释器，确保在容器或 .venv 内运行
-    cmd = [
-        sys.executable or "python",
-        str(script_path),
-        symbol,
-        "--mode",
-        "incremental",
-    ]
-
-    # 传递当前环境变量，确保 .env 或 Settings 生效
-    env = os.environ.copy()
-
-    # 启动子进程（不等待）
-    subprocess.Popen(cmd, cwd=str(repo_root), env=env)
-    return "Triggered"
+    # 调用新的ETL服务进行同步处理
+    result = run_pnl_etl_sync(symbol=symbol, mode="incremental")
+    return result
 
 

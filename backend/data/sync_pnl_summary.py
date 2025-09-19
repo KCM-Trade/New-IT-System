@@ -110,6 +110,7 @@ class PnlEtlProcessor:
                 cursor.execute("DELETE FROM pnl_summary WHERE symbol = %s", (symbol,))
             
             # 使用 ON CONFLICT DO UPDATE 实现高效的 "upsert"
+            # 只有在数据实际发生变化时才更新 last_updated，体现真实的数据活跃时间
             insert_sql = """
             INSERT INTO pnl_summary (
                 login, symbol, user_group, user_name, country, balance,
@@ -129,7 +130,21 @@ class PnlEtlProcessor:
                 buy_closed_volume = pnl_summary.buy_closed_volume + EXCLUDED.buy_closed_volume,
                 sell_closed_volume = pnl_summary.sell_closed_volume + EXCLUDED.sell_closed_volume,
                 total_closed_pnl = pnl_summary.total_closed_pnl + EXCLUDED.total_closed_pnl,
-                floating_pnl = EXCLUDED.floating_pnl; -- 浮动盈亏总是覆盖
+                floating_pnl = EXCLUDED.floating_pnl,
+                -- 只要有任何数值变化（新交易、浮动盈亏变化），就更新为当前时间
+                last_updated = CASE 
+                    WHEN pnl_summary.total_closed_trades <> (pnl_summary.total_closed_trades + EXCLUDED.total_closed_trades)
+                      OR pnl_summary.buy_trades_count <> (pnl_summary.buy_trades_count + EXCLUDED.buy_trades_count)
+                      OR pnl_summary.sell_trades_count <> (pnl_summary.sell_trades_count + EXCLUDED.sell_trades_count)
+                      OR pnl_summary.total_closed_volume <> (pnl_summary.total_closed_volume + EXCLUDED.total_closed_volume)
+                      OR pnl_summary.buy_closed_volume <> (pnl_summary.buy_closed_volume + EXCLUDED.buy_closed_volume)
+                      OR pnl_summary.sell_closed_volume <> (pnl_summary.sell_closed_volume + EXCLUDED.sell_closed_volume)
+                      OR pnl_summary.total_closed_pnl <> (pnl_summary.total_closed_pnl + EXCLUDED.total_closed_pnl)
+                      OR pnl_summary.floating_pnl <> EXCLUDED.floating_pnl
+                      OR pnl_summary.balance <> EXCLUDED.balance
+                    THEN NOW()
+                    ELSE pnl_summary.last_updated
+                END;
             """
             
             # 移除 max_deal_id，因为它不在 pnl_summary 表中
