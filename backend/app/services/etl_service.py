@@ -46,13 +46,62 @@ class EtlResult:
         return (self.end_time - self.start_time).total_seconds()
 
 
-# 为不同品种配置 Volume 换算除数，非常重要！
-VOLUME_DIVISORS = {
-    'XAUUSD.kcmc': 10000.0,
-    'XAUUSD.kcm': 10000.0,
-    # 以后可以添加更多, e.g., 'EURUSD': 100.0
-    '__default__': 100.0  # 提供一个默认值
+# 产品配置：包含所有产品相关的元信息
+PRODUCT_CONFIGS = {
+    'XAUUSD.kcmc': {
+        'account_type': 'cent',           # 美分账户
+        'volume_divisor': 10000.0,        # 手数换算
+        'display_divisor': 100.0,         # 💰 金额显示换算（美分账户需要/100）
+        'currency': 'USD',
+        'description': '黄金美分账户'
+    },
+    'XAUUSD.kcm': {
+        'account_type': 'standard',       # 标准账户  
+        'volume_divisor': 10000.0,
+        'display_divisor': 1.0,           # 💰 标准账户不需要换算
+        'currency': 'USD',
+        'description': '黄金标准账户'
+    },
+    'XAUUSD': {
+        'account_type': 'standard',
+        'volume_divisor': 100.0,
+        'display_divisor': 1.0,
+        'currency': 'USD', 
+        'description': '黄金标准'
+    },
+    'XAUUSD.cent': {
+        'account_type': 'cent',
+        'volume_divisor': 10000.0,
+        'display_divisor': 100.0,         # 💰 美分账户需要/100
+        'currency': 'USD',
+        'description': '黄金美分'
+    },
+    # 未来扩展示例
+    # 'EURUSD': {
+    #     'account_type': 'standard',
+    #     'volume_divisor': 100.0,
+    #     'display_divisor': 1.0,
+    #     'currency': 'USD',
+    #     'description': '欧美标准'
+    # }
 }
+
+def get_product_config(symbol: str) -> dict:
+    """获取产品配置，如果不存在则返回默认配置"""
+    return PRODUCT_CONFIGS.get(symbol, {
+        'account_type': 'standard',
+        'volume_divisor': 100.0,
+        'display_divisor': 1.0,
+        'currency': 'USD',
+        'description': '标准产品'
+    })
+
+# 兼容性：保持原有的VOLUME_DIVISORS，从新配置中提取
+VOLUME_DIVISORS = {
+    symbol: config['volume_divisor'] 
+    for symbol, config in PRODUCT_CONFIGS.items()
+}
+VOLUME_DIVISORS['__default__'] = 100.0  # 提供一个默认值
 
 
 class PnlEtlService:

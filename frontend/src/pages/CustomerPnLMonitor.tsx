@@ -21,6 +21,15 @@ import {
   ColumnResizeMode,
 } from "@tanstack/react-table"
 
+// 产品配置接口
+interface ProductConfig {
+  account_type: 'standard' | 'cent'
+  volume_divisor: number
+  display_divisor: number
+  currency: string
+  description: string
+}
+
 // backend API response schema aligned with reporting pnl_summary
 interface PnlSummaryRow {
   login: number | string
@@ -40,10 +49,17 @@ interface PnlSummaryRow {
   last_updated?: string | null
 }
 
-function formatCurrency(value: number) {
-  const sign = value >= 0 ? "" : "-"
-  const abs = Math.abs(value)
-  return `${sign}$${abs.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+function formatCurrency(value: number, productConfig?: ProductConfig) {
+  // 根据产品配置调整显示值（美分账户需要/100）
+  const displayDivisor = productConfig?.display_divisor || 1.0
+  const adjustedValue = value / displayDivisor
+  
+  const sign = adjustedValue >= 0 ? "" : "-"
+  const abs = Math.abs(adjustedValue)
+  const currency = productConfig?.currency || 'USD'
+  const symbol = currency === 'USD' ? '$' : currency
+  
+  return `${sign}${symbol}${abs.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
 function toNumber(v: unknown, fallback = 0): number {
@@ -70,6 +86,7 @@ export default function CustomerPnLMonitor() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null)
   const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
 
   // TanStack Table 状态管理
@@ -172,7 +189,7 @@ export default function CustomerPnLMonitor() {
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
           >
-            {formatCurrency(value)}
+            {formatCurrency(value, productConfig || undefined)}
           </span>
         )
       },
@@ -203,7 +220,7 @@ export default function CustomerPnLMonitor() {
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
           >
-            {formatCurrency(value)}
+            {formatCurrency(value, productConfig || undefined)}
           </span>
         )
       },
@@ -234,7 +251,7 @@ export default function CustomerPnLMonitor() {
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
           >
-            {formatCurrency(value)}
+            {formatCurrency(value, productConfig || undefined)}
           </span>
         )
       },
@@ -306,7 +323,7 @@ export default function CustomerPnLMonitor() {
         </span>
       ),
     },
-  ], [])
+  ], [productConfig])
 
   // TanStack Table 实例
   const table = useReactTable({
@@ -361,8 +378,20 @@ export default function CustomerPnLMonitor() {
     const url = `/api/v1/pnl/summary?server=${encodeURIComponent(server)}&symbol=${encodeURIComponent(symbol)}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const payload = (await res.json()) as { ok?: boolean; data?: PnlSummaryRow[]; rows?: number; error?: string }
+    const payload = (await res.json()) as { 
+      ok?: boolean; 
+      data?: PnlSummaryRow[]; 
+      rows?: number; 
+      error?: string;
+      product_config?: ProductConfig;
+    }
     if (!payload?.ok) throw new Error(payload?.error || "加载失败")
+    
+    // 设置产品配置
+    if (payload.product_config) {
+      setProductConfig(payload.product_config)
+    }
+    
     return Array.isArray(payload.data) ? payload.data : []
   }, [server, symbol])
 
@@ -480,8 +509,10 @@ export default function CustomerPnLMonitor() {
                     <SelectValue placeholder="选择品种" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="XAUUSD.kcmc">XAUUSD.kcmc</SelectItem>
-                    <SelectItem value="XAUUSD.kcm">XAUUSD.kcm</SelectItem>
+                    <SelectItem value="XAUUSD.kcmc">XAUUSD.kcmc </SelectItem>
+                    <SelectItem value="XAUUSD.kcm">XAUUSD.kcm </SelectItem>
+                    <SelectItem value="XAUUSD">XAUUSD </SelectItem>
+                    <SelectItem value="XAUUSD.cent">XAUUSD.cent</SelectItem>
                     <SelectItem value="others" disabled>其他（开发中）</SelectItem>
                   </SelectContent>
                 </Select>

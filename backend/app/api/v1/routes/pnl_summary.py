@@ -11,6 +11,7 @@ from app.services.pnl_summary_service import (
     get_pnl_summary_from_db,
     trigger_pnl_summary_sync,
 )
+from app.services.etl_service import get_product_config
 
 
 router = APIRouter(prefix="/pnl", tags=["pnl-summary"])
@@ -58,7 +59,9 @@ def get_summary(server: str = Query(...), symbol: str = Query(...)) -> PnlSummar
         return PnlSummaryResponse(ok=True, data=[], rows=0)
     try:
         rows, count = get_pnl_summary_from_db(symbol=symbol)
-        return PnlSummaryResponse(ok=True, data=rows, rows=count)
+        # 获取产品配置信息，用于前端格式化显示
+        product_config = get_product_config(symbol)
+        return PnlSummaryResponse(ok=True, data=rows, rows=count, product_config=product_config)
     except Exception as e:
         return PnlSummaryResponse(ok=False, data=[], rows=0, error=str(e))
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
 
@@ -49,5 +49,7 @@ class PnlSummaryResponse(BaseModel):
     data: List[PnlSummaryItem] = []
     rows: int = 0
     error: Optional[str] = None
+    # 新增：产品配置信息，用于前端格式化显示
+    product_config: Optional[Dict[str, Any]] = None
 
 
