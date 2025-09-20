@@ -13,10 +13,12 @@ import {
   SortingState,
   VisibilityState,
   ColumnOrderState,
+  PaginationState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
+  getPaginationRowModel,
   useReactTable,
   ColumnResizeMode,
 } from "@tanstack/react-table"
@@ -47,6 +49,18 @@ interface PnlSummaryRow {
   total_closed_pnl: number | string
   floating_pnl: number | string
   last_updated?: string | null
+}
+
+// 分页查询响应接口
+interface PaginatedPnlSummaryResponse {
+  ok: boolean
+  data: PnlSummaryRow[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  error?: string
+  product_config?: ProductConfig
 }
 
 function formatCurrency(value: number, productConfig?: ProductConfig) {
@@ -89,6 +103,14 @@ export default function CustomerPnLMonitor() {
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null)
   const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
 
+  // 分页状态管理
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 100,
+  })
+  const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+
   // TanStack Table 状态管理
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
@@ -96,6 +118,7 @@ export default function CustomerPnLMonitor() {
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
     login: true,
     user_name: true,
+    symbol: true,
     balance: true,
     total_closed_pnl: true,
     floating_pnl: true,
@@ -104,15 +127,15 @@ export default function CustomerPnLMonitor() {
     last_updated: true,
   })
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([
-    "login", "user_name", "balance", "total_closed_pnl", 
+    "login", "user_name", "symbol", "balance", "total_closed_pnl", 
     "floating_pnl", "total_closed_volume", "total_closed_trades", "last_updated"
   ])
 
   // TanStack Table 列定义 - 响应式比例宽度设置
   // 📍 宽度设置说明：
   // - 桌面端：所有列的 size 值总和约为 1000，每列按比例分配表格宽度，占满整个容器
-  // - 移动端：表格设置了最小宽度 880px，确保内容不会溢出到相邻列，提供水平滚动
-  // - 最小宽度分配：客户ID(80px) + 客户名称(120px) + 余额(100px) + 平仓总盈亏(120px) + 持仓浮动盈亏(120px) + 总成交量(90px) + 平仓交易笔数(100px) + 更新时间(150px) = 880px
+  // - 移动端：表格设置了最小宽度 980px，确保内容不会溢出到相邻列，提供水平滚动
+  // - 最小宽度分配：客户ID(80px) + 客户名称(150px) + 交易产品(100px) + 余额(100px) + 平仓总盈亏(120px) + 持仓浮动盈亏(120px) + 总成交量(90px) + 平仓交易笔数(100px) + 更新时间(120px) = 980px
   // - 用户仍可拖拽调整列宽，在设定的最小宽度和最大宽度(500px)之间调整
   const columns = useMemo<ColumnDef<PnlSummaryRow>[]>(() => [
     {
@@ -160,6 +183,32 @@ export default function CustomerPnLMonitor() {
       cell: ({ row }) => (
         <span className="max-w-[180px] truncate">
           {row.getValue("user_name") || `客户-${row.getValue("login")}`}
+        </span>
+      ),
+    },
+    {
+      id: "symbol",
+      accessorKey: "symbol",
+      header: ({ column }) => {
+        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
+                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
+        return (
+          <Button 
+            variant="ghost" 
+            className="h-8 px-2 gap-1"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            交易产品 <Icon className="h-3 w-3" />
+          </Button>
+        )
+      },
+      size: 120,        // 📍 初始宽度 (比例: 约12%)
+      minSize: 100,     // 📍 最小宽度 (确保产品名称完整显示)
+      maxSize: 500,     // 📍 最大宽度
+      enableSorting: true,
+      cell: ({ row }) => (
+        <span className="font-mono text-sm">
+          {row.getValue("symbol")}
         </span>
       ),
     },
@@ -335,15 +384,21 @@ export default function CustomerPnLMonitor() {
       globalFilter,
       columnVisibility,
       columnOrder,
+      pagination,
     },
+    pageCount: totalPages,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnOrderChange: setColumnOrder,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true, // 手动分页模式，由后端处理
+    manualSorting: true,    // 手动排序模式，由后端处理
     enableColumnResizing: true,
     columnResizeMode: "onChange" as ColumnResizeMode,
   })
@@ -373,18 +428,35 @@ export default function CustomerPnLMonitor() {
     } catch {}
   }, [])
 
-  // GET 拉取后端数据（不触发同步）
-  const fetchData = useCallback(async () => {
-    const url = `/api/v1/pnl/summary?server=${encodeURIComponent(server)}&symbol=${encodeURIComponent(symbol)}`
+  // GET 拉取后端数据（分页查询）
+  const fetchData = useCallback(async (
+    page?: number, 
+    pageSize?: number, 
+    sortBy?: string, 
+    sortOrder?: string
+  ) => {
+    const currentPage = page ?? pagination.pageIndex + 1
+    const currentPageSize = pageSize ?? pagination.pageSize
+    const currentSortBy = sortBy ?? (sorting.length > 0 ? sorting[0].id : undefined)
+    const currentSortOrder = sortOrder ?? (sorting.length > 0 ? (sorting[0].desc ? 'desc' : 'asc') : 'asc')
+    
+    const params = new URLSearchParams({
+      server: server,
+      symbol: symbol,
+      page: currentPage.toString(),
+      page_size: currentPageSize.toString(),
+    })
+    
+    if (currentSortBy) {
+      params.set('sort_by', currentSortBy)
+      params.set('sort_order', currentSortOrder)
+    }
+    
+    
+    const url = `/api/v1/pnl/summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const payload = (await res.json()) as { 
-      ok?: boolean; 
-      data?: PnlSummaryRow[]; 
-      rows?: number; 
-      error?: string;
-      product_config?: ProductConfig;
-    }
+    const payload = (await res.json()) as PaginatedPnlSummaryResponse
     if (!payload?.ok) throw new Error(payload?.error || "加载失败")
     
     // 设置产品配置
@@ -392,8 +464,12 @@ export default function CustomerPnLMonitor() {
       setProductConfig(payload.product_config)
     }
     
+    // 设置分页信息
+    setTotalCount(payload.total)
+    setTotalPages(payload.total_pages)
+    
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbol])
+  }, [server, symbol, pagination.pageIndex, pagination.pageSize, sorting])
 
   const refreshNow = useCallback(async () => {
     setIsRefreshing(true)
@@ -442,13 +518,11 @@ export default function CustomerPnLMonitor() {
     }
   }, [fetchData, server, symbol])
 
-  // auto-refresh every 10 minutes; re-run when server/symbol changes
+  // 监听分页和排序变化，自动重新获取数据
   useEffect(() => {
-    // 首次与筛选项变更：只 GET 拉取，不触发同步
     ;(async () => {
       try {
         setError(null)
-        setSuccessMessage(null) // 清除之前的成功消息
         const data = await fetchData()
         setRows(data)
         setLastUpdated(new Date())
@@ -458,6 +532,10 @@ export default function CustomerPnLMonitor() {
         setSuccessMessage(null)
       }
     })()
+  }, [pagination.pageIndex, pagination.pageSize, sorting, server, symbol])
+
+  // auto-refresh every 10 minutes; re-run when server/symbol changes
+  useEffect(() => {
     const t = setInterval(() => {
       ;(async () => {
         try {
@@ -474,7 +552,7 @@ export default function CustomerPnLMonitor() {
       })()
     }, AUTO_REFRESH_MS)
     return () => clearInterval(t)
-  }, [server, symbol, fetchData])
+  }, [fetchData])
 
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -509,6 +587,7 @@ export default function CustomerPnLMonitor() {
                     <SelectValue placeholder="选择品种" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__ALL__">全部产品</SelectItem>
                     <SelectItem value="XAUUSD.kcmc">XAUUSD.kcmc </SelectItem>
                     <SelectItem value="XAUUSD.kcm">XAUUSD.kcm </SelectItem>
                     <SelectItem value="XAUUSD">XAUUSD </SelectItem>
@@ -517,6 +596,7 @@ export default function CustomerPnLMonitor() {
                   </SelectContent>
                 </Select>
               </div>
+
             </div>
 
             {/* actions */}
@@ -605,7 +685,8 @@ export default function CustomerPnLMonitor() {
                     .map((column) => {
                       const columnLabels: Record<string, string> = {
                         login: "客户ID",
-                        user_name: "客户名称", 
+                        user_name: "客户名称",
+                        symbol: "交易产品",
                         balance: "余额",
                         total_closed_pnl: "平仓总盈亏",
                         floating_pnl: "持仓浮动盈亏",
@@ -630,7 +711,8 @@ export default function CustomerPnLMonitor() {
 
           {/* 状态信息 */}
           <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-muted-foreground">
-            <span>共 {table.getFilteredRowModel().rows.length} 条记录</span>
+            <span>共 {totalCount} 条记录</span>
+            <span>当前页 {pagination.pageIndex + 1}/{totalPages}</span>
             {globalFilter && (
               <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/20 rounded text-blue-700 dark:text-blue-300">
                 搜索: "{globalFilter}"
@@ -656,7 +738,7 @@ export default function CustomerPnLMonitor() {
           <Table
             style={{
               width: "100%",
-              minWidth: "880px", // 所有列最小宽度总和，确保移动端内容不溢出
+              minWidth: "980px", // 所有列最小宽度总和，确保移动端内容不溢出
               tableLayout: "fixed", // 使用固定表格布局以支持比例分配
             }}
           >
@@ -723,6 +805,89 @@ export default function CustomerPnLMonitor() {
           </Table>
         </div>
       </div>
+
+      {/* 分页控件 */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex items-center justify-between">
+            {/* 左侧：显示信息和每页条数选择 */}
+            <div className="flex items-center space-x-4">
+              <div className="text-sm text-muted-foreground">
+                显示 {pagination.pageIndex * pagination.pageSize + 1} 到{" "}
+                {Math.min((pagination.pageIndex + 1) * pagination.pageSize, totalCount)}{" "}
+                条，共 {totalCount} 条记录
+              </div>
+              
+              {/* 每页条数选择 */}
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-muted-foreground">每页显示</span>
+                <Select
+                  value={pagination.pageSize.toString()}
+                  onValueChange={(value) => {
+                    table.setPageSize(Number(value))
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[50, 100, 200, 300, 500].map((size) => (
+                      <SelectItem key={size} value={size.toString()}>
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-sm text-muted-foreground">条</span>
+              </div>
+            </div>
+
+            {/* 右侧：分页按钮 */}
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.setPageIndex(0)}
+                disabled={!table.getCanPreviousPage()}
+              >
+                首页
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+              >
+                上一页
+              </Button>
+              
+              {/* 页码显示 */}
+              <div className="flex items-center space-x-1">
+                <span className="text-sm text-muted-foreground">
+                  第 {pagination.pageIndex + 1} 页，共 {totalPages} 页
+                </span>
+              </div>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+              >
+                下一页
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.setPageIndex(totalPages - 1)}
+                disabled={!table.getCanNextPage()}
+              >
+                末页
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -6,9 +6,11 @@ from app.schemas.pnl_summary import (
     RefreshRequest,
     RefreshResponse,
     PnlSummaryResponse,
+    PaginatedPnlSummaryResponse,
 )
 from app.services.pnl_summary_service import (
     get_pnl_summary_from_db,
+    get_pnl_summary_paginated,
     trigger_pnl_summary_sync,
 )
 from app.services.etl_service import get_product_config
@@ -64,5 +66,71 @@ def get_summary(server: str = Query(...), symbol: str = Query(...)) -> PnlSummar
         return PnlSummaryResponse(ok=True, data=rows, rows=count, product_config=product_config)
     except Exception as e:
         return PnlSummaryResponse(ok=False, data=[], rows=0, error=str(e))
+
+
+@router.get("/summary/paginated", response_model=PaginatedPnlSummaryResponse)
+def get_summary_paginated(
+    server: str = Query(..., description="服务器名称"),
+    symbol: str = Query(..., description="交易品种，支持'__ALL__'查询所有产品"),
+    page: int = Query(1, ge=1, description="页码，从1开始"),
+    page_size: int = Query(100, ge=1, le=1000, description="每页记录数，1-1000"),
+    sort_by: str = Query(None, description="排序字段"),
+    sort_order: str = Query("asc", description="排序方向: asc/desc"),
+    customer_id: str = Query(None, description="客户ID筛选，为空则查询所有客户")
+) -> PaginatedPnlSummaryResponse:
+    """分页查询盈亏汇总数据
+    
+    支持排序字段：
+    - login: 客户ID
+    - user_name: 客户名称
+    - balance: 余额
+    - total_closed_pnl: 平仓总盈亏
+    - floating_pnl: 持仓浮动盈亏
+    - total_closed_trades: 平仓交易笔数
+    - total_closed_volume: 总成交量
+    - last_updated: 更新时间
+    """
+    if server != "MT5":
+        return PaginatedPnlSummaryResponse(
+            ok=True, 
+            data=[], 
+            total=0, 
+            page=page, 
+            page_size=page_size, 
+            total_pages=0
+        )
+    
+    try:
+        rows, total_count, total_pages = get_pnl_summary_paginated(
+            symbol=symbol,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            customer_id=customer_id
+        )
+        
+        # 获取产品配置信息，用于前端格式化显示
+        product_config = get_product_config(symbol)
+        
+        return PaginatedPnlSummaryResponse(
+            ok=True,
+            data=rows,
+            total=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            product_config=product_config
+        )
+    except Exception as e:
+        return PaginatedPnlSummaryResponse(
+            ok=False,
+            data=[],
+            total=0,
+            page=page,
+            page_size=page_size,
+            total_pages=0,
+            error=str(e)
+        )
 
 

@@ -53,3 +53,24 @@ class PnlSummaryResponse(BaseModel):
     product_config: Optional[Dict[str, Any]] = None
 
 
+class PaginationRequest(BaseModel):
+    """分页请求参数"""
+    page: int = Field(1, ge=1, description="页码，从1开始")
+    page_size: int = Field(100, ge=1, le=1000, description="每页记录数，1-1000")
+    sort_by: Optional[str] = Field(None, description="排序字段")
+    sort_order: Optional[str] = Field("asc", description="排序方向: asc/desc")
+
+
+class PaginatedPnlSummaryResponse(BaseModel):
+    """分页查询响应"""
+    ok: bool
+    data: List[PnlSummaryItem] = []
+    total: int = Field(0, description="总记录数")
+    page: int = Field(1, description="当前页码")
+    page_size: int = Field(100, description="每页记录数")
+    total_pages: int = Field(0, description="总页数")
+    error: Optional[str] = None
+    # 产品配置信息，用于前端格式化显示
+    product_config: Optional[Dict[str, Any]] = None
+
+
