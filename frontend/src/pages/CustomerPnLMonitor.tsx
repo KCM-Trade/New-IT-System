@@ -1,27 +1,14 @@
 import { useMemo } from "react"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Settings2, Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react"
-import {
-  ColumnDef,
-  ColumnFiltersState,
-  SortingState,
-  VisibilityState,
-  ColumnOrderState,
-  PaginationState,
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  getPaginationRowModel,
-  useReactTable,
-  ColumnResizeMode,
-} from "@tanstack/react-table"
+import { Settings2, Search } from "lucide-react"
+import { AgGridReact } from 'ag-grid-react'
+import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 
 // 产品配置接口
 interface ProductConfig {
@@ -90,6 +77,7 @@ function fetchWithTimeout(url: string, options: any = {}, timeout = 15000) {
 }
 
 export default function CustomerPnLMonitor() {
+  const { theme } = useTheme()
   // server/product filters
   const [server, setServer] = useState<string>("MT5")
   const [symbol, setSymbol] = useState<string>("XAUUSD.kcmc")
@@ -104,18 +92,15 @@ export default function CustomerPnLMonitor() {
   const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
 
   // 分页状态管理
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 100,
-  })
+  const [pageIndex, setPageIndex] = useState(0)
+  const [pageSize, setPageSize] = useState(50)
   const [totalCount, setTotalCount] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
 
-  // TanStack Table 状态管理
-  const [sorting, setSorting] = useState<SortingState>([])
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  // AG Grid 状态管理
+  const [sortModel, setSortModel] = useState<any[]>([])
   const [globalFilter, setGlobalFilter] = useState("")
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     login: true,
     user_name: true,
     symbol: true,
@@ -126,114 +111,64 @@ export default function CustomerPnLMonitor() {
     total_closed_trades: true,
     last_updated: true,
   })
-  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>([
-    "login", "user_name", "symbol", "balance", "total_closed_pnl", 
-    "floating_pnl", "total_closed_volume", "total_closed_trades", "last_updated"
-  ])
+  const [gridApi, setGridApi] = useState<any>(null)
+  const gridContainerRef = useRef<HTMLDivElement | null>(null)
 
-  // TanStack Table 列定义 - 响应式比例宽度设置
-  // 📍 宽度设置说明：
-  // - 桌面端：所有列的 size 值总和约为 1000，每列按比例分配表格宽度，占满整个容器
-  // - 移动端：表格设置了最小宽度 980px，确保内容不会溢出到相邻列，提供水平滚动
-  // - 最小宽度分配：客户ID(80px) + 客户名称(150px) + 交易产品(100px) + 余额(100px) + 平仓总盈亏(120px) + 持仓浮动盈亏(120px) + 总成交量(90px) + 平仓交易笔数(100px) + 更新时间(120px) = 980px
-  // - 用户仍可拖拽调整列宽，在设定的最小宽度和最大宽度(500px)之间调整
-  const columns = useMemo<ColumnDef<PnlSummaryRow>[]>(() => [
+  // AG Grid 列定义
+  const columnDefs = useMemo<ColDef<PnlSummaryRow>[]>(() => [
     {
-      id: "login",
-      accessorKey: "login",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            客户ID <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 100,        // 📍 初始宽度 (比例: 约10%)
-      minSize: 80,      // 📍 最小宽度 (确保客户ID完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => <span className="font-medium">{row.getValue("login")}</span>,
+      field: "login",
+      headerName: "客户ID",
+      width: 120,
+      minWidth: 80,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="font-medium">{params.value}</span>
+      ),
+      hide: !columnVisibility.login,
     },
     {
-      id: "user_name", 
-      accessorKey: "user_name",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            客户名称 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 200,        // 📍 初始宽度 (比例: 约20%)
-      minSize: 150,     // 📍 最小宽度 (确保客户名称基本显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => (
+      field: "user_name",
+      headerName: "客户名称",
+      width: 180,
+      minWidth: 150,
+      maxWidth: 300,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
         <span className="max-w-[180px] truncate">
-          {row.getValue("user_name") || `客户-${row.getValue("login")}`}
+          {params.value || `客户-${params.data.login}`}
         </span>
       ),
+      hide: !columnVisibility.user_name,
     },
     {
-      id: "symbol",
-      accessorKey: "symbol",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            交易产品 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 120,        // 📍 初始宽度 (比例: 约12%)
-      minSize: 100,     // 📍 最小宽度 (确保产品名称完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => (
+      field: "symbol",
+      headerName: "交易产品",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
         <span className="font-mono text-sm">
-          {row.getValue("symbol")}
+          {params.value}
         </span>
       ),
+      hide: !columnVisibility.symbol,
     },
     {
-      id: "balance",
-      accessorKey: "balance", 
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            余额 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 120,        // 📍 初始宽度 (比例: 约12%)
-      minSize: 100,     // 📍 最小宽度 (确保货币格式完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => {
-        const value = toNumber(row.getValue("balance"))
+      field: "balance",
+      headerName: "余额",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
         return (
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
@@ -242,29 +177,18 @@ export default function CustomerPnLMonitor() {
           </span>
         )
       },
+      hide: !columnVisibility.balance,
     },
     {
-      id: "total_closed_pnl",
-      accessorKey: "total_closed_pnl",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            平仓总盈亏 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 150,        // 📍 初始宽度 (比例: 约15%)
-      minSize: 120,     // 📍 最小宽度 (确保盈亏金额完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => {
-        const value = toNumber(row.getValue("total_closed_pnl"))
+      field: "total_closed_pnl",
+      headerName: "平仓总盈亏",
+      width: 150,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
         return (
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
@@ -273,29 +197,18 @@ export default function CustomerPnLMonitor() {
           </span>
         )
       },
+      hide: !columnVisibility.total_closed_pnl,
     },
     {
-      id: "floating_pnl",
-      accessorKey: "floating_pnl",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            持仓浮动盈亏 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 150,        // 📍 初始宽度 (比例: 约15%)
-      minSize: 120,     // 📍 最小宽度 (确保浮动盈亏金额完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => {
-        const value = toNumber(row.getValue("floating_pnl"))
+      field: "floating_pnl",
+      headerName: "持仓浮动盈亏",
+      width: 150,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
         return (
           <span 
             className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
@@ -304,116 +217,80 @@ export default function CustomerPnLMonitor() {
           </span>
         )
       },
+      hide: !columnVisibility.floating_pnl,
     },
     {
-      id: "total_closed_volume",
-      accessorKey: "total_closed_volume",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            总成交量 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 100,        // 📍 初始宽度 (比例: 约10%)
-      minSize: 90,      // 📍 最小宽度 (确保成交量数字完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => (
+      field: "total_closed_volume",
+      headerName: "总成交量",
+      width: 120,
+      minWidth: 90,
+      maxWidth: 150,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
         <span className="text-right tabular-nums">
-          {toNumber(row.getValue("total_closed_volume")).toLocaleString()}
+          {toNumber(params.value).toLocaleString()}
         </span>
       ),
+      hide: !columnVisibility.total_closed_volume,
     },
     {
-      id: "total_closed_trades",
-      accessorKey: "total_closed_trades",
-      header: ({ column }) => {
-        const Icon = column.getIsSorted() === "asc" ? ArrowUp : 
-                   column.getIsSorted() === "desc" ? ArrowDown : ArrowUpDown
-        return (
-          <Button 
-            variant="ghost" 
-            className="h-8 px-2 gap-1"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            平仓交易笔数 <Icon className="h-3 w-3" />
-          </Button>
-        )
-      },
-      size: 120,        // 📍 初始宽度 (比例: 约12%)
-      minSize: 100,     // 📍 最小宽度 (确保交易笔数完整显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      cell: ({ row }) => (
+      field: "total_closed_trades",
+      headerName: "平仓交易笔数",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 180,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
         <span className="text-right tabular-nums">
-          {toNumber(row.getValue("total_closed_trades")).toLocaleString()}
+          {toNumber(params.value).toLocaleString()}
         </span>
       ),
+      hide: !columnVisibility.total_closed_trades,
     },
     {
-      id: "last_updated",
-      accessorKey: "last_updated",
-      header: "更新时间",
-      size: 80,         // 📍 初始宽度 (比例: 约8%)
-      minSize: 200,     // 📍 最小宽度 (确保完整时间格式显示)
-      maxSize: 500,     // 📍 最大宽度
-      enableSorting: true,
-      enableColumnFilter: false,
-      cell: ({ row }) => (
+      field: "last_updated",
+      headerName: "更新时间",
+      width: 180,
+      minWidth: 160,
+      maxWidth: 220,
+      sortable: true,
+      filter: false,
+      cellRenderer: (params: any) => (
         <span className="whitespace-nowrap text-muted-foreground">
-          {row.getValue("last_updated") ? new Date(row.getValue("last_updated") as string).toLocaleString() : ""}
+          {params.value ? new Date(params.value).toLocaleString() : ""}
         </span>
       ),
+      hide: !columnVisibility.last_updated,
     },
-  ], [productConfig])
+  ], [productConfig, columnVisibility])
 
-  // TanStack Table 实例
-  const table = useReactTable({
-    data: rows,
-    columns,
-    state: {
-      sorting,
-      columnFilters,
-      globalFilter,
-      columnVisibility,
-      columnOrder,
-      pagination,
-    },
-    pageCount: totalPages,
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
-    onGlobalFilterChange: setGlobalFilter,
-    onColumnVisibilityChange: setColumnVisibility,
-    onColumnOrderChange: setColumnOrder,
-    onPaginationChange: setPagination,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    manualPagination: true, // 手动分页模式，由后端处理
-    manualSorting: true,    // 手动排序模式，由后端处理
-    enableColumnResizing: true,
-    columnResizeMode: "onChange" as ColumnResizeMode,
-  })
+  // AG Grid 事件处理函数
+  const onGridReady = useCallback((params: GridReadyEvent) => {
+    setGridApi(params.api)
+    // ensure columns fit container when grid is ready
+    try { params.api.sizeColumnsToFit() } catch {}
+  }, [])
+
+  const onSortChanged = useCallback((event: SortChangedEvent) => {
+    const sortModel = event.api.getColumnState()
+      .filter(col => col.sort !== null)
+      .map(col => ({ colId: col.colId, sort: col.sort }))
+    setSortModel(sortModel)
+    // 在这里可以触发后端排序请求
+  }, [])
 
   // 持久化表格状态
   useEffect(() => {
     try {
       const tableState = {
         columnVisibility,
-        columnOrder,
-        sorting,
+        sortModel,
       }
       localStorage.setItem("pnl_table_state", JSON.stringify(tableState))
     } catch {}
-  }, [columnVisibility, columnOrder, sorting])
+  }, [columnVisibility, sortModel])
 
   // 恢复表格状态
   useEffect(() => {
@@ -422,8 +299,7 @@ export default function CustomerPnLMonitor() {
       if (saved) {
         const state = JSON.parse(saved)
         if (state.columnVisibility) setColumnVisibility(state.columnVisibility)
-        if (state.columnOrder) setColumnOrder(state.columnOrder)
-        if (state.sorting) setSorting(state.sorting)
+        if (state.sortModel) setSortModel(state.sortModel)
       }
     } catch {}
   }, [])
@@ -431,14 +307,14 @@ export default function CustomerPnLMonitor() {
   // GET 拉取后端数据（分页查询）
   const fetchData = useCallback(async (
     page?: number, 
-    pageSize?: number, 
+    newPageSize?: number, 
     sortBy?: string, 
     sortOrder?: string
   ) => {
-    const currentPage = page ?? pagination.pageIndex + 1
-    const currentPageSize = pageSize ?? pagination.pageSize
-    const currentSortBy = sortBy ?? (sorting.length > 0 ? sorting[0].id : undefined)
-    const currentSortOrder = sortOrder ?? (sorting.length > 0 ? (sorting[0].desc ? 'desc' : 'asc') : 'asc')
+    const currentPage = page ?? pageIndex + 1
+    const currentPageSize = newPageSize ?? pageSize
+    const currentSortBy = sortBy ?? (sortModel.length > 0 ? sortModel[0].colId : undefined)
+    const currentSortOrder = sortOrder ?? (sortModel.length > 0 ? sortModel[0].sort : 'asc')
     
     const params = new URLSearchParams({
       server: server,
@@ -469,7 +345,7 @@ export default function CustomerPnLMonitor() {
     setTotalPages(payload.total_pages)
     
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbol, pagination.pageIndex, pagination.pageSize, sorting])
+  }, [server, symbol, pageIndex, pageSize, sortModel])
 
   const refreshNow = useCallback(async () => {
     setIsRefreshing(true)
@@ -526,13 +402,26 @@ export default function CustomerPnLMonitor() {
         const data = await fetchData()
         setRows(data)
         setLastUpdated(new Date())
+        // after data loaded, try fit columns
+        try { gridApi?.sizeColumnsToFit() } catch {}
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
         setSuccessMessage(null)
       }
     })()
-  }, [pagination.pageIndex, pagination.pageSize, sorting, server, symbol])
+  }, [pageIndex, pageSize, sortModel, server, symbol])
+
+  // 观察容器尺寸变化，触发布局与列宽自适应
+  useEffect(() => {
+    if (!gridContainerRef.current) return
+    if (!gridApi) return
+    const ro = new ResizeObserver(() => {
+      try { gridApi.sizeColumnsToFit() } catch {}
+    })
+    ro.observe(gridContainerRef.current)
+    return () => ro.disconnect()
+  }, [gridApi])
 
   // auto-refresh every 10 minutes; re-run when server/symbol changes
   useEffect(() => {
@@ -542,10 +431,8 @@ export default function CustomerPnLMonitor() {
           const data = await fetchData()
           setRows(data)
           setLastUpdated(new Date())
-          // 自动刷新成功时清除之前的错误消息（但不显示成功消息，避免干扰）
           if (error) setError(null)
         } catch (e) {
-          // 自动刷新失败仅记录错误，不打断页面
           setError(e instanceof Error ? e.message : "自动刷新失败")
           setSuccessMessage(null)
         }
@@ -680,30 +567,30 @@ export default function CustomerPnLMonitor() {
                 <DropdownMenuContent align="end" className="w-56">
                   <DropdownMenuLabel>显示列</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  {table.getAllLeafColumns()
-                    .filter((column) => column.getCanHide())
-                    .map((column) => {
-                      const columnLabels: Record<string, string> = {
-                        login: "客户ID",
-                        user_name: "客户名称",
-                        symbol: "交易产品",
-                        balance: "余额",
-                        total_closed_pnl: "平仓总盈亏",
-                        floating_pnl: "持仓浮动盈亏",
-                        total_closed_volume: "总成交量",
-                        total_closed_trades: "平仓交易笔数",
-                        last_updated: "更新时间",
-                      }
-                      return (
-                        <DropdownMenuCheckboxItem
-                          key={column.id}
-                          checked={column.getIsVisible()}
-                          onCheckedChange={(value) => column.toggleVisibility(!!value)}
-                        >
-                          {columnLabels[column.id] || column.id}
-                        </DropdownMenuCheckboxItem>
-                      )
-                    })}
+                  {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
+                    const columnLabels: Record<string, string> = {
+                      login: "客户ID",
+                      user_name: "客户名称",
+                      symbol: "交易产品",
+                      balance: "余额",
+                      total_closed_pnl: "平仓总盈亏",
+                      floating_pnl: "持仓浮动盈亏",
+                      total_closed_volume: "总成交量",
+                      total_closed_trades: "平仓交易笔数",
+                      last_updated: "更新时间",
+                    }
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={columnId}
+                        checked={isVisible}
+                        onCheckedChange={(value) => 
+                          setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
+                        }
+                      >
+                        {columnLabels[columnId] || columnId}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -712,15 +599,15 @@ export default function CustomerPnLMonitor() {
           {/* 状态信息 */}
           <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-muted-foreground">
             <span>共 {totalCount} 条记录</span>
-            <span>当前页 {pagination.pageIndex + 1}/{totalPages}</span>
+            <span>当前页 {pageIndex + 1}/{totalPages}</span>
             {globalFilter && (
               <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/20 rounded text-blue-700 dark:text-blue-300">
                 搜索: "{globalFilter}"
               </span>
             )}
-            {sorting.length > 0 && (
+            {sortModel.length > 0 && (
               <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
-                排序: {sorting.map(s => `${s.id} ${s.desc ? '↓' : '↑'}`).join(', ')}
+                排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
               </span>
             )}
             {Object.values(columnVisibility).filter(v => !v).length > 0 && (
@@ -732,77 +619,38 @@ export default function CustomerPnLMonitor() {
         </CardContent>
       </Card>
 
-      {/* TanStack Table with column resizing */}
-      <div className="border rounded-md overflow-hidden flex-1">
-        <div className="overflow-auto h-full">
-          <Table
-            style={{
-              width: "100%",
-              minWidth: "980px", // 所有列最小宽度总和，确保移动端内容不溢出
-              tableLayout: "fixed", // 使用固定表格布局以支持比例分配
+      {/* AG Grid Table */}
+      <div className="flex-1">
+        {/* ag-grid requires an explicit height on the container */}
+        <div
+          ref={gridContainerRef}
+          className={`${(theme === 'dark' || (theme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} h-[600px] w-full min-h-[400px] relative`}
+        >
+          <AgGridReact
+            rowData={rows}
+            columnDefs={columnDefs}
+            gridOptions={{ theme: 'legacy' }}
+            defaultColDef={{
+              sortable: true,
+              filter: true,
+              resizable: true,
+              flex: 1,
+              minWidth: 100,
             }}
-          >
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead
-                      key={header.id}
-                      className="whitespace-nowrap border-r"
-                      style={{
-                        width: `${(header.getSize() / 1000) * 100}%`, // 转换为百分比宽度
-                        position: "relative",
-                      }}
-                    >
-                      {header.isPlaceholder ? null : (
-                        <div>
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                        </div>
-                      )}
-                      {/* Column Resizer - 列宽调整手柄 */}
-                      {header.column.getCanResize() && (
-                        <div
-                          className="absolute right-0 top-0 h-full w-1 bg-border hover:bg-blue-500 cursor-col-resize select-none touch-none"
-                          onMouseDown={header.getResizeHandler()}
-                          onTouchStart={header.getResizeHandler()}
-                          style={{
-                            transform: header.column.getIsResizing() ? 'scaleX(2)' : 'scaleX(1)',
-                            transition: 'transform 0.1s ease-in-out',
-                          }}
-                          title="拖拽调整列宽"
-                        />
-                      )}
-                </TableHead>
-                  ))}
-              </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={table.getAllLeafColumns().length} className="text-center text-sm text-muted-foreground py-8">
-                    {error ? `加载失败：${error}` : "暂无数据"}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        className="border-r"
-                        style={{
-                          width: `${(cell.column.getSize() / 1000) * 100}%`, // 转换为百分比宽度
-                        }}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+            onGridReady={onGridReady}
+            onSortChanged={onSortChanged}
+            animateRows={true}
+            rowSelection="multiple"
+            suppressRowClickSelection={true}
+            enableCellTextSelection={true}
+            domLayout="normal"
+            getRowStyle={(params) => {
+              if (params.node.rowIndex && params.node.rowIndex % 2 === 0) {
+                return { backgroundColor: 'var(--ag-background-color)' }
+              }
+              return { backgroundColor: 'var(--ag-odd-row-background-color)' }
+            }}
+          />
         </div>
       </div>
 
@@ -813,8 +661,8 @@ export default function CustomerPnLMonitor() {
             {/* 左侧：显示信息和每页条数选择 */}
             <div className="flex items-center space-x-4">
               <div className="text-sm text-muted-foreground">
-                显示 {pagination.pageIndex * pagination.pageSize + 1} 到{" "}
-                {Math.min((pagination.pageIndex + 1) * pagination.pageSize, totalCount)}{" "}
+                显示 {pageIndex * pageSize + 1} 到{" "}
+                {Math.min((pageIndex + 1) * pageSize, totalCount)}{" "}
                 条，共 {totalCount} 条记录
               </div>
               
@@ -822,9 +670,12 @@ export default function CustomerPnLMonitor() {
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-muted-foreground">每页显示</span>
                 <Select
-                  value={pagination.pageSize.toString()}
+                  value={pageSize.toString()}
                   onValueChange={(value) => {
-                    table.setPageSize(Number(value))
+                    const newSize = Number(value)
+                    setPageSize(newSize)
+                    setPageIndex(0)
+                    // 使用后端分页，无需调用 ag-Grid 内部分页 API
                   }}
                 >
                   <SelectTrigger className="h-8 w-20">
@@ -847,16 +698,21 @@ export default function CustomerPnLMonitor() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => table.setPageIndex(0)}
-                disabled={!table.getCanPreviousPage()}
+                onClick={() => {
+                  setPageIndex(0)
+                }}
+                disabled={pageIndex === 0}
               >
                 首页
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => table.previousPage()}
-                disabled={!table.getCanPreviousPage()}
+                onClick={() => {
+                  const newIndex = Math.max(0, pageIndex - 1)
+                  setPageIndex(newIndex)
+                }}
+                disabled={pageIndex === 0}
               >
                 上一页
               </Button>
@@ -864,23 +720,29 @@ export default function CustomerPnLMonitor() {
               {/* 页码显示 */}
               <div className="flex items-center space-x-1">
                 <span className="text-sm text-muted-foreground">
-                  第 {pagination.pageIndex + 1} 页，共 {totalPages} 页
+                  第 {pageIndex + 1} 页，共 {totalPages} 页
                 </span>
               </div>
               
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => table.nextPage()}
-                disabled={!table.getCanNextPage()}
+                onClick={() => {
+                  const newIndex = Math.min(totalPages - 1, pageIndex + 1)
+                  setPageIndex(newIndex)
+                }}
+                disabled={pageIndex >= totalPages - 1}
               >
                 下一页
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => table.setPageIndex(totalPages - 1)}
-                disabled={!table.getCanNextPage()}
+                onClick={() => {
+                  const lastIndex = totalPages - 1
+                  setPageIndex(lastIndex)
+                }}
+                disabled={pageIndex >= totalPages - 1}
               >
                 末页
               </Button>

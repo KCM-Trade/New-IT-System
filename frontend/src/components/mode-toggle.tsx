@@ -6,11 +6,10 @@ import { useTheme } from "@/components/theme-provider"
 export function ModeToggle() {
   const { theme, setTheme } = useTheme()
 
-  // Click handler toggles among light -> dark -> system -> light
+  // Click handler toggles only between light <-> dark to avoid double-click confusion
   function handleClick() {
-    if (theme === "light") return setTheme("dark")
-    if (theme === "dark") return setTheme("system")
-    return setTheme("light")
+    if (theme === "dark") return setTheme("light")
+    return setTheme("dark")
   }
 
   return (

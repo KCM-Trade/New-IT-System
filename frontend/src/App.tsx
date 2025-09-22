@@ -56,6 +56,7 @@ function App() {
               <Route path="profit" element={<ProfitPage />} />
               <Route path="client-trading" element={<ClientTradingAnalyticsPage />} />
               <Route path="customer-pnl-monitor" element={<CustomerPnLMonitorPage />} />
+              {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />
               <Route path="search" element={<SearchPage />} />
               {/* Configuration routes */}
