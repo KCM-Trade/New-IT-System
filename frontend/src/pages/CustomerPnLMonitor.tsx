@@ -4,9 +4,8 @@ import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Settings2, Search } from "lucide-react"
+import { Settings2 } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 
@@ -99,7 +98,7 @@ export default function CustomerPnLMonitor() {
 
   // AG Grid 状态管理
   const [sortModel, setSortModel] = useState<any[]>([])
-  const [globalFilter, setGlobalFilter] = useState("")
+  // 列可见性（供社区版列显示切换用）
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     login: true,
     user_name: true,
@@ -107,10 +106,9 @@ export default function CustomerPnLMonitor() {
     balance: true,
     total_closed_pnl: true,
     floating_pnl: true,
-    total_closed_volume: true,
-    total_closed_trades: true,
+    total_closed_volume: false,
+    total_closed_trades: false,
     last_updated: true,
-    // 其他字段先隐藏
     user_group: true,
     country: false,
     buy_trades_count: false,
@@ -127,7 +125,7 @@ export default function CustomerPnLMonitor() {
       field: "login",
       headerName: "客户ID",
       width: 120,
-      minWidth: 80,
+      minWidth: 100,
       maxWidth: 200,
       sortable: true,
       filter: true,
@@ -181,7 +179,7 @@ export default function CustomerPnLMonitor() {
       field: "symbol",
       headerName: "交易产品",
       width: 140,
-      minWidth: 100,
+      minWidth: 120,
       maxWidth: 200,
       sortable: true,
       filter: true,
@@ -374,24 +372,22 @@ export default function CustomerPnLMonitor() {
     // 在这里可以触发后端排序请求
   }, [])
 
-  // 持久化表格状态
+  // 持久化表格状态（已移除列可见性，仅保留排序如需扩展可在此）
   useEffect(() => {
     try {
       const tableState = {
-        columnVisibility,
         sortModel,
       }
       localStorage.setItem("pnl_table_state", JSON.stringify(tableState))
     } catch {}
-  }, [columnVisibility, sortModel])
+  }, [sortModel])
 
-  // 恢复表格状态
+  // 恢复表格状态（仅恢复排序）
   useEffect(() => {
     try {
       const saved = localStorage.getItem("pnl_table_state")
       if (saved) {
         const state = JSON.parse(saved)
-        if (state.columnVisibility) setColumnVisibility(state.columnVisibility)
         if (state.sortModel) setSortModel(state.sortModel)
       }
     } catch {}
@@ -420,7 +416,6 @@ export default function CustomerPnLMonitor() {
       params.set('sort_by', currentSortBy)
       params.set('sort_order', currentSortOrder)
     }
-    
     
     const url = `/api/v1/pnl/summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
@@ -451,43 +446,39 @@ export default function CustomerPnLMonitor() {
         method: "POST",
         headers: { "Content-Type": "application/json", accept: "application/json" },
         body: JSON.stringify({ server, symbol }),
-      }, 30000) // 增加超时时间到30秒，因为现在是同步等待ETL完成
+      }, 30000)
       
       const refreshResult = await refreshResponse.json()
       
-      // 显示ETL执行结果信息
       if (refreshResult.status === "success") {
-        const details = []
-        if (refreshResult.processed_rows > 0) {
+        const details: string[] = []
+        if (typeof refreshResult.processed_rows === 'number') {
           details.push(`处理了 ${refreshResult.processed_rows} 行数据`)
-        } else {
-          details.push("无新数据需要处理")
         }
-        if (refreshResult.duration_seconds > 0) {
-          details.push(`耗时 ${refreshResult.duration_seconds.toFixed(1)} 秒`)
+        if (typeof refreshResult.duration_seconds === 'number') {
+          details.push(`耗时 ${Number(refreshResult.duration_seconds).toFixed(1)} 秒`)
         }
-        const successMsg = `${refreshResult.message}${details.length > 0 ? ` (${details.join(', ')})` : ''}`
-        setSuccessMessage(successMsg)
-        // 成功消息10秒后自动清除
-        setTimeout(() => setSuccessMessage(null), 10000)
+        const msg = details.length > 0 ? `${refreshResult.message} (${details.join(', ')})` : refreshResult.message
+        setSuccessMessage(msg)
       } else {
+        setSuccessMessage(null)
         setError(`${refreshResult.message}${refreshResult.error_details ? `: ${refreshResult.error_details}` : ''}`)
       }
       
-      // 2) 拉取最新数据（ETL已完成，无需等待）
+      // 2) 拉取最新数据
       const data = await fetchData()
       setRows(data)
       setLastUpdated(new Date())
       
     } catch (e) {
-      setError(e instanceof Error ? e.message : "刷新失败")
       setSuccessMessage(null)
+      setError(e instanceof Error ? e.message : "刷新失败")
     } finally {
       setIsRefreshing(false)
     }
   }, [fetchData, server, symbol])
 
-  // 监听分页和排序变化，自动重新获取数据
+  // 监听分页、排序、服务器/品种变化，自动重新获取数据
   useEffect(() => {
     ;(async () => {
       try {
@@ -500,7 +491,6 @@ export default function CustomerPnLMonitor() {
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
-        setSuccessMessage(null)
       }
     })()
   }, [pageIndex, pageSize, sortModel, server, symbol])
@@ -516,23 +506,49 @@ export default function CustomerPnLMonitor() {
     return () => ro.disconnect()
   }, [gridApi])
 
-  // auto-refresh every 10 minutes; re-run when server/symbol changes
+  // auto-refresh: every 10 minutes trigger ETL for all products, then fetch current data
   useEffect(() => {
     const t = setInterval(() => {
       ;(async () => {
         try {
+          try {
+            const res = await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", accept: "application/json" },
+              body: JSON.stringify({ server, symbol: "__ALL__" }),
+            }, 30000)
+            const refreshResult = await res.json()
+            if (refreshResult?.status === 'success') {
+              const details: string[] = []
+              if (typeof refreshResult.processed_rows === 'number') {
+                details.push(`处理了 ${refreshResult.processed_rows} 行数据`)
+              }
+              if (typeof refreshResult.duration_seconds === 'number') {
+                details.push(`耗时 ${Number(refreshResult.duration_seconds).toFixed(1)} 秒`)
+              }
+              const msg = details.length > 0 ? `${refreshResult.message} (${details.join(', ')})` : refreshResult.message
+              setSuccessMessage(msg)
+            }
+          } catch {}
           const data = await fetchData()
           setRows(data)
           setLastUpdated(new Date())
           if (error) setError(null)
         } catch (e) {
-          setError(e instanceof Error ? e.message : "自动刷新失败")
           setSuccessMessage(null)
+          setError(e instanceof Error ? e.message : "自动刷新失败")
         }
       })()
     }, AUTO_REFRESH_MS)
     return () => clearInterval(t)
-  }, [fetchData])
+  }, [fetchData, server])
+
+  // 成功提示自动清除（10秒）
+  useEffect(() => {
+    if (!successMessage) return
+    const t = setTimeout(() => setSuccessMessage(null), 10000)
+    return () => clearTimeout(t)
+  }, [successMessage])
 
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -581,80 +597,62 @@ export default function CustomerPnLMonitor() {
 
             {/* actions */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-              <div className="text-xs text-muted-foreground">
-                默认每10分钟自动刷新{lastUpdated ? `，上次：${lastUpdated.toLocaleString()}` : ""}
-              </div>
               <Button onClick={refreshNow} disabled={isRefreshing} className="h-9 w-full sm:w-auto">
                 {isRefreshing ? "同步数据中..." : "立即刷新"}
               </Button>
             </div>
           </div>
 
-          {/* mobile hint row */}
-          <div className="sm:hidden text-xs text-muted-foreground">
-            默认每10分钟自动刷新{lastUpdated ? `，上次：${lastUpdated.toLocaleString()}` : ""}
-          </div>
+          {/* mobile hint row removed to avoid duplication */}
         </CardContent>
       </Card>
 
       {/* 刷新结果消息显示区域 */}
-      {(successMessage || error) && (
+      {error && (
         <div className="px-1 sm:px-0">
-          {successMessage ? (
-            <div className="flex items-center gap-2 px-4 py-3 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded-lg">
-              <div className="flex-shrink-0">
-                <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <p className="text-sm text-green-800 dark:text-green-200">{successMessage}</p>
+          <div className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <div className="flex-shrink-0">
+              <svg className="w-4 h-4 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
             </div>
-          ) : error ? (
-            <div className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <div className="flex-shrink-0">
-                <svg className="w-4 h-4 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
-            </div>
-          ) : null}
+            <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+          </div>
         </div>
       )}
 
-      {/* 表格控制卡片 - 全局搜索、列选择、分页设置 */}
+
+      {/* 状态栏 + 列显示切换 */}
       <Card>
-        <CardContent className="py-4">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            {/* 左侧：全局搜索 */}
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-              <Input
-                placeholder="全局搜索..."
-                value={globalFilter ?? ""}
-                onChange={(e) => setGlobalFilter(e.target.value)}
-                className="h-9 flex-1"
-              />
-              {globalFilter && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setGlobalFilter("")}
-                  className="h-9 px-2 text-muted-foreground hover:text-foreground"
-                >
-                  清除
-                </Button>
+        <CardContent className="py-3">
+          <div className="flex items-center justify-between gap-3">
+            {/* 左侧状态信息 */}
+            <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
+              <span>共 {totalCount} 条记录</span>
+              <span>当前页 {pageIndex + 1}/{totalPages}</span>
+              {sortModel.length > 0 && (
+                <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
+                  排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
+                </span>
+              )}
+              {lastUpdated && (
+                <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800/40 rounded">
+                  上次刷新：{lastUpdated.toLocaleString()}
+                </span>
+              )}
+              {successMessage && (
+                <span className="px-2 py-1 bg-green-100 dark:bg-green-900/20 rounded text-green-700 dark:text-green-300">
+                  {successMessage}
+                </span>
               )}
             </div>
-            
-            {/* 右侧：控制按钮组 */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {/* 列显示选择 */}
+            {/* 右侧：列显示切换按钮 */}
+            <div className="flex items-center">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" className="h-9 gap-2 whitespace-nowrap">
                     <Settings2 className="h-4 w-4" />
-                    列设置
+                    列显示切换
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
@@ -693,27 +691,6 @@ export default function CustomerPnLMonitor() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          </div>
-
-          {/* 状态信息 */}
-          <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-muted-foreground">
-            <span>共 {totalCount} 条记录</span>
-            <span>当前页 {pageIndex + 1}/{totalPages}</span>
-            {globalFilter && (
-              <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/20 rounded text-blue-700 dark:text-blue-300">
-                搜索: "{globalFilter}"
-              </span>
-            )}
-            {sortModel.length > 0 && (
-              <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
-                排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
-              </span>
-            )}
-            {Object.values(columnVisibility).filter(v => !v).length > 0 && (
-              <span className="px-2 py-1 bg-orange-100 dark:bg-orange-900/20 rounded text-orange-700 dark:text-orange-300">
-                隐藏了 {Object.values(columnVisibility).filter(v => !v).length} 列
-              </span>
-            )}
           </div>
         </CardContent>
       </Card>
