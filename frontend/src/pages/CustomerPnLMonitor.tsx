@@ -110,6 +110,13 @@ export default function CustomerPnLMonitor() {
     total_closed_volume: true,
     total_closed_trades: true,
     last_updated: true,
+    // 其他字段先隐藏
+    user_group: true,
+    country: false,
+    buy_trades_count: false,
+    sell_trades_count: false,
+    buy_closed_volume: false,
+    sell_closed_volume: false,
   })
   const [gridApi, setGridApi] = useState<any>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
@@ -143,6 +150,32 @@ export default function CustomerPnLMonitor() {
         </span>
       ),
       hide: !columnVisibility.user_name,
+    },
+    {
+      field: "user_group",
+      headerName: "组别",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 220,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-muted-foreground">{params.value || ""}</span>
+      ),
+      hide: !columnVisibility.user_group,
+    },
+    {
+      field: "country",
+      headerName: "国家/地区",
+      width: 120,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-muted-foreground">{params.value || ""}</span>
+      ),
+      hide: !columnVisibility.country,
     },
     {
       field: "symbol",
@@ -235,6 +268,36 @@ export default function CustomerPnLMonitor() {
       hide: !columnVisibility.total_closed_volume,
     },
     {
+      field: "buy_closed_volume",
+      headerName: "买单成交量",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.buy_closed_volume,
+    },
+    {
+      field: "sell_closed_volume",
+      headerName: "卖单成交量",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.sell_closed_volume,
+    },
+    {
       field: "total_closed_trades",
       headerName: "平仓交易笔数",
       width: 140,
@@ -248,6 +311,36 @@ export default function CustomerPnLMonitor() {
         </span>
       ),
       hide: !columnVisibility.total_closed_trades,
+    },
+    {
+      field: "buy_trades_count",
+      headerName: "买单笔数",
+      width: 120,
+      minWidth: 90,
+      maxWidth: 180,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.buy_trades_count,
+    },
+    {
+      field: "sell_trades_count",
+      headerName: "卖单笔数",
+      width: 120,
+      minWidth: 90,
+      maxWidth: 180,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.sell_trades_count,
     },
     {
       field: "last_updated",
@@ -576,8 +669,14 @@ export default function CustomerPnLMonitor() {
                       total_closed_pnl: "平仓总盈亏",
                       floating_pnl: "持仓浮动盈亏",
                       total_closed_volume: "总成交量",
+                      buy_closed_volume: "买单成交量",
+                      sell_closed_volume: "卖单成交量",
                       total_closed_trades: "平仓交易笔数",
+                      buy_trades_count: "买单笔数",
+                      sell_trades_count: "卖单笔数",
                       last_updated: "更新时间",
+                      user_group: "组别",
+                      country: "国家/地区",
                     }
                     return (
                       <DropdownMenuCheckboxItem
@@ -657,9 +756,9 @@ export default function CustomerPnLMonitor() {
       {/* 分页控件 */}
       <Card>
         <CardContent className="py-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             {/* 左侧：显示信息和每页条数选择 */}
-            <div className="flex items-center space-x-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:space-x-4">
               <div className="text-sm text-muted-foreground">
                 显示 {pageIndex * pageSize + 1} 到{" "}
                 {Math.min((pageIndex + 1) * pageSize, totalCount)}{" "}
@@ -694,7 +793,7 @@ export default function CustomerPnLMonitor() {
             </div>
 
             {/* 右侧：分页按钮 */}
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center flex-wrap gap-2 w-full sm:w-auto justify-center sm:justify-end">
               <Button
                 variant="outline"
                 size="sm"
