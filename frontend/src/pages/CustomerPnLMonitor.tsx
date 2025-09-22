@@ -79,7 +79,7 @@ export default function CustomerPnLMonitor() {
   const { theme } = useTheme()
   // server/product filters
   const [server, setServer] = useState<string>("MT5")
-  const [symbol, setSymbol] = useState<string>("XAUUSD.kcmc")
+  const [symbol, setSymbol] = useState<string>("__ALL__")
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
