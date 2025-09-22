@@ -129,9 +129,30 @@ export default function CustomerPnLMonitor() {
       maxWidth: 200,
       sortable: true,
       filter: true,
-      cellRenderer: (params: any) => (
-        <span className="font-medium">{params.value}</span>
-      ),
+      cellRenderer: (params: any) => {
+        // 只有MT5服务器才显示为可点击链接
+        if (server === "MT5") {
+          return (
+            <a 
+              href={`https://mt4.kohleglobal.com/crm/accounts/5-${params.value}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline hover:no-underline transition-colors cursor-pointer"
+              onClick={(e) => {
+                // 防止触发AG Grid的行选择事件
+                e.stopPropagation()
+              }}
+            >
+              {params.value}
+            </a>
+          )
+        } else {
+          // 其他服务器显示为普通文本
+          return (
+            <span className="font-medium">{params.value}</span>
+          )
+        }
+      },
       hide: !columnVisibility.login,
     },
     {
@@ -355,7 +376,7 @@ export default function CustomerPnLMonitor() {
       ),
       hide: !columnVisibility.last_updated,
     },
-  ], [productConfig, columnVisibility])
+  ], [productConfig, columnVisibility, server])
 
   // AG Grid 事件处理函数
   const onGridReady = useCallback((params: GridReadyEvent) => {
