@@ -8,6 +8,7 @@ import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMe
 import { Settings2 } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
 
 // 产品配置接口
 interface ProductConfig {
@@ -80,6 +81,11 @@ export default function CustomerPnLMonitor() {
   // server/product filters
   const [server, setServer] = useState<string>("MT5")
   const [symbol, setSymbol] = useState<string>("__ALL__")
+  
+  // 用户组别筛选
+  const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
+  const [availableGroups, setAvailableGroups] = useState<Array<{value: string, label: string}>>([])
+  const [isLoadingGroups, setIsLoadingGroups] = useState(false)
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
@@ -414,6 +420,34 @@ export default function CustomerPnLMonitor() {
     } catch {}
   }, [])
 
+  // 获取用户组别列表
+  const fetchUserGroups = useCallback(async () => {
+    if (server !== "MT5") {
+      setAvailableGroups([])
+      return
+    }
+    
+    setIsLoadingGroups(true)
+    try {
+      const url = `/api/v1/pnl/groups?server=${server}`
+      const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 10000)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const groups = await res.json()
+      
+      // 转换为选项格式
+      const groupOptions = groups.map((group: string) => ({
+        value: group,
+        label: group
+      }))
+      setAvailableGroups(groupOptions)
+    } catch (e) {
+      console.error("获取用户组别失败:", e)
+      setAvailableGroups([])
+    } finally {
+      setIsLoadingGroups(false)
+    }
+  }, [server])
+
   // GET 拉取后端数据（分页查询）
   const fetchData = useCallback(async (
     page?: number, 
@@ -438,6 +472,19 @@ export default function CustomerPnLMonitor() {
       params.set('sort_order', currentSortOrder)
     }
     
+    // 添加用户组别筛选参数
+    if (userGroups && userGroups.length > 0) {
+      if (userGroups.includes("__ALL__")) {
+        // 选择了"全部组别"，不发送筛选参数（查询所有数据）
+      } else {
+        // 选择了具体组别，发送这些组别
+        params.set('user_groups', userGroups.join(','))
+      }
+    } else {
+      // 没有选择任何组别，发送特殊标识符表示返回0条数据
+      params.set('user_groups', '__NONE__')
+    }
+    
     const url = `/api/v1/pnl/summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -454,7 +501,7 @@ export default function CustomerPnLMonitor() {
     setTotalPages(payload.total_pages)
     
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbol, pageIndex, pageSize, sortModel])
+  }, [server, symbol, pageIndex, pageSize, sortModel, userGroups])
 
   const refreshNow = useCallback(async () => {
     setIsRefreshing(true)
@@ -499,6 +546,13 @@ export default function CustomerPnLMonitor() {
     }
   }, [fetchData, server, symbol])
 
+  // 监听服务器变化，获取组别列表
+  useEffect(() => {
+    fetchUserGroups()
+    // 服务器变化时重置组别选择
+    setUserGroups(["__ALL__"])
+  }, [server, fetchUserGroups])
+
   // 监听分页、排序、服务器/品种变化，自动重新获取数据
   useEffect(() => {
     ;(async () => {
@@ -514,7 +568,7 @@ export default function CustomerPnLMonitor() {
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, symbol])
+  }, [pageIndex, pageSize, sortModel, server, symbol, userGroups])
 
   // 观察容器尺寸变化，触发布局与列宽自适应
   useEffect(() => {
@@ -580,10 +634,10 @@ export default function CustomerPnLMonitor() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:gap-x-9 md:gap-y-3">
               {/* server select */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground whitespace-nowrap w-16">服务器</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-muted-foreground whitespace-nowrap w-12">服务器</span>
                 <Select value={server} onValueChange={setServer}>
                   <SelectTrigger className="h-9 w-40">
                     <SelectValue placeholder="选择服务器" />
@@ -597,8 +651,8 @@ export default function CustomerPnLMonitor() {
               </div>
 
               {/* product select */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground whitespace-nowrap w-16">品种</span>
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-muted-foreground whitespace-nowrap w-12">品种</span>
                 <Select value={symbol} onValueChange={setSymbol}>
                   <SelectTrigger className="h-9 w-52">
                     <SelectValue placeholder="选择品种" />
@@ -612,6 +666,19 @@ export default function CustomerPnLMonitor() {
                     <SelectItem value="others" disabled>其他（开发中）</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* user group select */}
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-muted-foreground whitespace-nowrap w-12">组别</span>
+                <MultiSelectCombobox
+                  options={availableGroups}
+                  value={userGroups}
+                  onValueChange={setUserGroups}
+                  placeholder={isLoadingGroups ? "加载组别中..." : "选择组别..."}
+                  searchPlaceholder="搜索组别..."
+                  className="w-52"
+                />
               </div>
 
             </div>
@@ -701,7 +768,7 @@ export default function CustomerPnLMonitor() {
                       <DropdownMenuCheckboxItem
                         key={columnId}
                         checked={isVisible}
-                        onCheckedChange={(value) => 
+                        onCheckedChange={(value: boolean) => 
                           setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
                         }
                       >
@@ -768,7 +835,7 @@ export default function CustomerPnLMonitor() {
                 <span className="text-sm text-muted-foreground">每页显示</span>
                 <Select
                   value={pageSize.toString()}
-                  onValueChange={(value) => {
+                  onValueChange={(value: string) => {
                     const newSize = Number(value)
                     setPageSize(newSize)
                     setPageIndex(0)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import List
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas.pnl_summary import (
@@ -12,6 +13,7 @@ from app.services.pnl_summary_service import (
     get_pnl_summary_from_db,
     get_pnl_summary_paginated,
     trigger_pnl_summary_sync,
+    get_user_groups,
 )
 from app.services.etl_service import get_product_config
 
@@ -76,7 +78,8 @@ def get_summary_paginated(
     page_size: int = Query(100, ge=1, le=1000, description="每页记录数，1-1000"),
     sort_by: str = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
-    customer_id: str = Query(None, description="客户ID筛选，为空则查询所有客户")
+    customer_id: str = Query(None, description="客户ID筛选，为空则查询所有客户"),
+    user_groups: str = Query(None, description="用户组别筛选，多个组别用逗号分隔，__ALL__表示所有组别")
 ) -> PaginatedPnlSummaryResponse:
     """分页查询盈亏汇总数据
     
@@ -89,6 +92,12 @@ def get_summary_paginated(
     - total_closed_trades: 平仓交易笔数
     - total_closed_volume: 总成交量
     - last_updated: 更新时间
+    
+    用户组别筛选说明：
+    - 不传递user_groups参数：查询所有组别
+    - user_groups="__ALL__"：查询所有组别
+    - user_groups="group1"：查询单个组别
+    - user_groups="group1,group2"：查询多个组别
     """
     if server != "MT5":
         return PaginatedPnlSummaryResponse(
@@ -101,13 +110,19 @@ def get_summary_paginated(
         )
     
     try:
+        # 处理用户组别参数
+        user_groups_list = None
+        if user_groups:
+            user_groups_list = [g.strip() for g in user_groups.split(",") if g.strip()]
+        
         rows, total_count, total_pages = get_pnl_summary_paginated(
             symbol=symbol,
             page=page,
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
-            customer_id=customer_id
+            customer_id=customer_id,
+            user_groups=user_groups_list
         )
         
         # 获取产品配置信息，用于前端格式化显示
@@ -132,5 +147,21 @@ def get_summary_paginated(
             total_pages=0,
             error=str(e)
         )
+
+
+@router.get("/groups", response_model=List[str])
+def get_groups(server: str = Query(..., description="服务器名称")) -> List[str]:
+    """获取所有用户组别
+    
+    从pnl_summary表中获取所有不重复的用户组别，用于前端筛选器。
+    """
+    if server != "MT5":
+        return []
+    
+    try:
+        groups = get_user_groups()
+        return groups
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 

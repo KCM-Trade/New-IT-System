@@ -40,7 +40,8 @@ def get_pnl_summary_paginated(
     page_size: int = 100,
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
-    customer_id: Optional[str] = None
+    customer_id: Optional[str] = None,
+    user_groups: Optional[List[str]] = None
 ) -> Tuple[List[dict], int, int]:
     """分页查询报表库中的 pnl_summary。
     
@@ -51,6 +52,7 @@ def get_pnl_summary_paginated(
         sort_by: 排序字段
         sort_order: 排序方向 (asc/desc)
         customer_id: 客户ID筛选，为空则查询所有客户
+        user_groups: 用户组别筛选列表，为空或包含'__ALL__'则查询所有组别
     
     Returns:
         Tuple[rows, total_count, total_pages]: (数据行, 总记录数, 总页数)
@@ -88,6 +90,25 @@ def get_pnl_summary_paginated(
         except ValueError:
             # 如果不是有效数字，忽略此筛选条件
             pass
+    
+    # 用户组别筛选条件
+    if user_groups:
+        if "__ALL__" in user_groups:
+            # 选择了"全部组别"，不添加筛选条件（查询所有数据）
+            pass
+        elif "__NONE__" in user_groups:
+            # 没有选择任何组别，添加永远不匹配的条件（返回0条数据）
+            where_conditions.append("1 = 0")
+        else:
+            # 选择了具体组别，添加筛选条件
+            if len(user_groups) == 1:
+                where_conditions.append("user_group = %s")
+                query_params.append(user_groups[0])
+            else:
+                # 多个组别用IN查询
+                placeholders = ",".join(["%s"] * len(user_groups))
+                where_conditions.append(f"user_group IN ({placeholders})")
+                query_params.extend(user_groups)
     
     # 构建WHERE子句
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
@@ -220,5 +241,32 @@ def _sync_all_products() -> EtlResult:
         new_trades_count=total_new_trades,
         floating_only_count=total_floating_only
     )
+
+
+def get_user_groups() -> List[str]:
+    """获取所有用户组别，去重并排序
+    
+    从pnl_summary表中查询所有不同的user_group值，
+    用于前端筛选组件显示。
+    
+    Returns:
+        List[str]: 去重后的用户组别列表，按字母顺序排序
+    """
+    settings = get_settings()
+    dsn = settings.postgres_dsn()
+    
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            # 查询所有非空的用户组别，去重并排序
+            cur.execute("""
+                SELECT DISTINCT user_group 
+                FROM pnl_summary 
+                WHERE user_group IS NOT NULL 
+                  AND user_group != '' 
+                  AND TRIM(user_group) != ''
+                ORDER BY user_group ASC
+            """)
+            rows = cur.fetchall()
+            return [row[0] for row in rows]
 
 
