@@ -35,7 +35,7 @@ def get_pnl_summary_from_db(symbol: str) -> Tuple[List[dict], int]:
 
 
 def get_pnl_summary_paginated(
-    symbol: str,
+    symbols: Optional[List[str]] = None,
     page: int = 1,
     page_size: int = 100,
     sort_by: Optional[str] = None,
@@ -46,7 +46,7 @@ def get_pnl_summary_paginated(
     """分页查询报表库中的 pnl_summary。
     
     Args:
-        symbol: 交易品种，支持'__ALL__'查询所有产品
+        symbols: 交易品种列表，支持['__ALL__']查询所有产品，或多个具体品种
         page: 页码，从1开始
         page_size: 每页记录数
         sort_by: 排序字段
@@ -73,12 +73,23 @@ def get_pnl_summary_paginated(
     query_params = []
     
     # 产品筛选条件
-    if symbol == "__ALL__":
-        # 查询所有产品 - 不添加symbol条件
-        pass
+    if symbols and len(symbols) > 0:
+        if "__ALL__" in symbols:
+            # 包含"__ALL__"时查询所有产品 - 不添加symbol条件
+            pass
+        else:
+            # 查询指定的产品列表
+            if len(symbols) == 1:
+                where_conditions.append("symbol = %s")
+                query_params.append(symbols[0])
+            else:
+                # 多个品种用IN查询
+                placeholders = ",".join(["%s"] * len(symbols))
+                where_conditions.append(f"symbol IN ({placeholders})")
+                query_params.extend(symbols)
     else:
-        where_conditions.append("symbol = %s")
-        query_params.append(symbol)
+        # 没有指定品种，默认查询所有产品
+        pass
     
     # 客户ID筛选条件  
     if customer_id:

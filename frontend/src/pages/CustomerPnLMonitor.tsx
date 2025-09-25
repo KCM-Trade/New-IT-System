@@ -9,6 +9,7 @@ import { Settings2 } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
+import { SimpleMultiSelect } from "@/components/ui/simple-multi-select"
 
 // 产品配置接口
 interface ProductConfig {
@@ -80,12 +81,20 @@ export default function CustomerPnLMonitor() {
   const { theme } = useTheme()
   // server/product filters
   const [server, setServer] = useState<string>("MT5")
-  const [symbol, setSymbol] = useState<string>("__ALL__")
+  const [symbols, setSymbols] = useState<string[]>(["__ALL__"])
   
   // 用户组别筛选
   const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
   const [availableGroups, setAvailableGroups] = useState<Array<{value: string, label: string}>>([])
   const [isLoadingGroups, setIsLoadingGroups] = useState(false)
+
+  // 品种选项列表
+  const symbolOptions = [
+    { value: "XAUUSD.kcmc", label: "XAUUSD.kcmc " },
+    { value: "XAUUSD.kcm", label: "XAUUSD.kcm " },
+    { value: "XAUUSD", label: "XAUUSD " },
+    { value: "XAUUSD.cent", label: "XAUUSD.cent " },
+  ]
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
@@ -460,9 +469,19 @@ export default function CustomerPnLMonitor() {
     const currentSortBy = sortBy ?? (sortModel.length > 0 ? sortModel[0].colId : undefined)
     const currentSortOrder = sortOrder ?? (sortModel.length > 0 ? sortModel[0].sort : 'asc')
     
+    // 处理多品种选择
+    let symbolParam = "__ALL__"
+    if (symbols && symbols.length > 0) {
+      if (symbols.includes("__ALL__")) {
+        symbolParam = "__ALL__"
+      } else {
+        symbolParam = symbols.join(",")
+      }
+    }
+    
     const params = new URLSearchParams({
       server: server,
-      symbol: symbol,
+      symbols: symbolParam,
       page: currentPage.toString(),
       page_size: currentPageSize.toString(),
     })
@@ -501,7 +520,7 @@ export default function CustomerPnLMonitor() {
     setTotalPages(payload.total_pages)
     
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbol, pageIndex, pageSize, sortModel, userGroups])
+  }, [server, symbols, pageIndex, pageSize, sortModel, userGroups])
 
   const refreshNow = useCallback(async () => {
     setIsRefreshing(true)
@@ -510,10 +529,11 @@ export default function CustomerPnLMonitor() {
       setSuccessMessage(null)
       
       // 1) 执行ETL同步（现在是同步等待完成）
+      // 对于刷新操作，始终同步所有产品数据
       const refreshResponse = await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ server, symbol }),
+        body: JSON.stringify({ server, symbol: "__ALL__" }),
       }, 30000)
       
       const refreshResult = await refreshResponse.json()
@@ -544,7 +564,7 @@ export default function CustomerPnLMonitor() {
     } finally {
       setIsRefreshing(false)
     }
-  }, [fetchData, server, symbol])
+  }, [fetchData, server])
 
   // 监听服务器变化，获取组别列表
   useEffect(() => {
@@ -568,7 +588,7 @@ export default function CustomerPnLMonitor() {
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, symbol, userGroups])
+  }, [pageIndex, pageSize, sortModel, server, symbols, userGroups])
 
   // 观察容器尺寸变化，触发布局与列宽自适应
   useEffect(() => {
@@ -653,19 +673,14 @@ export default function CustomerPnLMonitor() {
               {/* product select */}
               <div className="flex items-center gap-1">
                 <span className="text-sm text-muted-foreground whitespace-nowrap w-12">品种</span>
-                <Select value={symbol} onValueChange={setSymbol}>
-                  <SelectTrigger className="h-9 w-52">
-                    <SelectValue placeholder="选择品种" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__ALL__">全部产品</SelectItem>
-                    <SelectItem value="XAUUSD.kcmc">XAUUSD.kcmc </SelectItem>
-                    <SelectItem value="XAUUSD.kcm">XAUUSD.kcm </SelectItem>
-                    <SelectItem value="XAUUSD">XAUUSD </SelectItem>
-                    <SelectItem value="XAUUSD.cent">XAUUSD.cent</SelectItem>
-                    <SelectItem value="others" disabled>其他（开发中）</SelectItem>
-                  </SelectContent>
-                </Select>
+                <SimpleMultiSelect
+                  options={symbolOptions}
+                  value={symbols}
+                  onValueChange={setSymbols}
+                  placeholder="选择品种..."
+                  searchPlaceholder="搜索品种..."
+                  className="w-52"
+                />
               </div>
 
               {/* user group select */}

@@ -73,7 +73,7 @@ def get_summary(server: str = Query(...), symbol: str = Query(...)) -> PnlSummar
 @router.get("/summary/paginated", response_model=PaginatedPnlSummaryResponse)
 def get_summary_paginated(
     server: str = Query(..., description="服务器名称"),
-    symbol: str = Query(..., description="交易品种，支持'__ALL__'查询所有产品"),
+    symbols: str = Query(..., description="交易品种，支持'__ALL__'查询所有产品，多个品种用逗号分隔"),
     page: int = Query(1, ge=1, description="页码，从1开始"),
     page_size: int = Query(100, ge=1, le=1000, description="每页记录数，1-1000"),
     sort_by: str = Query(None, description="排序字段"),
@@ -119,8 +119,16 @@ def get_summary_paginated(
         if user_groups:
             user_groups_list = [g.strip() for g in user_groups.split(",") if g.strip()]
         
+        # 处理品种参数
+        symbols_list = None
+        if symbols:
+            if symbols == "__ALL__":
+                symbols_list = ["__ALL__"]
+            else:
+                symbols_list = [s.strip() for s in symbols.split(",") if s.strip()]
+        
         rows, total_count, total_pages = get_pnl_summary_paginated(
-            symbol=symbol,
+            symbols=symbols_list,
             page=page,
             page_size=page_size,
             sort_by=sort_by,
@@ -130,7 +138,12 @@ def get_summary_paginated(
         )
         
         # 获取产品配置信息，用于前端格式化显示
-        product_config = get_product_config(symbol)
+        # 对于多品种查询，使用默认配置，或者第一个品种的配置
+        if symbols_list and len(symbols_list) == 1 and symbols_list[0] != "__ALL__":
+            product_config = get_product_config(symbols_list[0])
+        else:
+            # 多品种或全部品种情况下使用默认配置
+            product_config = get_product_config("__DEFAULT__")
         
         return PaginatedPnlSummaryResponse(
             ok=True,
