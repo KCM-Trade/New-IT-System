@@ -98,6 +98,10 @@ def get_summary_paginated(
     - user_groups="__ALL__"：查询所有组别
     - user_groups="group1"：查询单个组别
     - user_groups="group1,group2"：查询多个组别
+    - user_groups="__USER_NAME_TEST__"：查询客户名称包含"test"的记录
+    - user_groups="group1,__USER_NAME_TEST__"：查询组别为group1或客户名称包含"test"的记录
+    - user_groups="__ALL__,__EXCLUDE_USER_NAME_TEST__"：查询所有组别但排除客户名称包含"test"的记录
+    - user_groups="group1,group2,__EXCLUDE_USER_NAME_TEST__"：查询指定组别但排除客户名称包含"test"的记录
     """
     if server != "MT5":
         return PaginatedPnlSummaryResponse(

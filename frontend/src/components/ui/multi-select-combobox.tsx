@@ -63,6 +63,19 @@ export function MultiSelectCombobox({
     const testGroups: GroupOption[] = []
     const allFilteredGroups: GroupOption[] = []
 
+    // 添加特殊的"客户名称含test"选项到test组别
+    const userNameTestOption: GroupOption = {
+      value: "__USER_NAME_TEST__",
+      label: "客户名称含test"
+    }
+
+    // 检查是否应该显示"客户名称含test"选项（基于搜索）
+    const shouldShowUserNameTest = userNameTestOption.label.toLowerCase().includes(searchValue.toLowerCase())
+
+    if (shouldShowUserNameTest) {
+      testGroups.push(userNameTestOption)
+    }
+
     filtered.forEach(option => {
       allFilteredGroups.push(option)
       if (option.label.toLowerCase().includes('test')) {
@@ -71,7 +84,12 @@ export function MultiSelectCombobox({
     })
 
     return {
-      testGroups: testGroups.sort((a, b) => a.label.localeCompare(b.label)),
+      testGroups: testGroups.sort((a, b) => {
+        // "客户名称含test"选项始终在最上方
+        if (a.value === "__USER_NAME_TEST__") return -1
+        if (b.value === "__USER_NAME_TEST__") return 1
+        return a.label.localeCompare(b.label)
+      }),
       allGroups: allFilteredGroups.sort((a, b) => a.label.localeCompare(b.label)),
       hasTestGroups: testGroups.length > 0,
       hasAllGroups: allFilteredGroups.length > 0
@@ -95,21 +113,40 @@ export function MultiSelectCombobox({
     
     if (value.includes("__ALL__")) {
       // 当前是全选状态，切换到具体选择模式
-      if (value.includes(optionValue)) {
-        // 如果要取消选择这个选项，获取所有其他选项
-        const allValues = processedData.allGroups.map(g => g.value)
-        newValue = allValues.filter(v => v !== optionValue)
-      } else {
-        // 这种情况不应该发生，因为全选状态下所有选项都应该被选中
-        const allValues = processedData.allGroups.map(g => g.value)
-        newValue = allValues
+      // 获取所有可能的选项值（包括常规组别和特殊选项）
+      const allRegularValues = processedData.allGroups.map(g => g.value)
+      const allPossibleValues = [...allRegularValues]
+      
+      // 如果特殊的"客户名称含test"选项存在，也加入到所有可能的值中
+      if (processedData.testGroups.some(g => g.value === "__USER_NAME_TEST__")) {
+        allPossibleValues.push("__USER_NAME_TEST__")
+      }
+      
+      // 移除要取消选择的选项
+      newValue = allPossibleValues.filter(v => v !== optionValue)
+      
+      // 特殊处理：如果取消选择的是"客户名称含test"，需要明确排除这类记录
+      if (optionValue === "__USER_NAME_TEST__") {
+        newValue.push("__EXCLUDE_USER_NAME_TEST__")
       }
     } else {
       // 正常的切换逻辑
       if (value.includes(optionValue)) {
         newValue = value.filter(v => v !== optionValue)
+        // 如果取消选择"客户名称含test"，并且当前不是在排除模式，则添加排除标识符
+        if (optionValue === "__USER_NAME_TEST__" && !value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+          // 检查是否已经选择了所有常规组别，如果是，则需要排除客户名称含test
+          const allRegularValues = processedData.allGroups.map(g => g.value)
+          const selectedRegularValues = value.filter(v => v !== "__USER_NAME_TEST__" && v !== "__EXCLUDE_USER_NAME_TEST__")
+          
+          // 如果选择了大部分常规组别，则添加排除标识符
+          if (selectedRegularValues.length >= allRegularValues.length * 0.8) {
+            newValue.push("__EXCLUDE_USER_NAME_TEST__")
+          }
+        }
       } else {
-        newValue = [...value, optionValue]
+        // 添加选项，同时移除可能存在的排除标识符
+        newValue = [...value.filter(v => v !== "__EXCLUDE_USER_NAME_TEST__"), optionValue]
       }
     }
     
@@ -134,17 +171,42 @@ export function MultiSelectCombobox({
     
     if (value.includes("__ALL__")) {
       // 当前是全选状态，切换到取消Test组别的具体选择模式
-      const allValues = processedData.allGroups.map(g => g.value)
-      newValue = allValues.filter(v => !testValues.includes(v))
+      const allRegularGroups = processedData.allGroups.map(g => g.value)
+      const allGroupsIncludingSpecial = [...allRegularGroups]
+      
+      // 如果"客户名称含test"选项存在且在testGroups中，确保它也被考虑
+      if (testValues.includes("__USER_NAME_TEST__") && !allGroupsIncludingSpecial.includes("__USER_NAME_TEST__")) {
+        allGroupsIncludingSpecial.push("__USER_NAME_TEST__")
+      }
+      
+      newValue = allGroupsIncludingSpecial.filter(v => !testValues.includes(v))
+      
+      // 对于test组别中的每个被取消的选项，如果是特殊选项，添加排除标识符
+      if (testValues.includes("__USER_NAME_TEST__")) {
+        newValue.push("__EXCLUDE_USER_NAME_TEST__")
+      }
     } else {
-      const allTestSelected = testValues.every(v => value.includes(v))
+      // 检查当前test组别的选择状态（考虑排除标识符）
+      const actuallySelectedTestCount = testValues.filter(v => {
+        if (v === "__USER_NAME_TEST__" && value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+          return false
+        }
+        return value.includes(v)
+      }).length
+      
+      const allTestSelected = actuallySelectedTestCount === testValues.length && !value.includes("__EXCLUDE_USER_NAME_TEST__")
       
       if (allTestSelected) {
-        // 取消选择所有Test组别
-        newValue = value.filter(v => !testValues.includes(v))
+        // 取消选择所有Test组别（包括特殊选项）
+        newValue = value.filter(v => !testValues.includes(v) && !v.startsWith("__EXCLUDE_"))
+        // 添加排除标识符来排除客户名称含test的记录
+        if (testValues.includes("__USER_NAME_TEST__")) {
+          newValue.push("__EXCLUDE_USER_NAME_TEST__")
+        }
       } else {
-        // 选择所有Test组别
-        newValue = [...new Set([...value, ...testValues])]
+        // 选择所有Test组别（包括特殊选项）
+        newValue = [...value.filter(v => !v.startsWith("__EXCLUDE_")), ...testValues]
+        newValue = [...new Set(newValue)] // 去重
       }
     }
     
@@ -154,17 +216,41 @@ export function MultiSelectCombobox({
 
   // 计算显示文本
   const getDisplayText = () => {
-    if (value.length === 0) return placeholder
-    if (value.includes("__ALL__")) return `全部组别 (${options.length})`
+    // 过滤掉内部标识符，只计算用户可见的选择
+    const visibleValues = value.filter(v => !v.startsWith("__EXCLUDE_"))
     
-    const selectedOptions = options.filter(opt => value.includes(opt.value))
-    if (selectedOptions.length === 0) return placeholder
+    if (visibleValues.length === 0) return placeholder
     
-    return `已选择 ${selectedOptions.length} 个组别`
+    if (visibleValues.includes("__ALL__")) {
+      // 全选状态：包括所有常规组别 + 特殊的"客户名称含test"选项
+      let totalCount = options.length + (processedData.testGroups.some(g => g.value === "__USER_NAME_TEST__") ? 1 : 0)
+      
+      // 如果有排除标识符，减去相应的数量
+      if (value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+        totalCount -= 1
+      }
+      
+      return `全部组别 (${totalCount})`
+    }
+    
+    // 计算选中的常规组别数量
+    const selectedRegularOptions = options.filter(opt => visibleValues.includes(opt.value))
+    // 计算选中的特殊选项数量
+    const selectedSpecialCount = visibleValues.includes("__USER_NAME_TEST__") ? 1 : 0
+    const totalSelected = selectedRegularOptions.length + selectedSpecialCount
+    
+    if (totalSelected === 0) return placeholder
+    
+    return `已选择 ${totalSelected} 个组别`
   }
 
-  // 检查选项是否被选中（考虑"__ALL__"状态）
+  // 检查选项是否被选中（考虑"__ALL__"状态和排除标识符）
   const isOptionSelected = (optionValue: string) => {
+    // 如果有对应的排除标识符，则该选项不应显示为选中
+    if (optionValue === "__USER_NAME_TEST__" && value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+      return false
+    }
+    
     return value.includes("__ALL__") || value.includes(optionValue)
   }
 
@@ -174,12 +260,28 @@ export function MultiSelectCombobox({
     if (testValues.length === 0) return { checked: false, indeterminate: false }
     
     if (value.includes("__ALL__")) {
+      // 全选状态下，如果有排除标识符，需要特殊处理
+      if (value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+        // 检查除了被排除的选项外，其他test选项是否都被选中
+        const nonExcludedTestValues = testValues.filter(v => v !== "__USER_NAME_TEST__")
+        if (nonExcludedTestValues.length === 0) return { checked: false, indeterminate: false }
+        return { checked: false, indeterminate: true }
+      }
       return { checked: true, indeterminate: false }
     }
     
-    const selectedTestCount = testValues.filter(v => value.includes(v)).length
+    // 计算实际选中的test选项数量（排除被排除的选项）
+    const selectedTestCount = testValues.filter(v => {
+      if (v === "__USER_NAME_TEST__" && value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+        return false
+      }
+      return value.includes(v)
+    }).length
+    
     if (selectedTestCount === 0) return { checked: false, indeterminate: false }
-    if (selectedTestCount === testValues.length) return { checked: true, indeterminate: false }
+    if (selectedTestCount === testValues.length && !value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+      return { checked: true, indeterminate: false }
+    }
     return { checked: false, indeterminate: true }
   }
 

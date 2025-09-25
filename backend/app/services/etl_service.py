@@ -51,6 +51,7 @@ PRODUCT_CONFIGS = {
     'XAUUSD.kcmc': {
         'account_type': 'cent',           # 美分账户
         'volume_divisor': 10000.0,        # 手数换算
+        
         'display_divisor': 100.0,         # 💰 金额显示换算（美分账户需要/100）
         'currency': 'USD',
         'description': '黄金美分账户'

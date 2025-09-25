@@ -94,21 +94,48 @@ def get_pnl_summary_paginated(
     # 用户组别筛选条件
     if user_groups:
         if "__ALL__" in user_groups:
-            # 选择了"全部组别"，不添加筛选条件（查询所有数据）
-            pass
+            # 选择了"全部组别"，检查是否有排除条件
+            if "__EXCLUDE_USER_NAME_TEST__" in user_groups:
+                # 排除客户名称含test的记录
+                where_conditions.append("user_name NOT ILIKE %s")
+                query_params.append("%test%")
+            # 否则不添加筛选条件（查询所有数据）
         elif "__NONE__" in user_groups:
             # 没有选择任何组别，添加永远不匹配的条件（返回0条数据）
             where_conditions.append("1 = 0")
         else:
-            # 选择了具体组别，添加筛选条件
-            if len(user_groups) == 1:
-                where_conditions.append("user_group = %s")
-                query_params.append(user_groups[0])
-            else:
-                # 多个组别用IN查询
-                placeholders = ",".join(["%s"] * len(user_groups))
-                where_conditions.append(f"user_group IN ({placeholders})")
-                query_params.extend(user_groups)
+            # 分离特殊筛选条件和常规组别筛选条件
+            regular_groups = [g for g in user_groups if g not in ["__USER_NAME_TEST__", "__EXCLUDE_USER_NAME_TEST__"]]
+            has_user_name_test = "__USER_NAME_TEST__" in user_groups
+            has_exclude_user_name_test = "__EXCLUDE_USER_NAME_TEST__" in user_groups
+            
+            group_conditions = []
+            
+            # 处理常规组别筛选
+            if regular_groups:
+                if len(regular_groups) == 1:
+                    group_conditions.append("user_group = %s")
+                    query_params.append(regular_groups[0])
+                else:
+                    # 多个组别用IN查询
+                    placeholders = ",".join(["%s"] * len(regular_groups))
+                    group_conditions.append(f"user_group IN ({placeholders})")
+                    query_params.extend(regular_groups)
+            
+            # 处理"客户名称含test"特殊筛选
+            if has_user_name_test:
+                group_conditions.append("user_name ILIKE %s")
+                query_params.append("%test%")
+            
+            # 如果有筛选条件，用OR连接（因为用户可以选择组别OR客户名称含test）
+            if group_conditions:
+                combined_condition = "(" + " OR ".join(group_conditions) + ")"
+                where_conditions.append(combined_condition)
+            
+            # 处理排除客户名称含test的条件（这是AND条件，需要单独处理）
+            if has_exclude_user_name_test:
+                where_conditions.append("user_name NOT ILIKE %s")
+                query_params.append("%test%")
     
     # 构建WHERE子句
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
