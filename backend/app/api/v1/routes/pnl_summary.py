@@ -79,7 +79,8 @@ def get_summary_paginated(
     sort_by: str = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
     customer_id: str = Query(None, description="客户ID筛选，为空则查询所有客户"),
-    user_groups: str = Query(None, description="用户组别筛选，多个组别用逗号分隔，__ALL__表示所有组别")
+    user_groups: str = Query(None, description="用户组别筛选，多个组别用逗号分隔，__ALL__表示所有组别"),
+    search: str = Query(None, description="统一搜索：支持客户ID(精确)或客户名称(模糊)")
 ) -> PaginatedPnlSummaryResponse:
     """分页查询盈亏汇总数据
     
@@ -134,7 +135,8 @@ def get_summary_paginated(
             sort_by=sort_by,
             sort_order=sort_order,
             customer_id=customer_id,
-            user_groups=user_groups_list
+            user_groups=user_groups_list,
+            search=search
         )
         
         # 获取产品配置信息，用于前端格式化显示

@@ -41,7 +41,8 @@ def get_pnl_summary_paginated(
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
     customer_id: Optional[str] = None,
-    user_groups: Optional[List[str]] = None
+    user_groups: Optional[List[str]] = None,
+    search: Optional[str] = None
 ) -> Tuple[List[dict], int, int]:
     """分页查询报表库中的 pnl_summary。
     
@@ -148,6 +149,24 @@ def get_pnl_summary_paginated(
                 where_conditions.append("user_name NOT ILIKE %s")
                 query_params.append("%test%")
     
+    # 构建WHERE子句
+    # 统一搜索参数（支持客户ID精确匹配或客户名称模糊匹配）
+    if search is not None:
+        s = str(search).strip()
+        if s:
+            search_conditions = []
+            # 尝试按数字解析，数字时支持 login 精确匹配
+            try:
+                login_int = int(s)
+                search_conditions.append("login = %s")
+                query_params.append(login_int)
+            except ValueError:
+                pass
+            # 始终允许按名称模糊搜索
+            search_conditions.append("user_name ILIKE %s")
+            query_params.append(f"%{s}%")
+            where_conditions.append("(" + " OR ".join(search_conditions) + ")")
+
     # 构建WHERE子句
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
     

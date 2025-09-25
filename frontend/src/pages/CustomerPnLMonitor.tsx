@@ -2,10 +2,11 @@ import { useMemo } from "react"
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Settings2 } from "lucide-react"
+import { Settings2, Search } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
@@ -87,6 +88,11 @@ export default function CustomerPnLMonitor() {
   const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
   const [availableGroups, setAvailableGroups] = useState<Array<{value: string, label: string}>>([])
   const [isLoadingGroups, setIsLoadingGroups] = useState(false)
+
+  // 统一搜索：客户ID或客户名称（前端输入，后端检索）
+  // fresh grad note: keep two states for debounce - immediate input and debounced value
+  const [searchInput, setSearchInput] = useState("")
+  const [searchDebounced, setSearchDebounced] = useState("")
 
   // 品种选项列表
   const symbolOptions = [
@@ -457,6 +463,14 @@ export default function CustomerPnLMonitor() {
     }
   }, [server])
 
+  // 搜索输入防抖处理（300ms）
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setSearchDebounced(searchInput.trim())
+    }, 300)
+    return () => clearTimeout(handler)
+  }, [searchInput])
+
   // GET 拉取后端数据（分页查询）
   const fetchData = useCallback(async (
     page?: number, 
@@ -503,6 +517,11 @@ export default function CustomerPnLMonitor() {
       // 没有选择任何组别，发送特殊标识符表示返回0条数据
       params.set('user_groups', '__NONE__')
     }
+
+    // 添加统一搜索参数（客户ID精确或客户名称模糊，由后端实现）
+    if (searchDebounced) {
+      params.set('search', searchDebounced)
+    }
     
     const url = `/api/v1/pnl/summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
@@ -520,7 +539,7 @@ export default function CustomerPnLMonitor() {
     setTotalPages(payload.total_pages)
     
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbols, pageIndex, pageSize, sortModel, userGroups])
+  }, [server, symbols, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
 
   const refreshNow = useCallback(async () => {
     setIsRefreshing(true)
@@ -588,7 +607,7 @@ export default function CustomerPnLMonitor() {
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, symbols, userGroups])
+  }, [pageIndex, pageSize, sortModel, server, symbols, userGroups, searchDebounced])
 
   // 观察容器尺寸变化，触发布局与列宽自适应
   useEffect(() => {
@@ -659,7 +678,7 @@ export default function CustomerPnLMonitor() {
               <div className="flex items-center gap-1">
                 <span className="text-sm text-muted-foreground whitespace-nowrap w-12">服务器</span>
                 <Select value={server} onValueChange={setServer}>
-                  <SelectTrigger className="h-9 w-40">
+                  <SelectTrigger className="h-9 w-52">
                     <SelectValue placeholder="选择服务器" />
                   </SelectTrigger>
                   <SelectContent>
@@ -694,6 +713,24 @@ export default function CustomerPnLMonitor() {
                   searchPlaceholder="搜索组别..."
                   className="w-52"
                 />
+              </div>
+
+              {/* unified search: customer id or name */}
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-muted-foreground whitespace-nowrap w-12">搜索</span>
+                <div className="relative w-52">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    value={searchInput}
+                    onChange={(e) => {
+                      setSearchInput(e.target.value)
+                      // when search changes, reset to first page
+                      setPageIndex(0)
+                    }}
+                    placeholder="客户ID或名称..."
+                    className="pl-8 h-9"
+                  />
+                </div>
               </div>
 
             </div>
