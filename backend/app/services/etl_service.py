@@ -65,7 +65,7 @@ PRODUCT_CONFIGS = {
     },
     'XAUUSD': {
         'account_type': 'standard',
-        'volume_divisor': 100.0,
+        'volume_divisor': 10000.0,
         'display_divisor': 1.0,
         'currency': 'USD', 
         'description': '黄金标准'
