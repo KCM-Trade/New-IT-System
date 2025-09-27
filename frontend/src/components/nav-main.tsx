@@ -42,7 +42,7 @@ export function NavMain({
             const isOpen = !!openKeys[item.title]
 
             if (!hasChildren) {
-              const isActive = !!item.url && pathname.startsWith(item.url)
+              const isActive = !!item.url && (pathname === item.url || pathname.startsWith(item.url + "/"))
               return (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
@@ -59,7 +59,7 @@ export function NavMain({
               )
             }
 
-            const groupActive = !!item.children?.some((c) => pathname.startsWith(c.url))
+            const groupActive = !!item.children?.some((c) => pathname === c.url || pathname.startsWith(c.url + "/"))
             return (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton
@@ -78,7 +78,7 @@ export function NavMain({
                 >
                   <SidebarMenuSub>
                     {item.children!.map((sub) => {
-                      const isSubActive = pathname.startsWith(sub.url)
+                      const isSubActive = pathname === sub.url || pathname.startsWith(sub.url + "/")
                       return (
                         <SidebarMenuSubItem key={sub.title}>
                           <SidebarMenuSubButton asChild className={cn(isSubActive && "bg-muted shadow-sm")}>

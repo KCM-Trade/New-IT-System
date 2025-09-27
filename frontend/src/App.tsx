@@ -17,6 +17,7 @@ const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
 const ClientTradingAnalyticsPage = lazy(() => import("@/pages/ClientTradingAnalytics"))
 const CustomerPnLMonitorPage = lazy(() => import("@/pages/CustomerPnLMonitor"))
+const CustomerPnLMonitorV2Page = lazy(() => import("@/pages/CustomerPnLMonitorV2"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
 const SettingsPage = lazy(() => import("@/pages/Settings"))
 const SearchPage = lazy(() => import("@/pages/Search"))
@@ -42,7 +43,7 @@ function App() {
                 </PrivateRoute>
               }
             >
-              <Route index element={<CustomerPnLMonitorPage />} />
+              <Route index element={<CustomerPnLMonitorV2Page />} />
               <Route path="template" element={<DashboardTemplatePage />} />
               <Route path="gold" element={<GoldQuotePage />} />
               <Route path="basis" element={<BasisPage />} />
@@ -56,6 +57,7 @@ function App() {
               <Route path="profit" element={<ProfitPage />} />
               <Route path="client-trading" element={<ClientTradingAnalyticsPage />} />
               <Route path="customer-pnl-monitor" element={<CustomerPnLMonitorPage />} />
+              <Route path="customer-pnl-monitor-v2" element={<CustomerPnLMonitorV2Page />} />
               {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />
               <Route path="search" element={<SearchPage />} />

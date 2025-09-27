@@ -20,6 +20,7 @@ const titleMap: Record<string, string> = {
   "/profit": "利润分析",
   "/client-trading": "客户交易分析",
   "/customer-pnl-monitor": "客户盈亏监控",
+  "/customer-pnl-monitor-v2": "客户盈亏监控（V2）",
   "/settings": "Settings",
   "/search": "Search",
 }
