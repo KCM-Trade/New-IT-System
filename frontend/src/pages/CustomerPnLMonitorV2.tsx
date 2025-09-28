@@ -10,7 +10,7 @@ import { Settings2, Search } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
-import { SimpleMultiSelect } from "@/components/ui/simple-multi-select"
+ 
 
 // 产品配置接口
 interface ProductConfig {
@@ -21,22 +21,50 @@ interface ProductConfig {
   description: string
 }
 
-// backend API response schema aligned with reporting pnl_summary
+// backend API response schema aligned with public.pnl_user_summary
 interface PnlSummaryRow {
+  // 主键与维度
   login: number | string
   symbol: string
-  user_group?: string | null
+
+  // 用户信息
   user_name?: string | null
+  user_group?: string | null
   country?: string | null
-  balance?: number | string | null
-  total_closed_trades: number | string
-  buy_trades_count: number | string
-  sell_trades_count: number | string
-  total_closed_volume: number | string
-  buy_closed_volume: number | string
-  sell_closed_volume: number | string
-  total_closed_pnl: number | string
-  floating_pnl: number | string
+  zipcode?: string | null
+  user_id?: number | string | null
+
+  // 账户与浮盈
+  user_balance: number | string
+  user_credit: number | string
+  positions_floating_pnl: number | string
+  equity: number | string
+
+  // 平仓统计（SELL，平多）
+  closed_sell_volume_lots: number | string
+  closed_sell_count: number | string
+  closed_sell_profit: number | string
+  closed_sell_swap: number | string
+  closed_sell_overnight_count: number | string
+  closed_sell_overnight_volume_lots: number | string
+
+  // 平仓统计（BUY，平空）
+  closed_buy_volume_lots: number | string
+  closed_buy_count: number | string
+  closed_buy_profit: number | string
+  closed_buy_swap: number | string
+  closed_buy_overnight_count: number | string
+  closed_buy_overnight_volume_lots: number | string
+
+  // 佣金 & 资金
+  total_commission: number | string
+  deposit_count: number | string
+  deposit_amount: number | string
+  withdrawal_count: number | string
+  withdrawal_amount: number | string
+  net_deposit: number | string
+
+  // 审计
   last_updated?: string | null
 }
 
@@ -80,9 +108,8 @@ function fetchWithTimeout(url: string, options: any = {}, timeout = 15000) {
 
 export default function CustomerPnLMonitorV2() {
   const { theme } = useTheme()
-  // server/product filters
+  // server filter
   const [server, setServer] = useState<string>("MT5")
-  const [symbols, setSymbols] = useState<string[]>(["__ALL__"])
   
   // 用户组别筛选
   const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
@@ -94,18 +121,12 @@ export default function CustomerPnLMonitorV2() {
   const [searchInput, setSearchInput] = useState("")
   const [searchDebounced, setSearchDebounced] = useState("")
 
-  // 品种选项列表
-  const symbolOptions = [
-    { value: "XAUUSD.kcmc", label: "XAUUSD.kcmc " },
-    { value: "XAUUSD.kcm", label: "XAUUSD.kcm " },
-    { value: "XAUUSD", label: "XAUUSD " },
-    { value: "XAUUSD.cent", label: "XAUUSD.cent " },
-  ]
+  
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null)
@@ -121,21 +142,42 @@ export default function CustomerPnLMonitorV2() {
   const [sortModel, setSortModel] = useState<any[]>([])
   // 列可见性（供社区版列显示切换用）
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
+    // 默认显示的列：在这里调整 true/false 即可控制“默认显示”
     login: true,
-    user_name: true,
-    symbol: true,
-    balance: true,
-    total_closed_pnl: true,
-    floating_pnl: true,
-    total_closed_volume: false,
-    total_closed_trades: false,
-    last_updated: true,
+    user_name: false,
     user_group: true,
+    symbol: false,
     country: false,
-    buy_trades_count: false,
-    sell_trades_count: false,
-    buy_closed_volume: false,
-    sell_closed_volume: false,
+    zipcode: true,
+    user_id: false,
+
+    user_balance: true,
+    user_credit: false,
+    positions_floating_pnl: true,
+    equity: false,
+
+    closed_sell_volume_lots: false,
+    closed_sell_count: false,
+    closed_sell_profit: false,
+    closed_sell_swap: false,
+    closed_sell_overnight_count: false,
+    closed_sell_overnight_volume_lots: false,
+
+    closed_buy_volume_lots: false,
+    closed_buy_count: false,
+    closed_buy_profit: false,
+    closed_buy_swap: false,
+    closed_buy_overnight_count: false,
+    closed_buy_overnight_volume_lots: false,
+
+    total_commission: true,
+    deposit_count: false,
+    deposit_amount: true,
+    withdrawal_count: false,
+    withdrawal_amount: true,
+    net_deposit: true,
+
+    last_updated: true,
   })
   const [gridApi, setGridApi] = useState<any>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
@@ -144,7 +186,7 @@ export default function CustomerPnLMonitorV2() {
   const columnDefs = useMemo<ColDef<PnlSummaryRow>[]>(() => [
     {
       field: "login",
-      headerName: "客户ID",
+      headerName: "账户ID",
       width: 120,
       minWidth: 100,
       maxWidth: 200,
@@ -193,7 +235,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "user_group",
-      headerName: "组别",
+      headerName: "Group",
       width: 140,
       minWidth: 120,
       maxWidth: 220,
@@ -218,8 +260,34 @@ export default function CustomerPnLMonitorV2() {
       hide: !columnVisibility.country,
     },
     {
+      field: "zipcode",
+      headerName: "ZipCode",
+      width: 120,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-muted-foreground">{params.value || ""}</span>
+      ),
+      hide: !columnVisibility.zipcode,
+    },
+    {
+      field: "user_id",
+      headerName: "ClientID",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-muted-foreground">{params.value || ""}</span>
+      ),
+      hide: !columnVisibility.user_id,
+    },
+    {
       field: "symbol",
-      headerName: "交易产品",
+      headerName: "Symbol",
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -233,8 +301,8 @@ export default function CustomerPnLMonitorV2() {
       hide: !columnVisibility.symbol,
     },
     {
-      field: "balance",
-      headerName: "余额",
+      field: "user_balance",
+      headerName: "balance",
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -250,30 +318,10 @@ export default function CustomerPnLMonitorV2() {
           </span>
         )
       },
-      hide: !columnVisibility.balance,
+      hide: !columnVisibility.user_balance,
     },
     {
-      field: "total_closed_pnl",
-      headerName: "平仓总盈亏",
-      width: 150,
-      minWidth: 120,
-      maxWidth: 200,
-      sortable: true,
-      filter: true,
-      cellRenderer: (params: any) => {
-        const value = toNumber(params.value)
-        return (
-          <span 
-            className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
-          >
-            {formatCurrency(value, productConfig || undefined)}
-          </span>
-        )
-      },
-      hide: !columnVisibility.total_closed_pnl,
-    },
-    {
-      field: "floating_pnl",
+      field: "positions_floating_pnl",
       headerName: "持仓浮动盈亏",
       width: 150,
       minWidth: 120,
@@ -290,11 +338,32 @@ export default function CustomerPnLMonitorV2() {
           </span>
         )
       },
-      hide: !columnVisibility.floating_pnl,
+      hide: !columnVisibility.positions_floating_pnl,
     },
     {
-      field: "total_closed_volume",
-      headerName: "总成交量",
+      field: "equity",
+      headerName: "equity",
+      width: 150,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span 
+            className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+          >
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.equity,
+    },
+    // SELL 平仓统计
+    {
+      field: "closed_sell_volume_lots",
+      headerName: "closed_sell_volume_lots",
       width: 120,
       minWidth: 90,
       maxWidth: 150,
@@ -305,11 +374,11 @@ export default function CustomerPnLMonitorV2() {
           {toNumber(params.value).toLocaleString()}
         </span>
       ),
-      hide: !columnVisibility.total_closed_volume,
+      hide: !columnVisibility.closed_sell_volume_lots,
     },
     {
-      field: "buy_closed_volume",
-      headerName: "买单成交量",
+      field: "closed_sell_count",
+      headerName: "closed_sell_count",
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -320,11 +389,47 @@ export default function CustomerPnLMonitorV2() {
           {toNumber(params.value).toLocaleString()}
         </span>
       ),
-      hide: !columnVisibility.buy_closed_volume,
+      hide: !columnVisibility.closed_sell_count,
     },
     {
-      field: "sell_closed_volume",
-      headerName: "卖单成交量",
+      field: "closed_sell_profit",
+      headerName: "closed_sell_profit",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.closed_sell_profit,
+    },
+    {
+      field: "closed_sell_swap",
+      headerName: "closed_sell_swap",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.closed_sell_swap,
+    },
+    {
+      field: "closed_sell_overnight_count",
+      headerName: "closed_sell_overnight_count",
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -335,52 +440,206 @@ export default function CustomerPnLMonitorV2() {
           {toNumber(params.value).toLocaleString()}
         </span>
       ),
-      hide: !columnVisibility.sell_closed_volume,
+      hide: !columnVisibility.closed_sell_overnight_count,
     },
     {
-      field: "total_closed_trades",
-      headerName: "平仓交易笔数",
+      field: "closed_sell_overnight_volume_lots",
+      headerName: "closed_sell_overnight_volume_lots",
+      width: 160,
+      minWidth: 120,
+      maxWidth: 220,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.closed_sell_overnight_volume_lots,
+    },
+    // BUY 平仓统计
+    {
+      field: "closed_buy_volume_lots",
+      headerName: "closed_buy_volume_lots",
       width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.closed_buy_volume_lots,
+    },
+    {
+      field: "closed_buy_count",
+      headerName: "closed_buy_count",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.closed_buy_count,
+    },
+    {
+      field: "closed_buy_profit",
+      headerName: "closed_buy_profit",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.closed_buy_profit,
+    },
+    {
+      field: "closed_buy_swap",
+      headerName: "closed_buy_swap",
+      width: 140,
+      minWidth: 100,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.closed_buy_swap,
+    },
+    {
+      field: "closed_buy_overnight_count",
+      headerName: "closed_buy_overnight_count",
+      width: 160,
+      minWidth: 120,
+      maxWidth: 220,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.closed_buy_overnight_count,
+    },
+    {
+      field: "closed_buy_overnight_volume_lots",
+      headerName: "closed_buy_overnight_volume_lots",
+      width: 160,
+      minWidth: 120,
+      maxWidth: 220,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right tabular-nums">
+          {toNumber(params.value).toLocaleString()}
+        </span>
+      ),
+      hide: !columnVisibility.closed_buy_overnight_volume_lots,
+    },
+    // 佣金 & 资金
+    {
+      field: "total_commission",
+      headerName: "total_commission",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className="text-right">{formatCurrency(value, productConfig || undefined)}</span>
+        )
+      },
+      hide: !columnVisibility.total_commission,
+    },
+    {
+      field: "deposit_count",
+      headerName: "入金笔数",
+      width: 120,
       minWidth: 100,
       maxWidth: 180,
       sortable: true,
       filter: true,
       cellRenderer: (params: any) => (
-        <span className="text-right tabular-nums">
-          {toNumber(params.value).toLocaleString()}
-        </span>
+        <span className="text-right tabular-nums">{toNumber(params.value).toLocaleString()}</span>
       ),
-      hide: !columnVisibility.total_closed_trades,
+      hide: !columnVisibility.deposit_count,
     },
     {
-      field: "buy_trades_count",
-      headerName: "买单笔数",
+      field: "deposit_amount",
+      headerName: "入金金额",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="text-right">{formatCurrency(toNumber(params.value), productConfig || undefined)}</span>
+      ),
+      hide: !columnVisibility.deposit_amount,
+    },
+    {
+      field: "withdrawal_count",
+      headerName: "出金笔数",
       width: 120,
-      minWidth: 90,
+      minWidth: 100,
       maxWidth: 180,
       sortable: true,
       filter: true,
       cellRenderer: (params: any) => (
-        <span className="text-right tabular-nums">
-          {toNumber(params.value).toLocaleString()}
-        </span>
+        <span className="text-right tabular-nums">{toNumber(params.value).toLocaleString()}</span>
       ),
-      hide: !columnVisibility.buy_trades_count,
+      hide: !columnVisibility.withdrawal_count,
     },
     {
-      field: "sell_trades_count",
-      headerName: "卖单笔数",
-      width: 120,
-      minWidth: 90,
-      maxWidth: 180,
+      field: "withdrawal_amount",
+      headerName: "出金金额",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
       sortable: true,
       filter: true,
       cellRenderer: (params: any) => (
-        <span className="text-right tabular-nums">
-          {toNumber(params.value).toLocaleString()}
-        </span>
+        <span className="text-right">{formatCurrency(toNumber(params.value), productConfig || undefined)}</span>
       ),
-      hide: !columnVisibility.sell_trades_count,
+      hide: !columnVisibility.withdrawal_amount,
+    },
+    {
+      field: "net_deposit",
+      headerName: "net_deposit",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.net_deposit,
     },
     {
       field: "last_updated",
@@ -478,24 +737,19 @@ export default function CustomerPnLMonitorV2() {
     sortBy?: string, 
     sortOrder?: string
   ) => {
+    // 非 MT5 服务器：直接显示无数据并跳过请求
+    if (server !== "MT5") {
+      setTotalCount(0)
+      setTotalPages(0)
+      return []
+    }
+
     const currentPage = page ?? pageIndex + 1
     const currentPageSize = newPageSize ?? pageSize
     const currentSortBy = sortBy ?? (sortModel.length > 0 ? sortModel[0].colId : undefined)
     const currentSortOrder = sortOrder ?? (sortModel.length > 0 ? sortModel[0].sort : 'asc')
     
-    // 处理多品种选择
-    let symbolParam = "__ALL__"
-    if (symbols && symbols.length > 0) {
-      if (symbols.includes("__ALL__")) {
-        symbolParam = "__ALL__"
-      } else {
-        symbolParam = symbols.join(",")
-      }
-    }
-    
     const params = new URLSearchParams({
-      server: server,
-      symbols: symbolParam,
       page: currentPage.toString(),
       page_size: currentPageSize.toString(),
     })
@@ -522,68 +776,25 @@ export default function CustomerPnLMonitorV2() {
     if (searchDebounced) {
       params.set('search', searchDebounced)
     }
-    
-    const url = `/api/v1/pnl/summary/paginated?${params.toString()}`
+
+    // 切换为新的 ETL API（直查 PostgreSQL 的 pnl_user_summary）
+    const url = `/api/v1/etl/pnl-user-summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const payload = (await res.json()) as PaginatedPnlSummaryResponse
     if (!payload?.ok) throw new Error(payload?.error || "加载失败")
     
-    // 设置产品配置
-    if (payload.product_config) {
-      setProductConfig(payload.product_config)
-    }
+    // 新接口不返回产品配置，显式清空以避免沿用旧值
+    setProductConfig(null)
     
     // 设置分页信息
     setTotalCount(payload.total)
     setTotalPages(payload.total_pages)
     
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, symbols, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
+  }, [server, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
 
-  const refreshNow = useCallback(async () => {
-    setIsRefreshing(true)
-    try {
-      setError(null)
-      setSuccessMessage(null)
-      
-      // 1) 执行ETL同步（现在是同步等待完成）
-      // 对于刷新操作，始终同步所有产品数据
-      const refreshResponse = await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ server, symbol: "__ALL__" }),
-      }, 30000)
-      
-      const refreshResult = await refreshResponse.json()
-      
-      if (refreshResult.status === "success") {
-        const details: string[] = []
-        if (typeof refreshResult.processed_rows === 'number') {
-          details.push(`处理了 ${refreshResult.processed_rows} 行数据`)
-        }
-        if (typeof refreshResult.duration_seconds === 'number') {
-          details.push(`耗时 ${Number(refreshResult.duration_seconds).toFixed(1)} 秒`)
-        }
-        const msg = details.length > 0 ? `${refreshResult.message} (${details.join(', ')})` : refreshResult.message
-        setSuccessMessage(msg)
-      } else {
-        setSuccessMessage(null)
-        setError(`${refreshResult.message}${refreshResult.error_details ? `: ${refreshResult.error_details}` : ''}`)
-      }
-      
-      // 2) 拉取最新数据
-      const data = await fetchData()
-      setRows(data)
-      setLastUpdated(new Date())
-      
-    } catch (e) {
-      setSuccessMessage(null)
-      setError(e instanceof Error ? e.message : "刷新失败")
-    } finally {
-      setIsRefreshing(false)
-    }
-  }, [fetchData, server])
+  
 
   // 监听服务器变化，获取组别列表
   useEffect(() => {
@@ -607,7 +818,7 @@ export default function CustomerPnLMonitorV2() {
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, symbols, userGroups, searchDebounced])
+  }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced])
 
   // 观察容器尺寸变化，触发布局与列宽自适应
   useEffect(() => {
@@ -689,18 +900,7 @@ export default function CustomerPnLMonitorV2() {
                 </Select>
               </div>
 
-              {/* product select */}
-              <div className="flex items-center gap-1">
-                <span className="text-sm text-muted-foreground whitespace-nowrap w-12">品种</span>
-                <SimpleMultiSelect
-                  options={symbolOptions}
-                  value={symbols}
-                  onValueChange={setSymbols}
-                  placeholder="选择品种..."
-                  searchPlaceholder="搜索品种..."
-                  className="w-52"
-                />
-              </div>
+              {/* product select removed as requested */}
 
               {/* user group select */}
               <div className="flex items-center gap-1">
@@ -737,8 +937,8 @@ export default function CustomerPnLMonitorV2() {
 
             {/* actions */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-              <Button onClick={refreshNow} disabled={isRefreshing} className="h-9 w-full sm:w-auto">
-                {isRefreshing ? "同步数据中..." : "立即刷新"}
+              <Button disabled className="h-9 w-full sm:w-auto" title="暂未接入API，刷新已禁用">
+                刷新已禁用
               </Button>
             </div>
           </div>
@@ -800,21 +1000,36 @@ export default function CustomerPnLMonitorV2() {
                   <DropdownMenuSeparator />
                   {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
                     const columnLabels: Record<string, string> = {
-                      login: "客户ID",
+                      login: "账户ID",
                       user_name: "客户名称",
-                      symbol: "交易产品",
-                      balance: "余额",
-                      total_closed_pnl: "平仓总盈亏",
-                      floating_pnl: "持仓浮动盈亏",
-                      total_closed_volume: "总成交量",
-                      buy_closed_volume: "买单成交量",
-                      sell_closed_volume: "卖单成交量",
-                      total_closed_trades: "平仓交易笔数",
-                      buy_trades_count: "买单笔数",
-                      sell_trades_count: "卖单笔数",
-                      last_updated: "更新时间",
-                      user_group: "组别",
+                      user_group: "Group",
+                      symbol: "Symbol",
                       country: "国家/地区",
+                      zipcode: "ZipCode",
+                      user_id: "ClientID",
+                      user_balance: "balance",
+                      user_credit: "credit",
+                      positions_floating_pnl: "持仓浮动盈亏",
+                      equity: "equity",
+                      closed_sell_volume_lots: "closed_sell_volume_lots",
+                      closed_sell_count: "closed_sell_count",
+                      closed_sell_profit: "closed_sell_profit",
+                      closed_sell_swap: "closed_sell_swap",
+                      closed_sell_overnight_count: "closed_sell_overnight_count",
+                      closed_sell_overnight_volume_lots: "closed_sell_overnight_volume_lots",
+                      closed_buy_volume_lots: "closed_buy_volume_lots",
+                      closed_buy_count: "closed_buy_count",
+                      closed_buy_profit: "closed_buy_profit",
+                      closed_buy_swap: "closed_buy_swap",
+                      closed_buy_overnight_count: "closed_buy_overnight_count",
+                      closed_buy_overnight_volume_lots: "closed_buy_overnight_volume_lots",
+                      total_commission: "total_commission",
+                      deposit_count: "入金笔数",
+                      deposit_amount: "入金金额",
+                      withdrawal_count: "出金笔数",
+                      withdrawal_amount: "出金金额",
+                      net_deposit: "net_deposit",
+                      last_updated: "更新时间",
                     }
                     return (
                       <DropdownMenuCheckboxItem
@@ -969,6 +1184,7 @@ export default function CustomerPnLMonitorV2() {
     </div>
   )
 }
+
 
 
 
