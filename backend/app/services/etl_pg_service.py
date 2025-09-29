@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
+from datetime import datetime as _dt
 import math
 import os
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import mysql.connector
 
 
 def _pg_mt5_dsn() -> str:
@@ -39,7 +41,7 @@ def get_pnl_user_summary_paginated(
         "closed_buy_volume_lots", "closed_buy_count", "closed_buy_profit", "closed_buy_swap",
         "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
         "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
-        "withdrawal_amount", "net_deposit", "last_updated",
+        "withdrawal_amount", "net_deposit", "overnight_volume_ratio", "last_updated",
     }
 
     where_conditions: List[str] = []
@@ -65,14 +67,24 @@ def get_pnl_user_summary_paginated(
 
                 group_conditions: List[str] = []
 
-                if regular_groups:
-                    if len(regular_groups) == 1:
+                # 支持 'manager' 虚拟组别：匹配以 'managers\' 开头的真实组别
+                include_manager = any(g.lower() == 'manager' for g in regular_groups)
+                exact_groups = [g for g in regular_groups if g.lower() != 'manager']
+
+                if exact_groups:
+                    if len(exact_groups) == 1:
                         group_conditions.append("user_group = %s")
-                        params.append(regular_groups[0])
+                        params.append(exact_groups[0])
                     else:
-                        placeholders = ",".join(["%s"] * len(regular_groups))
+                        placeholders = ",".join(["%s"] * len(exact_groups))
                         group_conditions.append(f"user_group IN ({placeholders})")
-                        params.extend(regular_groups)
+                        params.extend(exact_groups)
+
+                if include_manager:
+                    # ILIKE 前缀匹配 'managers\%'; 指定 ESCAPE 字符避免 \
+                    # 对 % 产生转义，确保 % 作为通配符生效
+                    group_conditions.append("user_group ILIKE %s ESCAPE '|'")
+                    params.append("managers\\%")
 
                 if has_user_name_test:
                     group_conditions.append("user_name ILIKE %s")
@@ -111,7 +123,7 @@ def get_pnl_user_summary_paginated(
         "closed_buy_volume_lots, closed_buy_count, closed_buy_profit, closed_buy_swap, "
         "closed_buy_overnight_count, closed_buy_overnight_volume_lots, "
         "total_commission, deposit_count, deposit_amount, withdrawal_count, withdrawal_amount, net_deposit, "
-        "last_updated "
+        "overnight_volume_ratio, last_updated "
         "FROM public.pnl_user_summary" + where_clause
     )
 
@@ -143,7 +155,7 @@ def get_pnl_user_summary_paginated(
 
 
 
-def get_etl_watermark_last_updated(dataset: str = "pnl_user_summary") -> Optional["datetime"]:
+def get_etl_watermark_last_updated(dataset: str = "pnl_user_summary") -> Optional[_dt]:
     """查询 public.etl_watermarks 中指定 dataset 的 last_updated（UTC+0）
 
     返回 None 表示不存在记录。
@@ -157,4 +169,380 @@ def get_etl_watermark_last_updated(dataset: str = "pnl_user_summary") -> Optiona
             )
             row = cur.fetchone()
             return row[0] if row else None
+
+
+def get_user_groups_from_user_summary() -> List[str]:
+    """从 public.pnl_user_summary 去重获取组别，并将以 'managers\' 开头的归并为 'manager'。
+
+    Returns:
+        List[str]: 归一化后的组别列表，按字母排序（不区分大小写）。
+    """
+    dsn = _pg_mt5_dsn()
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT user_group
+                FROM public.pnl_user_summary
+                WHERE user_group IS NOT NULL
+                  AND TRIM(user_group) != ''
+                """
+            )
+            rows = cur.fetchall()
+
+    normalized: List[str] = []
+    for r in rows:
+        g = str(r[0]).strip()
+        if g.lower().startswith('managers\\'):
+            normalized.append('manager')
+        else:
+            normalized.append(g)
+
+    # 去重并按不区分大小写排序
+    dedup = sorted(set(normalized), key=lambda s: s.lower())
+    return dedup
+
+
+# ------------------- Incremental refresh (MT5) -------------------
+
+def _pg_mt5_dsn_forced_db(dbname: str) -> str:
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = int(os.getenv("POSTGRES_PORT", "5432"))
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    return f"host={host} port={port} dbname={dbname} user={user} password={password}"
+
+
+def _mysql_mt5_cfg() -> Dict[str, Any]:
+    return {
+        "host": os.getenv("MYSQL_HOST"),
+        "user": os.getenv("MYSQL_USER"),
+        "password": os.getenv("MYSQL_PASSWORD"),
+        "database": os.getenv("MYSQL_DATABASE"),
+        "ssl_ca": os.getenv("MYSQL_SSL_CA"),
+    }
+
+
+def mt5_incremental_refresh() -> Dict[str, Any]:
+    """Run incremental ETL per provided reference design.
+
+    - Force Postgres dbname = MT5_ETL
+    - Use advisory lock to prevent concurrent runs
+    - Ensure etl_watermarks, read last_deal_id
+    - Insert new logins; aggregate deals deltas; upsert; update floating pnl; update watermarks
+    - Return metrics for UI display
+    """
+    pg_dsn = _pg_mt5_dsn_forced_db("MT5_ETL")
+    mysql_cfg = _mysql_mt5_cfg()
+
+    result: Dict[str, Any] = {
+        "success": False,
+        "processed_rows": 0,
+        "duration_seconds": 0.0,
+        "new_max_deal_id": None,
+        "new_trades_count": 0,
+        "floating_only_count": 0,
+        "message": None,
+    }
+
+    import time
+    start_ts = time.time()
+
+    # Basic env validation
+    if not all([mysql_cfg.get("host"), mysql_cfg.get("user"), mysql_cfg.get("password"), mysql_cfg.get("database")]):
+        raise RuntimeError("Missing required MySQL env vars for MT5 incremental refresh")
+
+    with psycopg2.connect(pg_dsn) as pg_conn:
+        pg_conn.autocommit = False
+        with pg_conn.cursor() as cur:
+            # advisory lock
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (937_000_001,))
+            locked = bool(cur.fetchone()[0])
+            pg_conn.commit()
+        if not locked:
+            # another run is in progress
+            result["success"] = True
+            result["message"] = "Another incremental run is in progress"
+            return result
+
+        try:
+            # ensure watermarks table
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.etl_watermarks (
+                      dataset       text        NOT NULL,
+                      partition_key text        NOT NULL DEFAULT 'ALL',
+                      last_deal_id  bigint,
+                      last_time     timestamptz,
+                      last_login    bigint,
+                      last_updated  timestamptz NOT NULL DEFAULT now(),
+                      CONSTRAINT pk_etl_watermarks PRIMARY KEY (dataset, partition_key)
+                    );
+                    """
+                )
+                pg_conn.commit()
+
+            # read last_deal_id
+            last_deal_id: int = 0
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT last_deal_id FROM public.etl_watermarks WHERE dataset=%s AND partition_key=%s",
+                    ("pnl_user_summary", "ALL"),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    last_deal_id = int(row[0])
+                else:
+                    cur.execute(
+                        "INSERT INTO public.etl_watermarks (dataset, partition_key, last_deal_id, last_updated) VALUES (%s,%s,%s, now()) ON CONFLICT DO NOTHING",
+                        ("pnl_user_summary", "ALL", 0),
+                    )
+                    pg_conn.commit()
+                    last_deal_id = 0
+
+            # connect to MySQL
+            mysql_conn = mysql.connector.connect(**mysql_cfg)
+            try:
+                # Step 0: insert new logins skeleton rows
+                to_insert = []
+                with mysql_conn.cursor(dictionary=True) as cur:
+                    cur.execute("SELECT u.Login, u.Name, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit FROM mt5_live.mt5_users u")
+                    for r in cur.fetchall():
+                        to_insert.append((
+                            int(r['Login']), 'ALL', r.get('Name'), r.get('Country'), r.get('ZipCode'), r.get('ID') or None,
+                            r.get('Balance') or 0, r.get('Credit') or 0, 0,
+                        ))
+                if to_insert:
+                    from psycopg2.extras import execute_values
+                    with pg_conn.cursor() as cur:
+                        execute_values(
+                            cur,
+                            "INSERT INTO public.pnl_user_summary (login, symbol, user_name, country, zipcode, user_id, user_balance, user_credit, positions_floating_pnl) VALUES %s "
+                            "ON CONFLICT (login, symbol) DO UPDATE SET "
+                            "  user_name=EXCLUDED.user_name, country=EXCLUDED.country, zipcode=EXCLUDED.zipcode, user_id=EXCLUDED.user_id, "
+                            "  user_balance=EXCLUDED.user_balance, user_credit=EXCLUDED.user_credit",
+                            to_insert,
+                            page_size=5000,
+                        )
+
+                # Step 1: aggregate deltas since last_deal_id
+                sql = """
+                WITH
+                deals_window AS (
+                  SELECT * FROM mt5_live.mt5_deals WHERE Deal > %s
+                ),
+                closed_deals AS (
+                  SELECT
+                    d.Login,
+                    d.Action,
+                    d.Entry,
+                    d.Time AS close_time,
+                    d.VolumeClosed AS volume_closed,
+                    d.Profit,
+                    d.Storage,
+                    (
+                      SELECT MIN(d2.Time)
+                      FROM mt5_live.mt5_deals d2
+                      WHERE d2.Login = d.Login AND d2.PositionID = d.PositionID AND d2.Entry = 0 AND d2.Time <= d.Time
+                    ) AS open_time_for_close
+                  FROM deals_window d
+                  WHERE d.Entry IN (1, 3)
+                ),
+                closed_agg AS (
+                  SELECT
+                    Login,
+                    CASE WHEN Action = 0 THEN 'BUY' WHEN Action = 1 THEN 'SELL' ELSE 'OTHER' END AS side,
+                    SUM(volume_closed) / 10000.0 AS volume_lots,
+                    COUNT(*) AS trade_count,
+                    SUM(Profit) AS profit_sum,
+                    SUM(Storage) AS swap_sum,
+                    SUM(CASE WHEN DATE(close_time) <> DATE(open_time_for_close) THEN 1 ELSE 0 END) AS overnight_count,
+                    SUM(CASE WHEN DATE(close_time) <> DATE(open_time_for_close) THEN volume_closed/10000.0 ELSE 0 END) AS overnight_volume_lots
+                  FROM closed_deals GROUP BY Login, side
+                ),
+                commission_agg AS (
+                  SELECT Login, SUM(Commission) AS total_commission
+                  FROM deals_window
+                  WHERE Entry IN (0, 2) AND Action IN (0, 1)
+                  GROUP BY Login
+                ),
+                balance_agg AS (
+                  SELECT
+                    Login,
+                    SUM(CASE WHEN Action = 2 AND Profit > 0 THEN 1 ELSE 0 END) AS deposit_count,
+                    SUM(CASE WHEN Action = 2 AND Profit > 0 THEN Profit ELSE 0 END) AS deposit_amount,
+                    SUM(CASE WHEN Action = 2 AND Profit < 0 THEN 1 ELSE 0 END) AS withdrawal_count,
+                    SUM(CASE WHEN Action = 2 AND Profit < 0 THEN -Profit ELSE 0 END) AS withdrawal_amount
+                  FROM deals_window GROUP BY Login
+                ),
+                max_deal AS (
+                  SELECT COALESCE(MAX(Deal), %s) AS mx FROM deals_window
+                )
+                SELECT
+                  u.Login,
+                  u.Name          AS user_name,
+                  u.Country,
+                  u.ZipCode       AS zipcode,
+                  u.ID            AS user_id,
+                  u.Balance       AS user_balance,
+                  u.Credit        AS user_credit,
+
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.volume_lots END), 0) AS closed_sell_volume_lots,
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.trade_count END), 0) AS closed_sell_count,
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.profit_sum END), 0) AS closed_sell_profit,
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.swap_sum END), 0) AS closed_sell_swap,
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.overnight_count END), 0) AS closed_sell_overnight_count,
+                  COALESCE(MAX(CASE WHEN ca.side='SELL' THEN ca.overnight_volume_lots END), 0) AS closed_sell_overnight_volume_lots,
+
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.volume_lots END), 0) AS closed_buy_volume_lots,
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.trade_count END), 0) AS closed_buy_count,
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.profit_sum END), 0) AS closed_buy_profit,
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.swap_sum END), 0) AS closed_buy_swap,
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.overnight_count END), 0) AS closed_buy_overnight_count,
+                  COALESCE(MAX(CASE WHEN ca.side='BUY' THEN ca.overnight_volume_lots END), 0) AS closed_buy_overnight_volume_lots,
+
+                  COALESCE(cm.total_commission, 0) AS total_commission,
+                  COALESCE(b.deposit_count, 0)     AS deposit_count,
+                  COALESCE(b.deposit_amount, 0)    AS deposit_amount,
+                  COALESCE(b.withdrawal_count, 0)  AS withdrawal_count,
+                  COALESCE(b.withdrawal_amount, 0) AS withdrawal_amount,
+                  (SELECT mx FROM max_deal) AS max_deal_id
+                FROM mt5_live.mt5_users u
+                LEFT JOIN closed_agg ca ON ca.Login = u.Login
+                LEFT JOIN commission_agg cm ON cm.Login = u.Login
+                LEFT JOIN balance_agg b ON b.Login = u.Login
+                WHERE u.Login IN (
+                  SELECT DISTINCT Login FROM deals_window
+                )
+                GROUP BY u.Login, u.Name, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit, cm.total_commission, b.deposit_count, b.deposit_amount, b.withdrawal_count, b.withdrawal_amount
+                """
+
+                rows: List[Tuple] = []
+                max_deal_id = last_deal_id
+                new_trades_count = 0
+                with mysql_conn.cursor(dictionary=True) as cur:
+                    cur.execute(sql, (last_deal_id, last_deal_id))
+                    fetched = cur.fetchall()
+                    new_trades_count = len(fetched)
+                    for r in fetched:
+                        max_deal_id = max(max_deal_id, int(r['max_deal_id'] or last_deal_id))
+                        rows.append((
+                            int(r['Login']), 'ALL',
+                            r.get('user_name'), r.get('Country'), r.get('ZipCode'), r.get('user_id') or None,
+                            r.get('user_balance') or 0, r.get('user_credit') or 0,
+                            r.get('closed_sell_volume_lots') or 0, r.get('closed_sell_count') or 0, r.get('closed_sell_profit') or 0, r.get('closed_sell_swap') or 0, r.get('closed_sell_overnight_count') or 0, r.get('closed_sell_overnight_volume_lots') or 0,
+                            r.get('closed_buy_volume_lots') or 0, r.get('closed_buy_count') or 0, r.get('closed_buy_profit') or 0, r.get('closed_buy_swap') or 0, r.get('closed_buy_overnight_count') or 0, r.get('closed_buy_overnight_volume_lots') or 0,
+                            r.get('total_commission') or 0,
+                            r.get('deposit_count') or 0, r.get('deposit_amount') or 0, r.get('withdrawal_count') or 0, r.get('withdrawal_amount') or 0
+                        ))
+
+                affected = 0
+                if rows:
+                    from psycopg2.extras import execute_values
+                    upsert_sql = """
+                    INSERT INTO public.pnl_user_summary (
+                      login, symbol,
+                      user_name, country, zipcode, user_id,
+                      user_balance, user_credit,
+                      closed_sell_volume_lots, closed_sell_count, closed_sell_profit, closed_sell_swap, closed_sell_overnight_count, closed_sell_overnight_volume_lots,
+                      closed_buy_volume_lots,  closed_buy_count,  closed_buy_profit,  closed_buy_swap,  closed_buy_overnight_count,  closed_buy_overnight_volume_lots,
+                      total_commission,
+                      deposit_count, deposit_amount, withdrawal_count, withdrawal_amount
+                    ) VALUES %s
+                    ON CONFLICT (login, symbol) DO UPDATE SET
+                      user_name = EXCLUDED.user_name,
+                      country = EXCLUDED.country,
+                      zipcode = EXCLUDED.zipcode,
+                      user_id = EXCLUDED.user_id,
+                      user_balance = EXCLUDED.user_balance,
+                      user_credit = EXCLUDED.user_credit,
+
+                      closed_sell_volume_lots = public.pnl_user_summary.closed_sell_volume_lots + EXCLUDED.closed_sell_volume_lots,
+                      closed_sell_count       = public.pnl_user_summary.closed_sell_count       + EXCLUDED.closed_sell_count,
+                      closed_sell_profit      = public.pnl_user_summary.closed_sell_profit      + EXCLUDED.closed_sell_profit,
+                      closed_sell_swap        = public.pnl_user_summary.closed_sell_swap        + EXCLUDED.closed_sell_swap,
+                      closed_sell_overnight_count = public.pnl_user_summary.closed_sell_overnight_count + EXCLUDED.closed_sell_overnight_count,
+                      closed_sell_overnight_volume_lots = public.pnl_user_summary.closed_sell_overnight_volume_lots + EXCLUDED.closed_sell_overnight_volume_lots,
+
+                      closed_buy_volume_lots  = public.pnl_user_summary.closed_buy_volume_lots  + EXCLUDED.closed_buy_volume_lots,
+                      closed_buy_count        = public.pnl_user_summary.closed_buy_count        + EXCLUDED.closed_buy_count,
+                      closed_buy_profit       = public.pnl_user_summary.closed_buy_profit       + EXCLUDED.closed_buy_profit,
+                      closed_buy_swap         = public.pnl_user_summary.closed_buy_swap         + EXCLUDED.closed_buy_swap,
+                      closed_buy_overnight_count = public.pnl_user_summary.closed_buy_overnight_count + EXCLUDED.closed_buy_overnight_count,
+                      closed_buy_overnight_volume_lots = public.pnl_user_summary.closed_buy_overnight_volume_lots + EXCLUDED.closed_buy_overnight_volume_lots,
+
+                      total_commission        = public.pnl_user_summary.total_commission        + EXCLUDED.total_commission,
+
+                      deposit_count           = public.pnl_user_summary.deposit_count           + EXCLUDED.deposit_count,
+                      deposit_amount          = public.pnl_user_summary.deposit_amount          + EXCLUDED.deposit_amount,
+                      withdrawal_count        = public.pnl_user_summary.withdrawal_count        + EXCLUDED.withdrawal_count,
+                      withdrawal_amount       = public.pnl_user_summary.withdrawal_amount       + EXCLUDED.withdrawal_amount,
+
+                      last_updated = now()
+                    """
+                    with pg_conn.cursor() as cur:
+                        execute_values(cur, upsert_sql, rows, page_size=5000)
+                        affected = len(rows)
+
+                # Step 2: update floating pnl
+                floating_pairs = []
+                with mysql_conn.cursor() as cur:
+                    cur.execute("SELECT Login, SUM(COALESCE(Profit,0) + COALESCE(Storage,0)) AS floating_pnl_total FROM mt5_live.mt5_positions GROUP BY Login")
+                    for r in cur.fetchall():
+                        floating_pairs.append((int(r[0]), float(r[1] or 0.0)))
+
+                if floating_pairs:
+                    from psycopg2.extras import execute_values
+                    with pg_conn.cursor() as cur:
+                        cur.execute("CREATE TEMP TABLE tmp_floating (login bigint, symbol text, floating_pnl numeric) ON COMMIT DROP")
+                        execute_values(cur, "INSERT INTO tmp_floating (login, symbol, floating_pnl) VALUES %s", [(login, 'ALL', pnl) for login, pnl in floating_pairs], page_size=5000)
+                        cur.execute(
+                            "UPDATE public.pnl_user_summary s "
+                            "SET positions_floating_pnl = t.floating_pnl, "
+                            "    last_updated = CASE WHEN s.positions_floating_pnl IS DISTINCT FROM t.floating_pnl THEN now() ELSE s.last_updated END "
+                            "FROM tmp_floating t "
+                            "WHERE s.login = t.login AND s.symbol = t.symbol "
+                            "  AND s.positions_floating_pnl IS DISTINCT FROM t.floating_pnl"
+                        )
+
+                        # watermark last_time for floating
+                        cur.execute(
+                            "INSERT INTO public.etl_watermarks (dataset, partition_key, last_time, last_updated) VALUES (%s,%s, now(), now()) "
+                            "ON CONFLICT (dataset, partition_key) DO UPDATE SET last_time=now(), last_updated=now()",
+                            ("pnl_user_summary", "ALL"),
+                        )
+
+                # Step 3: update watermark last_deal_id
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO public.etl_watermarks (dataset, partition_key, last_deal_id, last_updated) VALUES (%s,%s,%s, now()) "
+                        "ON CONFLICT (dataset, partition_key) DO UPDATE SET last_deal_id=EXCLUDED.last_deal_id, last_updated=now()",
+                        ("pnl_user_summary", "ALL", max_deal_id),
+                    )
+
+                pg_conn.commit()
+                result["success"] = True
+                result["processed_rows"] = affected
+                result["new_max_deal_id"] = max_deal_id
+                result["new_trades_count"] = new_trades_count
+                # floating_only_count 粗略估计：positions 行数（用于展示，不要求精确）
+                result["floating_only_count"] = len(floating_pairs)
+            finally:
+                try:
+                    if mysql_conn and mysql_conn.is_connected():
+                        mysql_conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            pg_conn.rollback()
+            raise
+        finally:
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (937_000_001,))
+                pg_conn.commit()
+
+    result["duration_seconds"] = round(time.time() - start_ts, 3)
+    return result
+
 

@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Settings2, Search } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
-import { ColDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
+import { ColDef, ColGroupDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
  
 
@@ -66,6 +66,9 @@ interface PnlSummaryRow {
 
   // 审计
   last_updated?: string | null
+  
+  // 夜间成交量占比（-1 表示不可计算，0-1 表示比例）
+  overnight_volume_ratio?: number | string
 }
 
 // 分页查询响应接口
@@ -80,6 +83,18 @@ interface PaginatedPnlSummaryResponse {
   product_config?: ProductConfig
   // 后端新增：ETL 水位时间（UTC+0）
   watermark_last_updated?: string | null
+}
+
+// 后端刷新响应接口（简化给前端）
+interface EtlRefreshResponse {
+  status: string
+  message?: string | null
+  server: string
+  processed_rows: number
+  duration_seconds: number
+  new_max_deal_id?: number | null
+  new_trades_count?: number | null
+  floating_only_count?: number | null
 }
 
 function formatCurrency(value: number, productConfig?: ProductConfig) {
@@ -130,9 +145,10 @@ export default function CustomerPnLMonitorV2() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   
   const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null)
-  const AUTO_REFRESH_MS = 10 * 60 * 1000 // 10 minutes
+  // 刷新状态
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshInfo, setRefreshInfo] = useState<string | null>(null)
 
   // 分页状态管理
   const [pageIndex, setPageIndex] = useState(0)
@@ -172,12 +188,18 @@ export default function CustomerPnLMonitorV2() {
     closed_buy_overnight_count: false,
     closed_buy_overnight_volume_lots: false,
 
-    total_commission: true,
+    total_commission: false,
     deposit_count: false,
-    deposit_amount: true,
+    deposit_amount: false,
     withdrawal_count: false,
-    withdrawal_amount: true,
+    withdrawal_amount: false,
     net_deposit: true,
+
+    overnight_volume_ratio: true,
+    overnight_volume_all: true,
+    total_volume_all: true,
+    overnight_order_all: true,
+    total_order_all: true,
 
     last_updated: true,
   })
@@ -185,7 +207,7 @@ export default function CustomerPnLMonitorV2() {
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
 
   // AG Grid 列定义
-  const columnDefs = useMemo<ColDef<PnlSummaryRow>[]>(() => [
+  const columnDefs = useMemo<Array<ColDef<PnlSummaryRow> | ColGroupDef<PnlSummaryRow>>>(() => [
     {
       field: "login",
       headerName: "账户ID",
@@ -644,6 +666,137 @@ export default function CustomerPnLMonitorV2() {
       hide: !columnVisibility.net_deposit,
     },
     {
+      headerName: "过夜",
+      groupId: "overnight",
+      marryChildren: true,
+      children: [
+        // 折叠时仅显示比例
+        {
+          field: "overnight_volume_ratio",
+          headerName: "过夜成交量占比",
+          width: 180,
+          minWidth: 140,
+          maxWidth: 240,
+          sortable: true,
+          filter: true,
+          cellRenderer: (params: any) => {
+            const raw = toNumber(params.value, -1)
+            if (!Number.isFinite(raw) || raw < 0) {
+              return (
+                <span className="text-muted-foreground">-</span>
+              )
+            }
+            const ratio = Math.max(0, Math.min(1, raw))
+            const pct = (ratio * 100).toFixed(1) + '%'
+            return (
+              <span className="tabular-nums">{pct}</span>
+            )
+          },
+          cellStyle: (params: any) => {
+            const raw = toNumber(params.value, -1)
+            if (!Number.isFinite(raw) || raw < 0) {
+              return null
+            }
+            const ratio = Math.max(0, Math.min(1, raw))
+            if (ratio < 0.2) {
+              return { backgroundColor: 'rgba(16,185,129,0.15)', color: '#111' } as any
+            }
+            if (ratio < 0.5) {
+              return { backgroundColor: 'rgba(245,158,11,0.18)', color: '#111' } as any
+            }
+            return { backgroundColor: 'rgba(239,68,68,0.18)', color: '#111' } as any
+          },
+          hide: !columnVisibility.overnight_volume_ratio,
+        },
+        // 展开后显示聚合 Volume
+        {
+          headerName: "手数",
+          columnGroupShow: "open",
+          children: [
+            {
+              colId: "overnight_volume_all",
+              headerName: "过夜订单手数",
+              width: 160,
+              minWidth: 120,
+              maxWidth: 220,
+              sortable: true,
+              filter: true,
+              valueGetter: (p: any) => {
+                const b = toNumber(p.data?.closed_buy_overnight_volume_lots)
+                const s = toNumber(p.data?.closed_sell_overnight_volume_lots)
+                return b + s
+              },
+              cellRenderer: (p: any) => (
+                <span className="text-right tabular-nums">{toNumber(p.value).toLocaleString()}</span>
+              ),
+              hide: !columnVisibility.overnight_volume_all,
+            },
+            {
+              colId: "total_volume_all",
+              headerName: "总订单手数",
+              width: 160,
+              minWidth: 120,
+              maxWidth: 220,
+              sortable: true,
+              filter: true,
+              valueGetter: (p: any) => {
+                const b = toNumber(p.data?.closed_buy_volume_lots)
+                const s = toNumber(p.data?.closed_sell_volume_lots)
+                return b + s
+              },
+              cellRenderer: (p: any) => (
+                <span className="text-right tabular-nums">{toNumber(p.value).toLocaleString()}</span>
+              ),
+              hide: !columnVisibility.total_volume_all,
+            },
+          ],
+        },
+        // 展开后显示聚合 Orders
+        {
+          headerName: "订单",
+          columnGroupShow: "open",
+          children: [
+            {
+              colId: "overnight_order_all",
+              headerName: "过夜订单数",
+              width: 160,
+              minWidth: 120,
+              maxWidth: 220,
+              sortable: true,
+              filter: true,
+              valueGetter: (p: any) => {
+                const b = toNumber(p.data?.closed_buy_overnight_count)
+                const s = toNumber(p.data?.closed_sell_overnight_count)
+                return b + s
+              },
+              cellRenderer: (p: any) => (
+                <span className="text-right tabular-nums">{toNumber(p.value).toLocaleString()}</span>
+              ),
+              hide: !columnVisibility.overnight_order_all,
+            },
+            {
+              colId: "total_order_all",
+              headerName: "总订单数",
+              width: 160,
+              minWidth: 120,
+              maxWidth: 220,
+              sortable: true,
+              filter: true,
+              valueGetter: (p: any) => {
+                const b = toNumber(p.data?.closed_buy_count)
+                const s = toNumber(p.data?.closed_sell_count)
+                return b + s
+              },
+              cellRenderer: (p: any) => (
+                <span className="text-right tabular-nums">{toNumber(p.value).toLocaleString()}</span>
+              ),
+              hide: !columnVisibility.total_order_all,
+            },
+          ],
+        },
+      ],
+    },
+    {
       field: "last_updated",
       headerName: "更新时间",
       width: 180,
@@ -846,48 +999,49 @@ export default function CustomerPnLMonitorV2() {
     return () => ro.disconnect()
   }, [gridApi])
 
-  // auto-refresh: every 10 minutes trigger ETL for all products, then fetch current data
-  useEffect(() => {
-    const t = setInterval(() => {
-      ;(async () => {
-        try {
-          try {
-            const res = await fetchWithTimeout(`/api/v1/pnl/summary/refresh`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", accept: "application/json" },
-              body: JSON.stringify({ server, symbol: "__ALL__" }),
-            }, 30000)
-            const refreshResult = await res.json()
-            if (refreshResult?.status === 'success') {
-              const details: string[] = []
-              if (typeof refreshResult.processed_rows === 'number') {
-                details.push(`处理了 ${refreshResult.processed_rows} 行数据`)
-              }
-              if (typeof refreshResult.duration_seconds === 'number') {
-                details.push(`耗时 ${Number(refreshResult.duration_seconds).toFixed(1)} 秒`)
-              }
-              const msg = details.length > 0 ? `${refreshResult.message} (${details.join(', ')})` : refreshResult.message
-              setSuccessMessage(msg)
-            }
-          } catch {}
-          const data = await fetchData()
-          setRows(data)
-          if (error) setError(null)
-        } catch (e) {
-          setSuccessMessage(null)
-          setError(e instanceof Error ? e.message : "自动刷新失败")
-        }
-      })()
-    }, AUTO_REFRESH_MS)
-    return () => clearInterval(t)
-  }, [fetchData, server])
+  
 
-  // 成功提示自动清除（10秒）
+  // 手动刷新处理（仅 MT5）
+  const handleManualRefresh = useCallback(async () => {
+    if (server !== "MT5") {
+      setError("仅支持 MT5 服务器刷新")
+      return
+    }
+    setIsRefreshing(true)
+    setError(null)
+    try {
+      const res = await fetchWithTimeout(`/api/v1/etl/pnl-user-summary/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ server })
+      }, 60000)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as EtlRefreshResponse
+      const parts: string[] = []
+      if (typeof data.new_trades_count === 'number') parts.push(`处理${data.new_trades_count}新交易`)
+      if (typeof data.floating_only_count === 'number') parts.push(`更新${data.floating_only_count}条浮动盈亏`)
+      if (typeof data.duration_seconds === 'number') parts.push(`耗时 ${Number(data.duration_seconds).toFixed(1)} 秒`)
+      const msg = parts.length > 0 ? parts.join('，') : '刷新完成'
+      setRefreshInfo(msg)
+
+      const refreshed = await fetchData()
+      setRows(refreshed)
+      try { gridApi?.sizeColumnsToFit() } catch {}
+    } catch (e) {
+      setRefreshInfo(null)
+      setRows([])
+      setError(e instanceof Error ? e.message : "刷新失败")
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [server, fetchData, gridApi])
+
+  // 刷新提示自动清除（20秒）
   useEffect(() => {
-    if (!successMessage) return
-    const t = setTimeout(() => setSuccessMessage(null), 10000)
+    if (!refreshInfo) return
+    const t = setTimeout(() => setRefreshInfo(null), 20000)
     return () => clearTimeout(t)
-  }, [successMessage])
+  }, [refreshInfo])
 
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -951,8 +1105,8 @@ export default function CustomerPnLMonitorV2() {
 
             {/* actions */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-              <Button disabled className="h-9 w-full sm:w-auto" title="暂未接入API，刷新已禁用">
-                刷新已禁用
+              <Button onClick={handleManualRefresh} disabled={isRefreshing || server !== 'MT5'} className="h-9 w-full sm:w-auto">
+                {isRefreshing ? '刷新中...' : '刷新'}
               </Button>
             </div>
           </div>
@@ -998,9 +1152,9 @@ export default function CustomerPnLMonitorV2() {
                   }).format(lastUpdated)}
                 </span>
               )}
-              {successMessage && (
+              {refreshInfo && (
                 <span className="px-2 py-1 bg-green-100 dark:bg-green-900/20 rounded text-green-700 dark:text-green-300">
-                  {successMessage}
+                  {refreshInfo}
                 </span>
               )}
             </div>
@@ -1047,6 +1201,11 @@ export default function CustomerPnLMonitorV2() {
                       withdrawal_count: "出金笔数",
                       withdrawal_amount: "出金金额",
                       net_deposit: "net_deposit",
+                      overnight_volume_ratio: "overnight_volume_ratio",
+                      overnight_volume_all: "过夜订单手数",
+                      total_volume_all: "总订单手数",
+                      overnight_order_all: "过夜订单数",
+                      total_order_all: "总订单数",
                       last_updated: "更新时间",
                     }
                     return (
@@ -1079,6 +1238,8 @@ export default function CustomerPnLMonitorV2() {
             rowData={rows}
             columnDefs={columnDefs}
             gridOptions={{ theme: 'legacy' }}
+            headerHeight={32}
+            groupHeaderHeight={36}
             defaultColDef={{
               sortable: true,
               filter: true,

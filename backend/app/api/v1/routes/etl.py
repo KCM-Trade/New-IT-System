@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 
 from app.schemas.etl_pg import (
     PnlUserSummaryItem,
     PaginatedPnlUserSummaryResponse,
+    EtlRefreshRequest,
+    EtlRefreshResponse,
 )
-from app.services.etl_pg_service import get_pnl_user_summary_paginated, get_etl_watermark_last_updated
+from app.services.etl_pg_service import get_pnl_user_summary_paginated, get_etl_watermark_last_updated, mt5_incremental_refresh
 
 
 router = APIRouter(prefix="/etl", tags=["etl"])
@@ -58,4 +60,28 @@ def get_pnl_user_summary(
             error=str(e),
         )
 
+
+@router.post("/pnl-user-summary/refresh", response_model=EtlRefreshResponse)
+def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
+    """Trigger MT5 incremental refresh for pnl_user_summary.
+
+    仅支持 MT5。强制使用 Postgres DB 名称 MT5_ETL（根据用户要求）。
+    """
+    if body.server != "MT5":
+        raise HTTPException(status_code=400, detail="Only MT5 server is supported for refresh")
+    try:
+        r = mt5_incremental_refresh()
+        status = "success" if r.get("success") else "error"
+        return EtlRefreshResponse(
+            status=status,
+            message=r.get("message"),
+            server=body.server,
+            processed_rows=int(r.get("processed_rows") or 0),
+            duration_seconds=float(r.get("duration_seconds") or 0.0),
+            new_max_deal_id=r.get("new_max_deal_id"),
+            new_trades_count=r.get("new_trades_count"),
+            floating_only_count=r.get("floating_only_count"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 

@@ -13,8 +13,8 @@ from app.services.pnl_summary_service import (
     get_pnl_summary_from_db,
     get_pnl_summary_paginated,
     trigger_pnl_summary_sync,
-    get_user_groups,
 )
+from app.services.etl_pg_service import get_user_groups_from_user_summary
 from app.services.etl_service import get_product_config
 
 
@@ -178,7 +178,7 @@ def get_groups(server: str = Query(..., description="服务器名称")) -> List[
         return []
     
     try:
-        groups = get_user_groups()
+        groups = get_user_groups_from_user_summary()
         return groups
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -48,6 +48,9 @@ class PnlUserSummaryItem(BaseModel):
     withdrawal_amount: float = 0.0
     net_deposit: float = 0.0
 
+    # 夜间成交量占比（-1 表示不可计算）
+    overnight_volume_ratio: Optional[float] = None
+
     # 审计
     last_updated: datetime
 
@@ -63,4 +66,19 @@ class PaginatedPnlUserSummaryResponse(BaseModel):
     # ETL 水位时间（来自 public.etl_watermarks.dataset='pnl_user_summary'，UTC+0）
     watermark_last_updated: Optional[datetime] = None
 
+
+
+class EtlRefreshRequest(BaseModel):
+    server: str
+
+
+class EtlRefreshResponse(BaseModel):
+    status: str
+    message: Optional[str] = None
+    server: str
+    processed_rows: int = 0
+    duration_seconds: float = 0.0
+    new_max_deal_id: Optional[int] = None
+    new_trades_count: Optional[int] = None
+    floating_only_count: Optional[int] = None
 
