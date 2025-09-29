@@ -60,5 +60,7 @@ class PaginatedPnlUserSummaryResponse(BaseModel):
     page_size: int = Field(100, description="每页记录数")
     total_pages: int = Field(0, description="总页数")
     error: Optional[str] = None
+    # ETL 水位时间（来自 public.etl_watermarks.dataset='pnl_user_summary'，UTC+0）
+    watermark_last_updated: Optional[datetime] = None
 
 

@@ -78,6 +78,8 @@ interface PaginatedPnlSummaryResponse {
   total_pages: number
   error?: string
   product_config?: ProductConfig
+  // 后端新增：ETL 水位时间（UTC+0）
+  watermark_last_updated?: string | null
 }
 
 function formatCurrency(value: number, productConfig?: ProductConfig) {
@@ -741,6 +743,7 @@ export default function CustomerPnLMonitorV2() {
     if (server !== "MT5") {
       setTotalCount(0)
       setTotalPages(0)
+      setLastUpdated(null)
       return []
     }
 
@@ -786,6 +789,19 @@ export default function CustomerPnLMonitorV2() {
     
     // 新接口不返回产品配置，显式清空以避免沿用旧值
     setProductConfig(null)
+    // 使用后端返回的UTC时间，按UTC解析；渲染时用 Asia/Shanghai 显示
+    if (payload.watermark_last_updated) {
+      try {
+        const raw = String(payload.watermark_last_updated)
+        const iso = raw.endsWith('Z') ? raw : raw + 'Z'
+        const dt = new Date(iso)
+        setLastUpdated(Number.isNaN(dt.getTime()) ? null : dt)
+      } catch {
+        setLastUpdated(null)
+      }
+    } else {
+      setLastUpdated(null)
+    }
     
     // 设置分页信息
     setTotalCount(payload.total)
@@ -810,7 +826,6 @@ export default function CustomerPnLMonitorV2() {
         setError(null)
         const data = await fetchData()
         setRows(data)
-        setLastUpdated(new Date())
         // after data loaded, try fit columns
         try { gridApi?.sizeColumnsToFit() } catch {}
       } catch (e) {
@@ -857,7 +872,6 @@ export default function CustomerPnLMonitorV2() {
           } catch {}
           const data = await fetchData()
           setRows(data)
-          setLastUpdated(new Date())
           if (error) setError(null)
         } catch (e) {
           setSuccessMessage(null)
@@ -977,7 +991,11 @@ export default function CustomerPnLMonitorV2() {
               )}
               {lastUpdated && (
                 <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800/40 rounded">
-                  上次刷新：{lastUpdated.toLocaleString()}
+                  数据更新时间（UTC+8）：{new Intl.DateTimeFormat('zh-CN', {
+                    timeZone: 'Asia/Shanghai',
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                  }).format(lastUpdated)}
                 </span>
               )}
               {successMessage && (

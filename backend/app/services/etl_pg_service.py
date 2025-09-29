@@ -142,3 +142,19 @@ def get_pnl_user_summary_paginated(
             return [dict(r) for r in rows], total_count, total_pages
 
 
+
+def get_etl_watermark_last_updated(dataset: str = "pnl_user_summary") -> Optional["datetime"]:
+    """查询 public.etl_watermarks 中指定 dataset 的 last_updated（UTC+0）
+
+    返回 None 表示不存在记录。
+    """
+    dsn = _pg_mt5_dsn()
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT last_updated FROM public.etl_watermarks WHERE dataset = %s LIMIT 1",
+                (dataset,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+

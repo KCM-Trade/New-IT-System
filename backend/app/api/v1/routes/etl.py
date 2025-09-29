@@ -8,7 +8,7 @@ from app.schemas.etl_pg import (
     PnlUserSummaryItem,
     PaginatedPnlUserSummaryResponse,
 )
-from app.services.etl_pg_service import get_pnl_user_summary_paginated
+from app.services.etl_pg_service import get_pnl_user_summary_paginated, get_etl_watermark_last_updated
 
 
 router = APIRouter(prefix="/etl", tags=["etl"])
@@ -37,6 +37,7 @@ def get_pnl_user_summary(
             search=search,
         )
 
+        watermark = get_etl_watermark_last_updated(dataset="pnl_user_summary")
         return PaginatedPnlUserSummaryResponse(
             ok=True,
             data=[PnlUserSummaryItem(**r) for r in rows],
@@ -44,6 +45,7 @@ def get_pnl_user_summary(
             page=page,
             page_size=page_size,
             total_pages=total_pages,
+            watermark_last_updated=watermark,
         )
     except Exception as e:
         return PaginatedPnlUserSummaryResponse(
