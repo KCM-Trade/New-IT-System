@@ -56,14 +56,18 @@ def get_pnl_user_summary_paginated(
                 if "__EXCLUDE_USER_NAME_TEST__" in cleaned:
                     where_conditions.append("user_name NOT ILIKE %s")
                     params.append("%test%")
+                if "__EXCLUDE_GROUP_NAME_TEST__" in cleaned:
+                    where_conditions.append("user_group NOT ILIKE %s")
+                    params.append("%test%")
             elif "__NONE__" in cleaned:
                 # 显式要求返回 0 行
                 where_conditions.append("1 = 0")
             else:
                 # 分离常规组别与特殊筛选
-                regular_groups = [g for g in cleaned if g not in ["__USER_NAME_TEST__", "__EXCLUDE_USER_NAME_TEST__"]]
+                regular_groups = [g for g in cleaned if g not in ["__USER_NAME_TEST__", "__EXCLUDE_USER_NAME_TEST__", "__EXCLUDE_GROUP_NAME_TEST__"]]
                 has_user_name_test = "__USER_NAME_TEST__" in cleaned
                 has_exclude_user_name_test = "__EXCLUDE_USER_NAME_TEST__" in cleaned
+                has_exclude_group_name_test = "__EXCLUDE_GROUP_NAME_TEST__" in cleaned
 
                 group_conditions: List[str] = []
 
@@ -96,6 +100,9 @@ def get_pnl_user_summary_paginated(
 
                 if has_exclude_user_name_test:
                     where_conditions.append("user_name NOT ILIKE %s")
+                    params.append("%test%")
+                if has_exclude_group_name_test:
+                    where_conditions.append("user_group NOT ILIKE %s")
                     params.append("%test%")
 
     # 统一搜索（login 精确 或 user_name 模糊）

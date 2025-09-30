@@ -132,6 +132,19 @@ export default function CustomerPnLMonitorV2() {
   const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
   const [availableGroups, setAvailableGroups] = useState<Array<{value: string, label: string}>>([])
   const [isLoadingGroups, setIsLoadingGroups] = useState(false)
+  // 组别是否已初始化完毕（用于避免首次加载抖动）
+  const [groupsReady, setGroupsReady] = useState(false)
+
+  // 本地存储 key 生成（按服务器隔离）
+  const storageKeyForGroups = useCallback((srv: string) => `pnl_user_groups:${srv}`, [])
+
+  // 统一处理组别变更：更新状态并持久化
+  const handleUserGroupsChange = useCallback((next: string[]) => {
+    setUserGroups(next)
+    try {
+      localStorage.setItem(storageKeyForGroups(server), JSON.stringify(next))
+    } catch {}
+  }, [server, storageKeyForGroups])
 
   // 统一搜索：客户ID或客户名称（前端输入，后端检索）
   // fresh grad note: keep two states for debounce - immediate input and debounced value
@@ -157,7 +170,10 @@ export default function CustomerPnLMonitorV2() {
   const [totalPages, setTotalPages] = useState(0)
 
   // AG Grid 状态管理
-  const [sortModel, setSortModel] = useState<any[]>([])
+  // 默认按持仓浮动盈亏降序
+  const [sortModel, setSortModel] = useState<any[]>([
+    { colId: 'positions_floating_pnl', sort: 'desc' }
+  ])
   // 列可见性（供社区版列显示切换用）
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     // 默认显示的列：在这里调整 true/false 即可控制“默认显示”
@@ -204,6 +220,7 @@ export default function CustomerPnLMonitorV2() {
     last_updated: true,
   })
   const [gridApi, setGridApi] = useState<any>(null)
+  const [gridColumnApi, setGridColumnApi] = useState<any>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
 
   // AG Grid 列定义
@@ -286,8 +303,8 @@ export default function CustomerPnLMonitorV2() {
     {
       field: "zipcode",
       headerName: "ZipCode",
-      width: 120,
-      minWidth: 100,
+      width: 80,
+      minWidth: 80,
       maxWidth: 200,
       sortable: true,
       filter: true,
@@ -816,9 +833,17 @@ export default function CustomerPnLMonitorV2() {
   // AG Grid 事件处理函数
   const onGridReady = useCallback((params: GridReadyEvent) => {
     setGridApi(params.api)
+    // 保存 columnApi 以便应用排序状态
+    // @ts-ignore
+    setGridColumnApi(params.columnApi)
     // ensure columns fit container when grid is ready
     try { params.api.sizeColumnsToFit() } catch {}
-  }, [])
+    // 应用默认/恢复的排序到 Grid UI
+    try {
+      // @ts-ignore
+      params.columnApi.applyColumnState({ state: sortModel, defaultState: { sort: null } })
+    } catch {}
+  }, [sortModel])
 
   const onSortChanged = useCallback((event: SortChangedEvent) => {
     const sortModel = event.api.getColumnState()
@@ -849,10 +874,20 @@ export default function CustomerPnLMonitorV2() {
     } catch {}
   }, [])
 
+  // 每当 sortModel 改变时，同步应用到 Grid 列状态（保持 UI 箭头与服务端排序一致）
+  useEffect(() => {
+    if (!gridColumnApi) return
+    try {
+      gridColumnApi.applyColumnState({ state: sortModel, defaultState: { sort: null } })
+    } catch {}
+  }, [sortModel, gridColumnApi])
+
   // 获取用户组别列表
   const fetchUserGroups = useCallback(async () => {
+    setGroupsReady(false)
     if (server !== "MT5") {
       setAvailableGroups([])
+      setGroupsReady(true)
       return
     }
     
@@ -869,9 +904,37 @@ export default function CustomerPnLMonitorV2() {
         label: group
       }))
       setAvailableGroups(groupOptions)
+
+      // 1) 优先从本地恢复
+      try {
+        const savedRaw = localStorage.getItem(storageKeyForGroups(server))
+        if (savedRaw) {
+          const saved = JSON.parse(savedRaw)
+          if (Array.isArray(saved)) {
+            const allowed = new Set(groupOptions.map((g: { value: string; label: string }) => g.value))
+            const restored = saved.filter((v: string) => v === "__USER_NAME_TEST__" || v === "__EXCLUDE_USER_NAME_TEST__" || allowed.has(v as string))
+            if (restored.length > 0) {
+              handleUserGroupsChange(restored)
+              setGroupsReady(true)
+              return
+            }
+          }
+        }
+      } catch {}
+
+      // 2) 默认选择 KCM* 与 AKCM*
+      const defaults = groupOptions
+        .map((g: { value: string; label: string }) => g.value)
+        .filter((v: string) => /^kcm/i.test(v) || /^akcm/i.test(v))
+      const next = defaults.length > 0
+        ? [...defaults, "__EXCLUDE_GROUP_NAME_TEST__", "__EXCLUDE_USER_NAME_TEST__"]
+        : ["__ALL__"]
+      handleUserGroupsChange(next)
+      setGroupsReady(true)
     } catch (e) {
       console.error("获取用户组别失败:", e)
       setAvailableGroups([])
+      setGroupsReady(true)
     } finally {
       setIsLoadingGroups(false)
     }
@@ -975,25 +1038,23 @@ export default function CustomerPnLMonitorV2() {
   // 监听服务器变化，获取组别列表
   useEffect(() => {
     fetchUserGroups()
-    // 服务器变化时重置组别选择
-    setUserGroups(["__ALL__"])
   }, [server, fetchUserGroups])
 
   // 监听分页、排序、服务器/品种变化，自动重新获取数据
   useEffect(() => {
+    if (!groupsReady) return
     ;(async () => {
       try {
         setError(null)
         const data = await fetchData()
         setRows(data)
-        // after data loaded, try fit columns
         try { gridApi?.sizeColumnsToFit() } catch {}
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced])
+  }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced, groupsReady])
 
   // 观察容器尺寸变化，触发布局与列宽自适应
   useEffect(() => {
@@ -1083,7 +1144,7 @@ export default function CustomerPnLMonitorV2() {
                 <MultiSelectCombobox
                   options={availableGroups}
                   value={userGroups}
-                  onValueChange={setUserGroups}
+                  onValueChange={handleUserGroupsChange}
                   placeholder={isLoadingGroups ? "加载组别中..." : "选择组别..."}
                   searchPlaceholder="搜索组别..."
                   className="w-52"

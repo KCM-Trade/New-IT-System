@@ -42,6 +42,19 @@ def get_pnl_user_summary(
                     flat.append(g.strip())
             groups_list = flat or None
 
+        # 内部标识白名单校验（仅对以 __ 开头的标识进行校验，其余视为真实组名）
+        if groups_list:
+            allowed_internal = {
+                "__ALL__",
+                "__NONE__",
+                "__USER_NAME_TEST__",
+                "__EXCLUDE_USER_NAME_TEST__",
+                "__EXCLUDE_GROUP_NAME_TEST__",
+            }
+            for token in groups_list:
+                if token.startswith("__") and token not in allowed_internal:
+                    raise HTTPException(status_code=422, detail=f"Invalid internal token in user_groups: {token}")
+
         rows, total_count, total_pages = get_pnl_user_summary_paginated(
             page=page,
             page_size=page_size,

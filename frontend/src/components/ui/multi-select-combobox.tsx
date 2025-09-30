@@ -205,10 +205,13 @@ export function MultiSelectCombobox({
       const isAllSelected = actuallySelectedCount === categoryValues.length && !(categoryKey === 'test' && value.includes("__EXCLUDE_USER_NAME_TEST__"))
 
       if (isAllSelected) {
-        // 取消选择该分类全部
+        // 取消选择该分类全部：添加测试语义的双重排除
         newValue = value.filter(v => !categoryValues.includes(v) && !(categoryKey === 'test' && v.startsWith("__EXCLUDE_")))
-        if (categoryKey === 'test' && categoryValues.includes("__USER_NAME_TEST__")) {
-          newValue.push("__EXCLUDE_USER_NAME_TEST__")
+        if (categoryKey === 'test') {
+          if (categoryValues.includes("__USER_NAME_TEST__")) {
+            newValue.push("__EXCLUDE_USER_NAME_TEST__")
+          }
+          newValue.push("__EXCLUDE_GROUP_NAME_TEST__")
         }
       } else {
         // 选择该分类全部
