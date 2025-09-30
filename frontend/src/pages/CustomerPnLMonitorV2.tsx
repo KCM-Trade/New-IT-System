@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Settings2, Search } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
-import { ColDef, ColGroupDef, GridReadyEvent, SortChangedEvent } from 'ag-grid-community'
+import { ColDef, ColGroupDef, GridReadyEvent, SortChangedEvent, GridApi } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
  
 
@@ -155,6 +155,10 @@ export default function CustomerPnLMonitorV2() {
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
+  // fresh grad note: helper to preserve server ordering inside grid (avoid client-side re-sort flicker)
+  const withServerOrder = useCallback((items: PnlSummaryRow[]) => {
+    return items.map((r, idx) => ({ ...(r as any), __server_order: idx })) as PnlSummaryRow[]
+  }, [])
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   
   const [error, setError] = useState<string | null>(null)
@@ -170,10 +174,9 @@ export default function CustomerPnLMonitorV2() {
   const [totalPages, setTotalPages] = useState(0)
 
   // AG Grid 状态管理
-  // 默认按持仓浮动盈亏降序
-  const [sortModel, setSortModel] = useState<any[]>([
-    { colId: 'positions_floating_pnl', sort: 'desc' }
-  ])
+  const GRID_STATE_STORAGE_KEY = "pnl_v2_grid_state" // 统一 LocalStorage Key
+  // fresh grad note: no default sorting on first load
+  const [sortModel, setSortModel] = useState<any[]>([])
   // 列可见性（供社区版列显示切换用）
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     // 默认显示的列：在这里调整 true/false 即可控制“默认显示”
@@ -219,9 +222,17 @@ export default function CustomerPnLMonitorV2() {
 
     last_updated: true,
   })
-  const [gridApi, setGridApi] = useState<any>(null)
-  const [gridColumnApi, setGridColumnApi] = useState<any>(null)
+  const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
+
+  // 持久化列宽/顺序/可见性/排序：统一保存到 localStorage
+  const saveGridState = useCallback(() => {
+    if (!gridApi) return
+    try {
+      const state = gridApi.getColumnState()
+      localStorage.setItem(GRID_STATE_STORAGE_KEY, JSON.stringify(state))
+    } catch {}
+  }, [gridApi])
 
   // AG Grid 列定义
   const columnDefs = useMemo<Array<ColDef<PnlSummaryRow> | ColGroupDef<PnlSummaryRow>>>(() => [
@@ -832,55 +843,61 @@ export default function CustomerPnLMonitorV2() {
 
   // AG Grid 事件处理函数
   const onGridReady = useCallback((params: GridReadyEvent) => {
-    setGridApi(params.api)
-    // 保存 columnApi 以便应用排序状态
-    // @ts-ignore
-    setGridColumnApi(params.columnApi)
-    // ensure columns fit container when grid is ready
-    try { params.api.sizeColumnsToFit() } catch {}
-    // 应用默认/恢复的排序到 Grid UI
+    setGridApi(params.api as any)
+
     try {
-      // @ts-ignore
-      params.columnApi.applyColumnState({ state: sortModel, defaultState: { sort: null } })
-    } catch {}
-  }, [sortModel])
+      const savedStateRaw = localStorage.getItem(GRID_STATE_STORAGE_KEY)
+      if (savedStateRaw) {
+        const savedState = JSON.parse(savedStateRaw)
+        if (Array.isArray(savedState) && savedState.length > 0) {
+          // 恢复列状态（顺序、宽度、可见性、排序）
+          ;(params.api as any).applyColumnState({ state: savedState, applyOrder: true })
+
+          // 从恢复的状态中同步 React state
+          const visibilityFromState: Record<string, boolean> = {}
+          const sortModelFromState: any[] = []
+          
+          savedState.forEach((s: any) => {
+            if (s && typeof s.colId === 'string') {
+              visibilityFromState[s.colId] = !s.hide
+            }
+            if (s.sort) {
+              sortModelFromState.push({ colId: s.colId, sort: s.sort })
+            }
+          })
+
+          if (Object.keys(visibilityFromState).length > 0) {
+            setColumnVisibility(prev => ({ ...prev, ...visibilityFromState }))
+          }
+          if (sortModelFromState.length > 0) {
+            setSortModel(sortModelFromState)
+          } else {
+            setSortModel([]) // 如果保存的状态里没有排序信息，则清空
+          }
+          return
+        }
+      }
+
+      // 如果没有有效的已保存状态，则应用默认排序
+      ;(params.api as any).applyColumnState({ state: sortModel, defaultState: { sort: null } })
+    } catch (e) {
+      console.error("Failed to restore grid state", e)
+      // 如果恢复失败，也回退到应用默认排序
+      try {
+        ;(params.api as any).applyColumnState({ state: sortModel, defaultState: { sort: null } })
+      } catch {}
+    }
+  }, [sortModel]) // sortModel 仅用于首次加载或无缓存时的默认排序
 
   const onSortChanged = useCallback((event: SortChangedEvent) => {
-    const sortModel = event.api.getColumnState()
-      .filter(col => col.sort !== null)
-      .map(col => ({ colId: col.colId, sort: col.sort }))
-    setSortModel(sortModel)
-    // 在这里可以触发后端排序请求
-  }, [])
-
-  // 持久化表格状态（已移除列可见性，仅保留排序如需扩展可在此）
-  useEffect(() => {
-    try {
-      const tableState = {
-        sortModel,
-      }
-      localStorage.setItem("pnl_table_state", JSON.stringify(tableState))
-    } catch {}
-  }, [sortModel])
-
-  // 恢复表格状态（仅恢复排序）
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("pnl_table_state")
-      if (saved) {
-        const state = JSON.parse(saved)
-        if (state.sortModel) setSortModel(state.sortModel)
-      }
-    } catch {}
-  }, [])
-
-  // 每当 sortModel 改变时，同步应用到 Grid 列状态（保持 UI 箭头与服务端排序一致）
-  useEffect(() => {
-    if (!gridColumnApi) return
-    try {
-      gridColumnApi.applyColumnState({ state: sortModel, defaultState: { sort: null } })
-    } catch {}
-  }, [sortModel, gridColumnApi])
+    const newSortModel = (event.api as any).getColumnState()
+      .filter((col: any) => col.sort)
+      .map((col: any) => ({ colId: col.colId, sort: col.sort }))
+    setSortModel(newSortModel)
+    // fresh grad note: sorting should trigger a backend re-query from the first page
+    setPageIndex(0)
+    saveGridState()
+  }, [saveGridState])
 
   // 获取用户组别列表
   const fetchUserGroups = useCallback(async () => {
@@ -1047,8 +1064,7 @@ export default function CustomerPnLMonitorV2() {
       try {
         setError(null)
         const data = await fetchData()
-        setRows(data)
-        try { gridApi?.sizeColumnsToFit() } catch {}
+        setRows(withServerOrder(data))
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
@@ -1061,7 +1077,7 @@ export default function CustomerPnLMonitorV2() {
     if (!gridContainerRef.current) return
     if (!gridApi) return
     const ro = new ResizeObserver(() => {
-      try { gridApi.sizeColumnsToFit() } catch {}
+      // fixed width: do not auto-fit on container resize
     })
     ro.observe(gridContainerRef.current)
     return () => ro.disconnect()
@@ -1093,8 +1109,7 @@ export default function CustomerPnLMonitorV2() {
       setRefreshInfo(msg)
 
       const refreshed = await fetchData()
-      setRows(refreshed)
-      try { gridApi?.sizeColumnsToFit() } catch {}
+      setRows(withServerOrder(refreshed))
     } catch (e) {
       setRefreshInfo(null)
       setRows([])
@@ -1281,7 +1296,12 @@ export default function CustomerPnLMonitorV2() {
                         key={columnId}
                         checked={isVisible}
                         onCheckedChange={(value: boolean) => 
-                          setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
+                          {
+                            // 同步到 Grid 并保存列状态（新版 API 使用 setColumnsVisible）
+                            try { gridApi?.setColumnsVisible([columnId], !!value) } catch {}
+                            setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
+                            saveGridState()
+                          }
                         }
                       >
                         {columnLabels[columnId] || columnId}
@@ -1312,11 +1332,14 @@ export default function CustomerPnLMonitorV2() {
               sortable: true,
               filter: true,
               resizable: true,
-              flex: 1,
               minWidth: 100,
             }}
             onGridReady={onGridReady}
             onSortChanged={onSortChanged}
+            onColumnResized={(e: any) => { if (e.finished) saveGridState() }}
+            onColumnMoved={() => saveGridState()}
+            onColumnVisible={() => saveGridState()}
+            onColumnPinned={() => saveGridState()}
             animateRows={true}
             rowSelection="multiple"
             suppressRowClickSelection={true}

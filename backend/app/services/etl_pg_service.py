@@ -42,6 +42,8 @@ def get_pnl_user_summary_paginated(
         "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
         "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
         "withdrawal_amount", "net_deposit", "overnight_volume_ratio", "last_updated",
+        # 计算列（前端聚合列）的排序别名
+        "overnight_volume_all", "total_volume_all", "overnight_order_all", "total_order_all",
     }
 
     where_conditions: List[str] = []
@@ -136,9 +138,19 @@ def get_pnl_user_summary_paginated(
 
     # 排序
     order_clause = ""
+    # 计算列映射到 SQL 可排序表达式（只使用白名单内的安全表达式）
+    alias_sort_expressions = {
+        "overnight_volume_all": "(closed_buy_overnight_volume_lots + closed_sell_overnight_volume_lots)",
+        "total_volume_all": "(closed_buy_volume_lots + closed_sell_volume_lots)",
+        "overnight_order_all": "(closed_buy_overnight_count + closed_sell_overnight_count)",
+        "total_order_all": "(closed_buy_count + closed_sell_count)",
+    }
+
     if sort_by and sort_by in allowed_sort_fields:
         direction = "DESC" if sort_order.lower() == "desc" else "ASC"
-        order_clause = f" ORDER BY {sort_by} {direction}"
+        sort_expression = alias_sort_expressions.get(sort_by, sort_by)
+        # 加入 login 作为二级排序，保证稳定分页顺序；对可能为 NULL 的字段添加 NULLS LAST
+        order_clause = f" ORDER BY {sort_expression} {direction} NULLS LAST, login ASC"
     else:
         order_clause = " ORDER BY login ASC"
 
