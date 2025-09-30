@@ -52,47 +52,59 @@ export function MultiSelectCombobox({
   }, [])
   
 
-  // 处理选项分组逻辑
+  // 处理选项分组逻辑（测试 / KCM* / AKCM* / 其他）
   const processedData = React.useMemo(() => {
-    // 过滤搜索结果
-    const filtered = options.filter(option => 
-      option.label.toLowerCase().includes(searchValue.toLowerCase())
-    )
+    const q = searchValue.toLowerCase()
+    const filtered = options.filter(option => option.label.toLowerCase().includes(q))
 
-    // 按组分类 - Test组别和所有组别
     const testGroups: GroupOption[] = []
-    const allFilteredGroups: GroupOption[] = []
+    const kcmGroups: GroupOption[] = []
+    const akcmGroups: GroupOption[] = []
+    const otherGroups: GroupOption[] = []
 
-    // 添加特殊的"客户名称含test"选项到test组别
-    const userNameTestOption: GroupOption = {
-      value: "__USER_NAME_TEST__",
-      label: "客户名称含test"
-    }
-
-    // 检查是否应该显示"客户名称含test"选项（基于搜索）
-    const shouldShowUserNameTest = userNameTestOption.label.toLowerCase().includes(searchValue.toLowerCase())
-
+    // 特殊的“客户名称含test”选项，归入“测试”分类（便于一次性选择/排除）
+    const userNameTestOption: GroupOption = { value: "__USER_NAME_TEST__", label: "客户名称含test" }
+    const shouldShowUserNameTest = userNameTestOption.label.toLowerCase().includes(q)
     if (shouldShowUserNameTest) {
       testGroups.push(userNameTestOption)
     }
 
     filtered.forEach(option => {
-      allFilteredGroups.push(option)
-      if (option.label.toLowerCase().includes('test')) {
+      const lower = option.label.toLowerCase()
+      // 优先归入“测试”
+      if (lower.includes('test') || option.label.includes('测试')) {
         testGroups.push(option)
+        return
       }
+      if (lower.startsWith('akcm')) {
+        akcmGroups.push(option)
+        return
+      }
+      if (lower.startsWith('kcm')) {
+        kcmGroups.push(option)
+        return
+      }
+      otherGroups.push(option)
     })
 
+    const sortByLabel = (arr: GroupOption[]) => arr.sort((a, b) => a.label.localeCompare(b.label))
+
+    const allGroups = sortByLabel([...testGroups.filter(g => g.value !== "__USER_NAME_TEST__"), ...kcmGroups, ...akcmGroups, ...otherGroups])
+
     return {
-      testGroups: testGroups.sort((a, b) => {
-        // "客户名称含test"选项始终在最上方
+      testGroups: sortByLabel(testGroups).sort((a, b) => {
         if (a.value === "__USER_NAME_TEST__") return -1
         if (b.value === "__USER_NAME_TEST__") return 1
         return a.label.localeCompare(b.label)
       }),
-      allGroups: allFilteredGroups.sort((a, b) => a.label.localeCompare(b.label)),
+      kcmGroups: sortByLabel(kcmGroups),
+      akcmGroups: sortByLabel(akcmGroups),
+      otherGroups: sortByLabel(otherGroups),
+      allGroups,
       hasTestGroups: testGroups.length > 0,
-      hasAllGroups: allFilteredGroups.length > 0
+      hasKcmGroups: kcmGroups.length > 0,
+      hasAkcmGroups: akcmGroups.length > 0,
+      hasOtherGroups: otherGroups.length > 0,
     }
   }, [options, searchValue])
 
@@ -164,52 +176,46 @@ export function MultiSelectCombobox({
     }
   }
 
-  // Test组别全选/取消全选
-  const toggleTestGroups = () => {
-    const testValues = processedData.testGroups.map(g => g.value)
+  // 分类全选/取消全选（支持：test / kcm / akcm / other）
+  const toggleCategory = (categoryKey: 'test' | 'kcm' | 'akcm' | 'other') => {
+    const categoryValues = (
+      categoryKey === 'test' ? processedData.testGroups :
+      categoryKey === 'kcm' ? processedData.kcmGroups :
+      categoryKey === 'akcm' ? processedData.akcmGroups :
+      processedData.otherGroups
+    ).map(g => g.value)
+
     let newValue: string[]
-    
     if (value.includes("__ALL__")) {
-      // 当前是全选状态，切换到取消Test组别的具体选择模式
+      // 从全选切换到“排除此分类”的具体选择模式
       const allRegularGroups = processedData.allGroups.map(g => g.value)
-      const allGroupsIncludingSpecial = [...allRegularGroups]
-      
-      // 如果"客户名称含test"选项存在且在testGroups中，确保它也被考虑
-      if (testValues.includes("__USER_NAME_TEST__") && !allGroupsIncludingSpecial.includes("__USER_NAME_TEST__")) {
-        allGroupsIncludingSpecial.push("__USER_NAME_TEST__")
-      }
-      
-      newValue = allGroupsIncludingSpecial.filter(v => !testValues.includes(v))
-      
-      // 对于test组别中的每个被取消的选项，如果是特殊选项，添加排除标识符
-      if (testValues.includes("__USER_NAME_TEST__")) {
+      newValue = allRegularGroups.filter(v => !categoryValues.includes(v))
+      if (categoryKey === 'test' && categoryValues.includes("__USER_NAME_TEST__")) {
         newValue.push("__EXCLUDE_USER_NAME_TEST__")
       }
     } else {
-      // 检查当前test组别的选择状态（考虑排除标识符）
-      const actuallySelectedTestCount = testValues.filter(v => {
-        if (v === "__USER_NAME_TEST__" && value.includes("__EXCLUDE_USER_NAME_TEST__")) {
+      // 计算该分类当前实际选中数量（考虑排除标识）
+      const actuallySelectedCount = categoryValues.filter(v => {
+        if (categoryKey === 'test' && v === "__USER_NAME_TEST__" && value.includes("__EXCLUDE_USER_NAME_TEST__")) {
           return false
         }
         return value.includes(v)
       }).length
-      
-      const allTestSelected = actuallySelectedTestCount === testValues.length && !value.includes("__EXCLUDE_USER_NAME_TEST__")
-      
-      if (allTestSelected) {
-        // 取消选择所有Test组别（包括特殊选项）
-        newValue = value.filter(v => !testValues.includes(v) && !v.startsWith("__EXCLUDE_"))
-        // 添加排除标识符来排除客户名称含test的记录
-        if (testValues.includes("__USER_NAME_TEST__")) {
+
+      const isAllSelected = actuallySelectedCount === categoryValues.length && !(categoryKey === 'test' && value.includes("__EXCLUDE_USER_NAME_TEST__"))
+
+      if (isAllSelected) {
+        // 取消选择该分类全部
+        newValue = value.filter(v => !categoryValues.includes(v) && !(categoryKey === 'test' && v.startsWith("__EXCLUDE_")))
+        if (categoryKey === 'test' && categoryValues.includes("__USER_NAME_TEST__")) {
           newValue.push("__EXCLUDE_USER_NAME_TEST__")
         }
       } else {
-        // 选择所有Test组别（包括特殊选项）
-        newValue = [...value.filter(v => !v.startsWith("__EXCLUDE_")), ...testValues]
-        newValue = [...new Set(newValue)] // 去重
+        // 选择该分类全部
+        newValue = [...value.filter(v => !(categoryKey === 'test' && v.startsWith("__EXCLUDE_"))), ...categoryValues]
+        newValue = [...new Set(newValue)]
       }
     }
-    
     onValueChange(newValue)
   }
 
@@ -286,6 +292,17 @@ export function MultiSelectCombobox({
   }
 
   const testSelectionState = getTestGroupsSelectionState()
+  const getGenericSelectionState = (values: string[]) => {
+    if (values.length === 0) return { checked: false, indeterminate: false }
+    if (value.includes("__ALL__")) return { checked: true, indeterminate: false }
+    const selectedCount = values.filter(v => value.includes(v)).length
+    if (selectedCount === 0) return { checked: false, indeterminate: false }
+    if (selectedCount === values.length) return { checked: true, indeterminate: false }
+    return { checked: false, indeterminate: true }
+  }
+  const kcmSelectionState = getGenericSelectionState(processedData.kcmGroups.map(g => g.value))
+  const akcmSelectionState = getGenericSelectionState(processedData.akcmGroups.map(g => g.value))
+  const otherSelectionState = getGenericSelectionState(processedData.otherGroups.map(g => g.value))
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
@@ -350,7 +367,7 @@ export function MultiSelectCombobox({
                 </CommandItem>
               </CommandGroup>
 
-              {/* Test组别分组 */}
+              {/* 测试组别分组 */}
               {processedData.hasTestGroups && (
                 <CommandGroup>
                   <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
@@ -373,7 +390,7 @@ export function MultiSelectCombobox({
                           className="flex items-center"
                           onClick={(e) => {
                             e.stopPropagation()
-                            toggleTestGroups()
+                            toggleCategory('test')
                           }}
                         >
                           <Checkbox
@@ -387,7 +404,7 @@ export function MultiSelectCombobox({
                             </div>
                           )}
                         </div>
-                        <span>Test 组别 ({processedData.testGroups.length})</span>
+                        <span>测试 ({processedData.testGroups.length})</span>
                       </div>
                     </Button>
                   </div>
@@ -415,21 +432,180 @@ export function MultiSelectCombobox({
                 </CommandGroup>
               )}
 
-              {/* 所有组别（除Test组别外的直接显示） */}
-              {processedData.hasAllGroups && (
+              {/* KCM* 分组 */}
+              {processedData.hasKcmGroups && (
                 <CommandGroup>
                   <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                    所有组别
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto p-0 font-semibold justify-start w-full"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        toggleGroupExpansion("kcm")
+                      }}
+                    >
+                      <div className="flex items-center space-x-2 w-full">
+                        {expandedGroups.has("kcm") ? (
+                          <ChevronDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3" />
+                        )}
+                        <div
+                          className="flex items-center"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleCategory('kcm')
+                          }}
+                        >
+                          <Checkbox
+                            checked={kcmSelectionState.checked}
+                            onChange={() => {}}
+                            className="pointer-events-none"
+                          />
+                          {kcmSelectionState.indeterminate && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="w-2 h-0.5 bg-current rounded" />
+                            </div>
+                          )}
+                        </div>
+                        <span>KCM* ({processedData.kcmGroups.length})</span>
+                      </div>
+                    </Button>
                   </div>
-
-                  {/* 显示非Test组别 */}
-                  {processedData.allGroups
-                    .filter(option => !option.label.toLowerCase().includes('test'))
-                    .map((option) => (
+                  {expandedGroups.has("kcm") && processedData.kcmGroups.map((option) => (
                     <CommandItem
                       key={option.value}
                       onSelect={() => toggleOption(option.value)}
-                      className="flex items-center space-x-2 pl-4 min-h-10 touch-manipulation"
+                      className="flex items-center space-x-2 pl-8 min-h-10 touch-manipulation"
+                    >
+                      <Checkbox
+                        checked={isOptionSelected(option.value)}
+                        onChange={() => {}}
+                        className="pointer-events-none"
+                      />
+                      <span>{option.label}</span>
+                      <Check
+                        className={cn(
+                          "ml-auto h-4 w-4",
+                          isOptionSelected(option.value) ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+
+              {/* AKCM* 分组 */}
+              {processedData.hasAkcmGroups && (
+                <CommandGroup>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto p-0 font-semibold justify-start w-full"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        toggleGroupExpansion("akcm")
+                      }}
+                    >
+                      <div className="flex items-center space-x-2 w-full">
+                        {expandedGroups.has("akcm") ? (
+                          <ChevronDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3" />
+                        )}
+                        <div
+                          className="flex items-center"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleCategory('akcm')
+                          }}
+                        >
+                          <Checkbox
+                            checked={akcmSelectionState.checked}
+                            onChange={() => {}}
+                            className="pointer-events-none"
+                          />
+                          {akcmSelectionState.indeterminate && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="w-2 h-0.5 bg-current rounded" />
+                            </div>
+                          )}
+                        </div>
+                        <span>AKCM* ({processedData.akcmGroups.length})</span>
+                      </div>
+                    </Button>
+                  </div>
+                  {expandedGroups.has("akcm") && processedData.akcmGroups.map((option) => (
+                    <CommandItem
+                      key={option.value}
+                      onSelect={() => toggleOption(option.value)}
+                      className="flex items-center space-x-2 pl-8 min-h-10 touch-manipulation"
+                    >
+                      <Checkbox
+                        checked={isOptionSelected(option.value)}
+                        onChange={() => {}}
+                        className="pointer-events-none"
+                      />
+                      <span>{option.label}</span>
+                      <Check
+                        className={cn(
+                          "ml-auto h-4 w-4",
+                          isOptionSelected(option.value) ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+
+              {/* 其他组别 */}
+              {processedData.hasOtherGroups && (
+                <CommandGroup>
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto p-0 font-semibold justify-start w-full"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        toggleGroupExpansion("other")
+                      }}
+                    >
+                      <div className="flex items-center space-x-2 w-full">
+                        {expandedGroups.has("other") ? (
+                          <ChevronDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3" />
+                        )}
+                        <div
+                          className="flex items-center"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleCategory('other')
+                          }}
+                        >
+                          <Checkbox
+                            checked={otherSelectionState.checked}
+                            onChange={() => {}}
+                            className="pointer-events-none"
+                          />
+                          {otherSelectionState.indeterminate && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="w-2 h-0.5 bg-current rounded" />
+                            </div>
+                          )}
+                        </div>
+                        <span>其他 ({processedData.otherGroups.length})</span>
+                      </div>
+                    </Button>
+                  </div>
+                  {expandedGroups.has("other") && processedData.otherGroups.map((option) => (
+                    <CommandItem
+                      key={option.value}
+                      onSelect={() => toggleOption(option.value)}
+                      className="flex items-center space-x-2 pl-8 min-h-10 touch-manipulation"
                     >
                       <Checkbox
                         checked={isOptionSelected(option.value)}

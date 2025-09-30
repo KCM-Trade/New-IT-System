@@ -858,7 +858,7 @@ export default function CustomerPnLMonitorV2() {
     
     setIsLoadingGroups(true)
     try {
-      const url = `/api/v1/pnl/groups?server=${server}`
+      const url = `/api/v1/etl/groups`
       const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 10000)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const groups = await res.json()
@@ -915,17 +915,24 @@ export default function CustomerPnLMonitorV2() {
       params.set('sort_order', currentSortOrder)
     }
     
-    // 添加用户组别筛选参数
+    // 添加用户组别筛选参数（使用重复键，保留内部标识符，除 __ALL__ 外）
     if (userGroups && userGroups.length > 0) {
       if (userGroups.includes("__ALL__")) {
-        // 选择了"全部组别"，不发送筛选参数（查询所有数据）
+        // 全部：不传 user_groups（表示查询所有）
       } else {
-        // 选择了具体组别，发送这些组别
-        params.set('user_groups', userGroups.join(','))
+        const tokensToSend = userGroups.filter(g => g !== "__ALL__")
+        // 可见项定义：真实组别或特殊包含项 __USER_NAME_TEST__
+        const hasVisible = tokensToSend.some(g => !g.startsWith("__") || g === "__USER_NAME_TEST__")
+        if (hasVisible) {
+          tokensToSend.forEach(g => params.append('user_groups', g))
+        } else {
+          // 仅剩排除型标识符时，视为无选择
+          params.append('user_groups', '__NONE__')
+        }
       }
     } else {
-      // 没有选择任何组别，发送特殊标识符表示返回0条数据
-      params.set('user_groups', '__NONE__')
+      // 没有任何选择：明确请求空集
+      params.append('user_groups', '__NONE__')
     }
 
     // 添加统一搜索参数（客户ID精确或客户名称模糊，由后端实现）

@@ -10,7 +10,12 @@ from app.schemas.etl_pg import (
     EtlRefreshRequest,
     EtlRefreshResponse,
 )
-from app.services.etl_pg_service import get_pnl_user_summary_paginated, get_etl_watermark_last_updated, mt5_incremental_refresh
+from app.services.etl_pg_service import (
+    get_pnl_user_summary_paginated,
+    get_etl_watermark_last_updated,
+    mt5_incremental_refresh,
+    get_user_groups_from_user_summary,
+)
 
 
 router = APIRouter(prefix="/etl", tags=["etl"])
@@ -22,13 +27,20 @@ def get_pnl_user_summary(
     page_size: int = Query(100, ge=1, le=1000, description="每页记录数"),
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
-    user_groups: Optional[str] = Query(None, description="用户组别筛选，多个用逗号分隔；__ALL__ 表示全部"),
+    user_groups: Optional[List[str]] = Query(None, description="用户组别筛选，使用重复键传递；例如 user_groups=G1&user_groups=G2"),
     search: Optional[str] = Query(None, description="统一搜索：支持客户ID(精确)或客户名称(模糊)"),
 ) -> PaginatedPnlUserSummaryResponse:
     try:
         groups_list: Optional[List[str]] = None
         if user_groups:
-            groups_list = [g.strip() for g in user_groups.split(",") if g.strip()]
+            # 支持重复键数组；兼容单元素里带逗号的旧调用
+            flat: List[str] = []
+            for g in user_groups:
+                if g and "," in g:
+                    flat.extend([x.strip() for x in g.split(",") if x.strip()])
+                elif g and g.strip():
+                    flat.append(g.strip())
+            groups_list = flat or None
 
         rows, total_count, total_pages = get_pnl_user_summary_paginated(
             page=page,
@@ -82,6 +94,18 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
             new_trades_count=r.get("new_trades_count"),
             floating_only_count=r.get("floating_only_count"),
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/groups", response_model=List[str])
+def get_groups() -> List[str]:
+    """获取所有用户组别（来自 public.pnl_user_summary，已去重与规范化）。
+
+    为与前端筛选对接，返回扁平列表，由前端按“测试/KCM*/AKCM*/其他”进行分类展示。
+    """
+    try:
+        return get_user_groups_from_user_summary()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
