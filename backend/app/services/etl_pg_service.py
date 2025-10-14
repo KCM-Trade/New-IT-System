@@ -42,6 +42,8 @@ def get_pnl_user_summary_paginated(
         "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
         "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
         "withdrawal_amount", "net_deposit", "overnight_volume_ratio", "last_updated",
+        # 新增：平仓总盈亏（买+卖）
+        "closed_total_profit",
         # 计算列（前端聚合列）的排序别名
         "overnight_volume_all", "total_volume_all", "overnight_order_all", "total_order_all",
     }
@@ -132,6 +134,8 @@ def get_pnl_user_summary_paginated(
         "closed_buy_volume_lots, closed_buy_count, closed_buy_profit, closed_buy_swap, "
         "closed_buy_overnight_count, closed_buy_overnight_volume_lots, "
         "total_commission, deposit_count, deposit_amount, withdrawal_count, withdrawal_amount, net_deposit, "
+        # 兼容性：即使数据库未添加生成列，也计算一个别名
+        "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0)) AS closed_total_profit, "
         "overnight_volume_ratio, last_updated "
         "FROM public.pnl_user_summary" + where_clause
     )
@@ -144,6 +148,8 @@ def get_pnl_user_summary_paginated(
         "total_volume_all": "(closed_buy_volume_lots + closed_sell_volume_lots)",
         "overnight_order_all": "(closed_buy_overnight_count + closed_sell_overnight_count)",
         "total_order_all": "(closed_buy_count + closed_sell_count)",
+        # 新增：平仓总盈亏（表达式排序，兼容未添加生成列的数据库）
+        "closed_total_profit": "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0))",
     }
 
     if sort_by and sort_by in allowed_sort_fields:

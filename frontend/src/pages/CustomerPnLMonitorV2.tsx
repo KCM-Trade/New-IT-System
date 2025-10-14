@@ -64,6 +64,9 @@ interface PnlSummaryRow {
   withdrawal_amount: number | string
   net_deposit: number | string
 
+  // 新增：平仓总盈亏（buy+sell 合计）
+  closed_total_profit?: number | string
+
   // 审计
   last_updated?: string | null
   
@@ -155,10 +158,6 @@ export default function CustomerPnLMonitorV2() {
 
   // data state and refresh
   const [rows, setRows] = useState<PnlSummaryRow[]>([])
-  // fresh grad note: helper to preserve server ordering inside grid (avoid client-side re-sort flicker)
-  const withServerOrder = useCallback((items: PnlSummaryRow[]) => {
-    return items.map((r, idx) => ({ ...(r as any), __server_order: idx })) as PnlSummaryRow[]
-  }, [])
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   
   const [error, setError] = useState<string | null>(null)
@@ -189,7 +188,6 @@ export default function CustomerPnLMonitorV2() {
     user_id: false,
 
     user_balance: true,
-    user_credit: false,
     positions_floating_pnl: true,
     equity: false,
 
@@ -214,6 +212,8 @@ export default function CustomerPnLMonitorV2() {
     withdrawal_amount: false,
     net_deposit: true,
 
+    closed_total_profit: true,
+
     overnight_volume_ratio: true,
     overnight_volume_all: true,
     total_volume_all: true,
@@ -224,6 +224,7 @@ export default function CustomerPnLMonitorV2() {
   })
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
+  
 
   // 持久化列宽/顺序/可见性/排序：统一保存到 localStorage
   const saveGridState = useCallback(() => {
@@ -694,6 +695,26 @@ export default function CustomerPnLMonitorV2() {
       hide: !columnVisibility.net_deposit,
     },
     {
+      field: "closed_total_profit",
+      headerName: "平仓总盈亏",
+      width: 150,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      // very light gray background for readability
+      cellStyle: () => ({ backgroundColor: 'rgba(0,0,0,0.035)' }),
+      cellRenderer: (params: any) => {
+        const value = toNumber(params.value)
+        return (
+          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value, productConfig || undefined)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.closed_total_profit,
+    },
+    {
       headerName: "过夜",
       groupId: "overnight",
       marryChildren: true,
@@ -1064,7 +1085,7 @@ export default function CustomerPnLMonitorV2() {
       try {
         setError(null)
         const data = await fetchData()
-        setRows(withServerOrder(data))
+        setRows(data)
       } catch (e) {
         setRows([])
         setError(e instanceof Error ? e.message : "加载失败")
@@ -1072,16 +1093,7 @@ export default function CustomerPnLMonitorV2() {
     })()
   }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced, groupsReady])
 
-  // 观察容器尺寸变化，触发布局与列宽自适应
-  useEffect(() => {
-    if (!gridContainerRef.current) return
-    if (!gridApi) return
-    const ro = new ResizeObserver(() => {
-      // fixed width: do not auto-fit on container resize
-    })
-    ro.observe(gridContainerRef.current)
-    return () => ro.disconnect()
-  }, [gridApi])
+  
 
   
 
@@ -1109,7 +1121,7 @@ export default function CustomerPnLMonitorV2() {
       setRefreshInfo(msg)
 
       const refreshed = await fetchData()
-      setRows(withServerOrder(refreshed))
+      setRows(refreshed)
     } catch (e) {
       setRefreshInfo(null)
       setRows([])
@@ -1117,7 +1129,7 @@ export default function CustomerPnLMonitorV2() {
     } finally {
       setIsRefreshing(false)
     }
-  }, [server, fetchData, gridApi])
+  }, [server, fetchData])
 
   // 刷新提示自动清除（20秒）
   useEffect(() => {
@@ -1263,7 +1275,6 @@ export default function CustomerPnLMonitorV2() {
                       zipcode: "ZipCode",
                       user_id: "ClientID",
                       user_balance: "balance",
-                      user_credit: "credit",
                       positions_floating_pnl: "持仓浮动盈亏",
                       equity: "equity",
                       closed_sell_volume_lots: "closed_sell_volume_lots",
@@ -1284,6 +1295,7 @@ export default function CustomerPnLMonitorV2() {
                       withdrawal_count: "出金笔数",
                       withdrawal_amount: "出金金额",
                       net_deposit: "net_deposit",
+                      closed_total_profit: "平仓总盈亏",
                       overnight_volume_ratio: "overnight_volume_ratio",
                       overnight_volume_all: "过夜订单手数",
                       total_volume_all: "总订单手数",
@@ -1295,6 +1307,7 @@ export default function CustomerPnLMonitorV2() {
                       <DropdownMenuCheckboxItem
                         key={columnId}
                         checked={isVisible}
+                        onSelect={(e) => { e.preventDefault() }}
                         onCheckedChange={(value: boolean) => 
                           {
                             // 同步到 Grid 并保存列状态（新版 API 使用 setColumnsVisible）
