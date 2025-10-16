@@ -109,7 +109,7 @@ def get_pnl_user_summary_paginated(
                     where_conditions.append("user_group NOT ILIKE %s")
                     params.append("%test%")
 
-    # 统一搜索（login 精确 或 user_name 模糊）
+    # 统一搜索（login/user_id 精确 或 user_name 模糊）
     if search is not None:
         s = str(search).strip()
         if s:
@@ -117,6 +117,9 @@ def get_pnl_user_summary_paginated(
             try:
                 login_int = int(s)
                 sub.append("login = %s")
+                params.append(login_int)
+                # 数值输入时，额外匹配 user_id 精确等于
+                sub.append("user_id = %s")
                 params.append(login_int)
             except ValueError:
                 pass

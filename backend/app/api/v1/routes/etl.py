@@ -28,7 +28,7 @@ def get_pnl_user_summary(
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
     user_groups: Optional[List[str]] = Query(None, description="用户组别筛选，使用重复键传递；例如 user_groups=G1&user_groups=G2"),
-    search: Optional[str] = Query(None, description="统一搜索：支持客户ID(精确)或客户名称(模糊)"),
+    search: Optional[str] = Query(None, description="统一搜索：支持 login/user_id(精确) 或 user_name(模糊)"),
 ) -> PaginatedPnlUserSummaryResponse:
     try:
         groups_list: Optional[List[str]] = None

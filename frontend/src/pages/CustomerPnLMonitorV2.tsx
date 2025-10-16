@@ -1190,7 +1190,7 @@ export default function CustomerPnLMonitorV2() {
                       // when search changes, reset to first page
                       setPageIndex(0)
                     }}
-                    placeholder="客户ID或名称..."
+                    placeholder="账户ID，姓名，ClientID"
                     className="pl-8 h-9"
                   />
                 </div>
