@@ -333,9 +333,28 @@ export default function CustomerPnLMonitorV2() {
       maxWidth: 200,
       sortable: true,
       filter: true,
-      cellRenderer: (params: any) => (
-        <span className="text-muted-foreground">{params.value || ""}</span>
-      ),
+      cellRenderer: (params: any) => {
+        const value = params.value
+        // Make ClientID clickable for MT5 to navigate CRM user profile
+        if (server === "MT5" && value) {
+          return (
+            <a
+              href={`https://mt4.kohleglobal.com/crm/users/${value}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline hover:no-underline transition-colors cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+              }}
+            >
+              {value}
+            </a>
+          )
+        }
+        return (
+          <span className="text-muted-foreground">{value || ""}</span>
+        )
+      },
       hide: !columnVisibility.user_id,
     },
     {
