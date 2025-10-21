@@ -174,6 +174,7 @@ export default function CustomerPnLMonitorV2() {
 
   // AG Grid 状态管理
   const GRID_STATE_STORAGE_KEY = "pnl_v2_grid_state" // 统一 LocalStorage Key
+  const gridStateStorageKey = useMemo(() => `${GRID_STATE_STORAGE_KEY}:${server}`, [server])
   // fresh grad note: no default sorting on first load
   const [sortModel, setSortModel] = useState<any[]>([])
   // 列可见性（供社区版列显示切换用）
@@ -231,9 +232,9 @@ export default function CustomerPnLMonitorV2() {
     if (!gridApi) return
     try {
       const state = gridApi.getColumnState()
-      localStorage.setItem(GRID_STATE_STORAGE_KEY, JSON.stringify(state))
+      localStorage.setItem(gridStateStorageKey, JSON.stringify(state))
     } catch {}
-  }, [gridApi])
+  }, [gridApi, gridStateStorageKey])
 
   // AG Grid 列定义
   const columnDefs = useMemo<Array<ColDef<PnlSummaryRow> | ColGroupDef<PnlSummaryRow>>>(() => [
@@ -246,28 +247,38 @@ export default function CustomerPnLMonitorV2() {
       sortable: true,
       filter: true,
       cellRenderer: (params: any) => {
-        // 只有MT5服务器才显示为可点击链接
+        // CRM 账户链接：MT5 -> 5-<login>；MT4Live2 -> 6-<login>；MT4Live 不可用
+        const login = params.value
         if (server === "MT5") {
           return (
             <a 
-              href={`https://mt4.kohleglobal.com/crm/accounts/5-${params.value}`}
+              href={`https://mt4.kohleglobal.com/crm/accounts/5-${login}`}
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline hover:no-underline transition-colors cursor-pointer"
-              onClick={(e) => {
-                // 防止触发AG Grid的行选择事件
-                e.stopPropagation()
-              }}
+              onClick={(e) => { e.stopPropagation() }}
             >
-              {params.value}
+              {login}
             </a>
           )
-        } else {
-          // 其他服务器显示为普通文本
+        }
+        if (server === "MT4Live2") {
           return (
-            <span className="font-medium">{params.value}</span>
+            <a 
+              href={`https://mt4.kohleglobal.com/crm/accounts/6-${login}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline hover:no-underline transition-colors cursor-pointer"
+              onClick={(e) => { e.stopPropagation() }}
+            >
+              {login}
+            </a>
           )
         }
+        // MT4Live 或其他：纯文本
+        return (
+          <span className="font-medium">{login}</span>
+        )
       },
       hide: !columnVisibility.login,
     },
@@ -335,8 +346,8 @@ export default function CustomerPnLMonitorV2() {
       filter: true,
       cellRenderer: (params: any) => {
         const value = params.value
-        // Make ClientID clickable for MT5 to navigate CRM user profile
-        if (server === "MT5" && value) {
+        // Make ClientID clickable for MT5 & MT4Live2 to navigate CRM user profile
+        if ((server === "MT5" || server === "MT4Live2") && value) {
           return (
             <a
               href={`https://mt4.kohleglobal.com/crm/users/${value}`}
@@ -886,7 +897,7 @@ export default function CustomerPnLMonitorV2() {
     setGridApi(params.api as any)
 
     try {
-      const savedStateRaw = localStorage.getItem(GRID_STATE_STORAGE_KEY)
+      const savedStateRaw = localStorage.getItem(gridStateStorageKey)
       if (savedStateRaw) {
         const savedState = JSON.parse(savedStateRaw)
         if (Array.isArray(savedState) && savedState.length > 0) {
@@ -927,7 +938,40 @@ export default function CustomerPnLMonitorV2() {
         ;(params.api as any).applyColumnState({ state: sortModel, defaultState: { sort: null } })
       } catch {}
     }
-  }, [sortModel]) // sortModel 仅用于首次加载或无缓存时的默认排序
+  }, [sortModel, gridStateStorageKey]) // sortModel 仅用于首次加载或无缓存时的默认排序
+
+  // 当切换 server 时，尝试按 server 维度恢复列状态
+  useEffect(() => {
+    if (!gridApi) return
+    try {
+      const savedStateRaw = localStorage.getItem(gridStateStorageKey)
+      if (savedStateRaw) {
+        const savedState = JSON.parse(savedStateRaw)
+        if (Array.isArray(savedState) && savedState.length > 0) {
+          ;(gridApi as any).applyColumnState({ state: savedState, applyOrder: true })
+
+          const visibilityFromState: Record<string, boolean> = {}
+          const sortModelFromState: any[] = []
+          savedState.forEach((s: any) => {
+            if (s && typeof s.colId === 'string') {
+              visibilityFromState[s.colId] = !s.hide
+            }
+            if (s.sort) {
+              sortModelFromState.push({ colId: s.colId, sort: s.sort })
+            }
+          })
+          if (Object.keys(visibilityFromState).length > 0) {
+            setColumnVisibility(prev => ({ ...prev, ...visibilityFromState }))
+          }
+          setSortModel(sortModelFromState)
+          return
+        }
+      }
+      // 没有保存的状态则清空排序
+      setSortModel([])
+      ;(gridApi as any).applyColumnState({ state: [], defaultState: { sort: null } })
+    } catch {}
+  }, [gridApi, gridStateStorageKey])
 
   const onSortChanged = useCallback((event: SortChangedEvent) => {
     const newSortModel = (event.api as any).getColumnState()
@@ -942,7 +986,14 @@ export default function CustomerPnLMonitorV2() {
   // 获取用户组别列表
   const fetchUserGroups = useCallback(async () => {
     setGroupsReady(false)
-    if (server !== "MT5") {
+    // 暂不接入 MT4Live：前端直接跳过
+    if (server === "MT4Live") {
+      // 立即清空数据，避免显示上一服务器的残留数据
+      setRows([])
+      setTotalCount(0)
+      setTotalPages(0)
+      setLastUpdated(null)
+      setError(null)
       setAvailableGroups([])
       setGroupsReady(true)
       return
@@ -950,7 +1001,7 @@ export default function CustomerPnLMonitorV2() {
     
     setIsLoadingGroups(true)
     try {
-      const url = `/api/v1/etl/groups`
+      const url = `/api/v1/etl/groups?server=${encodeURIComponent(server)}`
       const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 10000)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const groups = await res.json()
@@ -961,6 +1012,28 @@ export default function CustomerPnLMonitorV2() {
         label: group
       }))
       setAvailableGroups(groupOptions)
+
+      // MT4Live2 初次加载：默认选择 __ALL__（该服务器无 KCM/AKCM 前缀）
+      if (server === "MT4Live2") {
+        try {
+          const savedRaw = localStorage.getItem(storageKeyForGroups(server))
+          if (savedRaw) {
+            const saved = JSON.parse(savedRaw)
+            if (Array.isArray(saved) && saved.length > 0) {
+              const allowed = new Set(groupOptions.map((g: { value: string; label: string }) => g.value))
+              const restored = saved.filter((v: string) => v === "__USER_NAME_TEST__" || v === "__EXCLUDE_USER_NAME_TEST__" || allowed.has(v as string))
+              if (restored.length > 0) {
+                handleUserGroupsChange(restored)
+                setGroupsReady(true)
+                return
+              }
+            }
+          }
+        } catch {}
+        handleUserGroupsChange(["__ALL__"]) 
+        setGroupsReady(true)
+        return
+      }
 
       // 1) 优先从本地恢复
       try {
@@ -1012,8 +1085,8 @@ export default function CustomerPnLMonitorV2() {
     sortBy?: string, 
     sortOrder?: string
   ) => {
-    // 非 MT5 服务器：直接显示无数据并跳过请求
-    if (server !== "MT5") {
+    // 暂不接入 MT4Live：前端直接显示空并跳过请求
+    if (server === "MT4Live") {
       setTotalCount(0)
       setTotalPages(0)
       setLastUpdated(null)
@@ -1029,6 +1102,8 @@ export default function CustomerPnLMonitorV2() {
       page: currentPage.toString(),
       page_size: currentPageSize.toString(),
     })
+    // 追加 server 参数
+    params.set('server', server)
     
     if (currentSortBy) {
       params.set('sort_by', currentSortBy)
@@ -1100,6 +1175,11 @@ export default function CustomerPnLMonitorV2() {
   // 监听分页、排序、服务器/品种变化，自动重新获取数据
   useEffect(() => {
     if (!groupsReady) return
+    // 切换到 MT4Live 时立即清空，避免短暂显示旧服务器的数据
+    if (server === "MT4Live") {
+      setRows([])
+      return
+    }
     ;(async () => {
       try {
         setError(null)
@@ -1240,6 +1320,13 @@ export default function CustomerPnLMonitorV2() {
             </div>
             <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
           </div>
+        </div>
+      )}
+
+      {/* MT4Live 暂未接入提示（简洁文本，无额外装饰） */}
+      {server === 'MT4Live' && (
+        <div className="px-1 sm:px-0">
+          <p className="text-sm">该服务器暂未接入</p>
         </div>
       )}
 

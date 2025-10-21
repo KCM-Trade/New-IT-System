@@ -19,6 +19,21 @@ def _pg_mt5_dsn() -> str:
     return f"host={host} port={port} dbname={db} user={user} password={password}"
 
 
+def resolve_table_and_dataset(server: str) -> Tuple[str, str]:
+    """Map server to source table and watermark dataset.
+
+    - MT5       -> public.pnl_user_summary,          dataset='pnl_user_summary'
+    - MT4Live2  -> public.pnl_user_summary_mt4live2, dataset='pnl_user_summary_mt4live2'
+    - default   -> MT5 mapping
+    """
+    srv = (server or "").upper()
+    if srv == "MT5":
+        return "public.pnl_user_summary", "pnl_user_summary"
+    if srv == "MT4LIVE2":
+        return "public.pnl_user_summary_mt4live2", "pnl_user_summary_mt4live2"
+    raise ValueError(f"Unsupported server: {server}")
+
+
 def get_pnl_user_summary_paginated(
     page: int = 1,
     page_size: int = 100,
@@ -26,6 +41,7 @@ def get_pnl_user_summary_paginated(
     sort_order: str = "asc",
     user_groups: Optional[List[str]] = None,
     search: Optional[str] = None,
+    source_table: str = "public.pnl_user_summary",
 ) -> Tuple[List[dict], int, int]:
     """分页查询 public.pnl_user_summary
 
@@ -140,7 +156,7 @@ def get_pnl_user_summary_paginated(
         # 兼容性：即使数据库未添加生成列，也计算一个别名
         "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0)) AS closed_total_profit, "
         "overnight_volume_ratio, last_updated "
-        "FROM public.pnl_user_summary" + where_clause
+        f"FROM {source_table}" + where_clause
     )
 
     # 排序
@@ -166,7 +182,7 @@ def get_pnl_user_summary_paginated(
     offset = (page - 1) * page_size
     paginated_sql = base_select + order_clause + " LIMIT %s OFFSET %s"
 
-    count_sql = "SELECT COUNT(*) FROM public.pnl_user_summary" + where_clause
+    count_sql = f"SELECT COUNT(*) FROM {source_table}" + where_clause
 
     dsn = _pg_mt5_dsn()
     with psycopg2.connect(dsn) as conn:
@@ -199,7 +215,7 @@ def get_etl_watermark_last_updated(dataset: str = "pnl_user_summary") -> Optiona
             return row[0] if row else None
 
 
-def get_user_groups_from_user_summary() -> List[str]:
+def get_user_groups_from_user_summary(source_table: str = "public.pnl_user_summary") -> List[str]:
     """从 public.pnl_user_summary 去重获取组别，并将以 'managers\' 开头的归并为 'manager'。
 
     Returns:
@@ -209,9 +225,9 @@ def get_user_groups_from_user_summary() -> List[str]:
     with psycopg2.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT DISTINCT user_group
-                FROM public.pnl_user_summary
+                FROM {source_table}
                 WHERE user_group IS NOT NULL
                   AND TRIM(user_group) != ''
                 """

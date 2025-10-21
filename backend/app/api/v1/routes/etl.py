@@ -15,6 +15,7 @@ from app.services.etl_pg_service import (
     get_etl_watermark_last_updated,
     mt5_incremental_refresh,
     get_user_groups_from_user_summary,
+    resolve_table_and_dataset,
 )
 
 
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/etl", tags=["etl"])
 
 @router.get("/pnl-user-summary/paginated", response_model=PaginatedPnlUserSummaryResponse)
 def get_pnl_user_summary(
+    server: str = Query("MT5", description="服务器名称：MT5 或 MT4Live2"),
     page: int = Query(1, ge=1, description="页码，从1开始"),
     page_size: int = Query(100, ge=1, le=1000, description="每页记录数"),
     sort_by: Optional[str] = Query(None, description="排序字段"),
@@ -31,6 +33,7 @@ def get_pnl_user_summary(
     search: Optional[str] = Query(None, description="统一搜索：支持 login/user_id(精确) 或 user_name(模糊)"),
 ) -> PaginatedPnlUserSummaryResponse:
     try:
+        source_table, dataset = resolve_table_and_dataset(server)
         groups_list: Optional[List[str]] = None
         if user_groups:
             # 支持重复键数组；兼容单元素里带逗号的旧调用
@@ -62,9 +65,10 @@ def get_pnl_user_summary(
             sort_order=sort_order,
             user_groups=groups_list,
             search=search,
+            source_table=source_table,
         )
 
-        watermark = get_etl_watermark_last_updated(dataset="pnl_user_summary")
+        watermark = get_etl_watermark_last_updated(dataset=dataset)
         return PaginatedPnlUserSummaryResponse(
             ok=True,
             data=[PnlUserSummaryItem(**r) for r in rows],
@@ -75,6 +79,8 @@ def get_pnl_user_summary(
             watermark_last_updated=watermark,
         )
     except Exception as e:
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=str(e))
         return PaginatedPnlUserSummaryResponse(
             ok=False,
             data=[],
@@ -112,13 +118,16 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
 
 
 @router.get("/groups", response_model=List[str])
-def get_groups() -> List[str]:
+def get_groups(server: str = Query("MT5", description="服务器名称：MT5 或 MT4Live2")) -> List[str]:
     """获取所有用户组别（来自 public.pnl_user_summary，已去重与规范化）。
 
     为与前端筛选对接，返回扁平列表，由前端按“测试/KCM*/AKCM*/其他”进行分类展示。
     """
     try:
-        return get_user_groups_from_user_summary()
+        source_table, _ = resolve_table_and_dataset(server)
+        return get_user_groups_from_user_summary(source_table=source_table)
     except Exception as e:
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
