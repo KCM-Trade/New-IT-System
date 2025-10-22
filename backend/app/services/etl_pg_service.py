@@ -58,11 +58,8 @@ def get_pnl_user_summary_paginated(
         "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
         "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
         "withdrawal_amount", "net_deposit", "overnight_volume_ratio", "last_updated",
-        # 新增：平仓总盈亏（买+卖）
+        # 平仓总盈亏（含 swap）：从数据库字段 closed_total_profit_with_swap 映射
         "closed_total_profit",
-        # 新增：平仓总盈亏（含 swap）与不含 swap 的排序键
-        "closed_total_profit_with_swap",
-        "closed_total_profit_without_swap",
         # 计算列（前端聚合列）的排序别名
         "overnight_volume_all", "total_volume_all", "overnight_order_all", "total_order_all",
     }

@@ -156,11 +156,13 @@
 ### 日期
 - `last_updated`: 更新时间
 
+### 数据库计算列（已支持筛选）
+- `closed_total_profit`: 平仓总盈亏（从数据库字段 `closed_total_profit_with_swap` 映射，包含 swap）
+
 ### 暂不支持筛选的列
 以下列为前端计算列/聚合列，需要后端支持后才能开放筛选：
-- `closed_total_profit`: 平仓总盈亏 (前端计算)
-- `overnight_volume_ratio`: 过夜成交量占比 (前端计算)
-- 所有 `overnight_*_all`、`total_*_all` 聚合列 (AG Grid valueGetter)
+- `overnight_volume_ratio`: 过夜成交量占比（前端计算）
+- 所有 `overnight_*_all`、`total_*_all` 聚合列（AG Grid valueGetter，前端聚合）
 
 ## 后续对接后端的步骤
 
@@ -186,14 +188,22 @@ if (appliedFilters && appliedFilters.rules.length > 0) {
 - 组合: WHERE (rule1) AND/OR (rule2) AND/OR ...
 
 ### 4. 计算列支持
-将前端计算下沉到 SQL SELECT：
+✅ **已完成**: `closed_total_profit` 现已从数据库字段 `closed_total_profit_with_swap` 直接映射，支持筛选与排序。
+
+其他前端计算列（如 `overnight_volume_ratio`）需将计算逻辑下沉到数据库层：
 ```sql
+-- 示例：过夜成交量占比
 SELECT 
   *,
-  (closed_buy_profit + closed_sell_profit + closed_buy_swap + closed_sell_swap) AS closed_total_profit
+  CASE 
+    WHEN (closed_buy_volume_lots + closed_sell_volume_lots) > 0 
+    THEN (closed_buy_overnight_volume_lots + closed_sell_overnight_volume_lots) / 
+         (closed_buy_volume_lots + closed_sell_volume_lots)
+    ELSE -1 
+  END AS overnight_volume_ratio
 FROM pnl_user_summary
 ```
-然后允许对 `closed_total_profit` 筛选。
+然后允许对这些列筛选。
 
 ### 5. 性能优化
 - 对高频筛选列建立索引
@@ -228,8 +238,10 @@ FROM pnl_user_summary
 
 1. **不发送请求**: 应用筛选条件后不会触发后端 API 调用
 2. **不影响数据**: 表格数据不会变化，仅生成 JSON 并展示 Badge
-3. **计算列**: `closed_total_profit`、`overnight_volume_ratio` 等标记为不可筛选
-4. **聚合列**: valueGetter 派生的列未列入选项（需后端先派生）
+3. **部分计算列**: `overnight_volume_ratio` 等前端计算列标记为不可筛选
+4. **聚合列**: valueGetter 派生的列（`overnight_*_all`、`total_*_all`）未列入选项（需后端先派生）
 
-所有限制将在后端对接后解除。
+**注意**: `closed_total_profit` 已启用筛选（后端数据库字段支持）。
+
+所有其他限制将在后端对接后解除。
 

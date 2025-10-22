@@ -69,7 +69,7 @@ interface PnlSummaryRow {
   withdrawal_amount: number | string
   net_deposit: number | string
 
-  // 新增：平仓总盈亏（buy+sell 合计）
+  // 平仓总盈亏（包含 swap，从数据库字段 closed_total_profit_with_swap 映射）
   closed_total_profit?: number | string
 
   // 审计
