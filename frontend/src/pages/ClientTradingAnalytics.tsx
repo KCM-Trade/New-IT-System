@@ -1111,7 +1111,7 @@ export default function ClientTradingAnalyticsPage() {
         <Card className="border-muted bg-muted/5">
           <CardContent className="pt-6">
             <div className="text-center text-muted-foreground">
-              <div className="text-sm">请选择筛选条件后点击"开始分析"按钮查看数据分析结果</div>
+              <div className="text-sm">请选择筛选条件后点击"开始分析"按钮查看数据分析结果（目前仅支持MT4 cn客户）</div>
               <div className="text-xs mt-1">
                 当前已选择 {effectiveAccounts.length} 个账户 · {rangeLabel} · 
                 {symbolsMode === "all" ? "全部品种" : `${selectedSymbols.length} 个品种`}
