@@ -14,6 +14,7 @@ from app.services.etl_pg_service import (
     get_pnl_user_summary_paginated,
     get_etl_watermark_last_updated,
     mt5_incremental_refresh,
+    mt4live2_incremental_refresh,
     get_user_groups_from_user_summary,
     resolve_table_and_dataset,
 )
@@ -94,14 +95,20 @@ def get_pnl_user_summary(
 
 @router.post("/pnl-user-summary/refresh", response_model=EtlRefreshResponse)
 def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
-    """Trigger MT5 incremental refresh for pnl_user_summary.
+    """Trigger incremental refresh for pnl_user_summary by server.
 
-    仅支持 MT5。强制使用 Postgres DB 名称 MT5_ETL（根据用户要求）。
+    - MT5       -> mt5_incremental_refresh (Postgres MT5_ETL + MySQL mt5_live)
+    - MT4Live2  -> mt4live2_incremental_refresh (Postgres MT5_ETL + MySQL mt4_live2)
     """
-    if body.server != "MT5":
-        raise HTTPException(status_code=400, detail="Only MT5 server is supported for refresh")
     try:
-        r = mt5_incremental_refresh()
+        server = (body.server or "").upper()
+        if server == "MT5":
+            r = mt5_incremental_refresh()
+        elif server == "MT4LIVE2":
+            r = mt4live2_incremental_refresh()
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported server for refresh: {body.server}")
+
         status = "success" if r.get("success") else "error"
         return EtlRefreshResponse(
             status=status,
@@ -113,6 +120,8 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
             new_trades_count=r.get("new_trades_count"),
             floating_only_count=r.get("floating_only_count"),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

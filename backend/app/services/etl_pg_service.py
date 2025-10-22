@@ -590,3 +590,515 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
     return result
 
 
+
+# ------------------- Incremental refresh (MT4Live2) -------------------
+def mt4live2_incremental_refresh() -> Dict[str, Any]:
+    """Run MT4Live2 incremental ETL into public.pnl_user_summary_mt4live2.
+
+    Design goals (for junior engineers):
+    - Use advisory lock (937000002) to avoid concurrent runs
+    - Maintain shared watermarks table (dataset='pnl_user_summary_mt4live2')
+    - Ensure target summary table and open orders state table
+    - Incremental window by MT4 TICKET (> last_deal_id watermark)
+    - Upsert per-login deltas and refresh floating PnL from mt4_users snapshot
+    - Return concise metrics for UI
+    """
+    pg_dsn = _pg_mt5_dsn_forced_db("MT5_ETL")
+    mysql_cfg: Dict[str, Any] = {
+        "host": os.getenv("MYSQL_HOST"),
+        "user": os.getenv("MYSQL_USER"),
+        "password": os.getenv("MYSQL_PASSWORD"),
+        "database": os.getenv("MYSQL_DATABASE_MT4LIVE2"),
+    }
+
+    result: Dict[str, Any] = {
+        "success": False,
+        "processed_rows": 0,
+        "duration_seconds": 0.0,
+        "new_max_deal_id": None,
+        "new_trades_count": 0,
+        "floating_only_count": 0,
+        "message": None,
+    }
+
+    import time
+    start_ts = time.time()
+
+    # Basic env validation
+    if not all([mysql_cfg.get("host"), mysql_cfg.get("user"), mysql_cfg.get("password"), mysql_cfg.get("database")]):
+        raise RuntimeError("Missing required MySQL env vars for MT4Live2 incremental refresh")
+
+    TARGET_TABLE = "public.pnl_user_summary_mt4live2"
+    DATASET = "pnl_user_summary_mt4live2"
+    PARTITION = "ALL"
+    LOCK_KEY = 937_000_002
+
+    with psycopg2.connect(pg_dsn) as pg_conn:
+        pg_conn.autocommit = False
+
+        # Acquire advisory lock
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (LOCK_KEY,))
+            locked = bool(cur.fetchone()[0])
+            pg_conn.commit()
+        if not locked:
+            result["success"] = True
+            result["message"] = "Another MT4Live2 incremental run is in progress"
+            return result
+
+        try:
+            # Ensure common watermarks table
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.etl_watermarks (
+                      dataset       text        NOT NULL,
+                      partition_key text        NOT NULL DEFAULT 'ALL',
+                      last_deal_id  bigint,
+                      last_time     timestamptz,
+                      last_login    bigint,
+                      last_updated  timestamptz NOT NULL DEFAULT now(),
+                      CONSTRAINT pk_etl_watermarks PRIMARY KEY (dataset, partition_key)
+                    );
+                    """
+                )
+                pg_conn.commit()
+
+            # Ensure target summary table (mirror of MT5 table)
+            ddl_main = f"""
+            CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
+              login                           bigint        NOT NULL,
+              symbol                          text          NOT NULL DEFAULT 'ALL',
+              user_name                       text,
+              user_group                      text,
+              country                         text,
+              zipcode                         text,
+              user_id                         bigint,
+              user_balance                    numeric(20,2) NOT NULL DEFAULT 0,
+              user_credit                     numeric(20,2) NOT NULL DEFAULT 0,
+              positions_floating_pnl          numeric(20,2) NOT NULL DEFAULT 0,
+              equity                          numeric(20,2) GENERATED ALWAYS AS (user_balance + user_credit + positions_floating_pnl) STORED,
+              closed_sell_volume_lots         numeric(20,6) NOT NULL DEFAULT 0,
+              closed_sell_count               integer       NOT NULL DEFAULT 0,
+              closed_sell_profit              numeric(20,2) NOT NULL DEFAULT 0,
+              closed_sell_swap                numeric(20,2) NOT NULL DEFAULT 0,
+              closed_sell_overnight_count     integer       NOT NULL DEFAULT 0,
+              closed_sell_overnight_volume_lots numeric(20,6) NOT NULL DEFAULT 0,
+              closed_buy_volume_lots          numeric(20,6) NOT NULL DEFAULT 0,
+              closed_buy_count                integer       NOT NULL DEFAULT 0,
+              closed_buy_profit               numeric(20,2) NOT NULL DEFAULT 0,
+              closed_buy_swap                 numeric(20,2) NOT NULL DEFAULT 0,
+              closed_buy_overnight_count      integer       NOT NULL DEFAULT 0,
+              closed_buy_overnight_volume_lots numeric(20,6) NOT NULL DEFAULT 0,
+              total_commission                numeric(20,2) NOT NULL DEFAULT 0,
+              deposit_count                   integer       NOT NULL DEFAULT 0,
+              deposit_amount                  numeric(20,2) NOT NULL DEFAULT 0,
+              withdrawal_count                integer       NOT NULL DEFAULT 0,
+              withdrawal_amount               numeric(20,2) NOT NULL DEFAULT 0,
+              net_deposit                     numeric(20,2) GENERATED ALWAYS AS (deposit_amount - withdrawal_amount) STORED,
+              last_updated                    timestamptz   NOT NULL DEFAULT now(),
+              CONSTRAINT pk_pnl_user_summary_mt4live2 PRIMARY KEY (login, symbol)
+            );
+            """
+            ddl_ratio = f"""
+            ALTER TABLE {TARGET_TABLE}
+            ADD COLUMN IF NOT EXISTS overnight_volume_ratio numeric(6,3)
+            GENERATED ALWAYS AS (
+              CASE
+                WHEN (COALESCE(closed_sell_volume_lots, 0) + COALESCE(closed_buy_volume_lots, 0)) > 0 THEN
+                  ROUND(
+                    (
+                      COALESCE(closed_sell_overnight_volume_lots, 0) +
+                      COALESCE(closed_buy_overnight_volume_lots, 0)
+                    ) / (
+                      COALESCE(closed_sell_volume_lots, 0) +
+                      COALESCE(closed_buy_volume_lots, 0)
+                    ),
+                    3
+                  )
+                ELSE -1
+              END
+            ) STORED;
+            """
+            with pg_conn.cursor() as cur:
+                cur.execute(ddl_main)
+                # Ensure equity generated column uses balance + credit + floating_pnl even if table existed earlier
+                try:
+                    cur.execute(f"ALTER TABLE {TARGET_TABLE} DROP COLUMN IF EXISTS equity")
+                    cur.execute(
+                        f"ALTER TABLE {TARGET_TABLE} ADD COLUMN equity numeric(20,2) GENERATED ALWAYS AS (user_balance + user_credit + positions_floating_pnl) STORED"
+                    )
+                except Exception:
+                    pass
+                cur.execute(ddl_ratio)
+                pg_conn.commit()
+
+            # Ensure open orders table (state for incremental window)
+            ddl_open = """
+            CREATE TABLE IF NOT EXISTS public.mt4_open_orders (
+              ticket             bigint        PRIMARY KEY,
+              login              bigint        NOT NULL,
+              symbol             text          NOT NULL,
+              cmd                smallint      NOT NULL,
+              volume_lots        numeric(20,6) NOT NULL,
+              open_time          timestamptz   NOT NULL,
+              open_price         numeric(20,6) NOT NULL,
+              digits             integer       NOT NULL,
+              swaps              numeric(20,2) NOT NULL DEFAULT 0,
+              comment            text,
+              magic              integer,
+              source_modify_time timestamptz,
+              last_seen          timestamptz   NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS idx_mt4_open_orders_login  ON public.mt4_open_orders(login);
+            CREATE INDEX IF NOT EXISTS idx_mt4_open_orders_symbol ON public.mt4_open_orders(symbol);
+            """
+            with pg_conn.cursor() as cur:
+                cur.execute(ddl_open)
+                pg_conn.commit()
+
+            # Read last watermark (MT4 ticket semantics)
+            since_ticket = 0
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT last_deal_id FROM public.etl_watermarks WHERE dataset=%s AND partition_key=%s",
+                    (DATASET, PARTITION),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    since_ticket = int(row[0])
+                else:
+                    cur.execute(
+                        "INSERT INTO public.etl_watermarks (dataset, partition_key, last_deal_id, last_updated) VALUES (%s,%s,%s, now()) ON CONFLICT DO NOTHING",
+                        (DATASET, PARTITION, 0),
+                    )
+                    pg_conn.commit()
+                    since_ticket = 0
+
+            # Connect to MySQL
+            mysql_conn = mysql.connector.connect(**mysql_cfg)
+            try:
+                # Ensure skeleton rows exist in target
+                users_sql = (
+                    "SELECT u.Login, u.`Name` AS user_name, u.`Group` AS user_group, u.Country, u.ZipCode AS zipcode, "
+                    "CAST(NULLIF(u.ID,'') AS SIGNED) AS user_id, COALESCE(u.balance,0) AS balance, COALESCE(u.credit,0) AS credit "
+                    "FROM mt4_live2.mt4_users u"
+                )
+                to_insert = []
+                with mysql_conn.cursor(dictionary=True) as cur:
+                    cur.execute(users_sql)
+                    for r in cur.fetchall():
+                        to_insert.append((
+                            int(r['Login']), 'ALL',
+                            r.get('user_name'), r.get('user_group'), r.get('Country'), r.get('zipcode'), r.get('user_id'),
+                            float(r.get('balance') or 0), float(r.get('credit') or 0),
+                            0.0,
+                        ))
+                if to_insert:
+                    from psycopg2.extras import execute_values
+                    with pg_conn.cursor() as cur:
+                        execute_values(cur,
+                            f"INSERT INTO {TARGET_TABLE} (login, symbol, user_name, user_group, country, zipcode, user_id, user_balance, user_credit, positions_floating_pnl) VALUES %s "
+                            f"ON CONFLICT (login, symbol) DO UPDATE SET "
+                            f"  user_name = EXCLUDED.user_name, user_group = EXCLUDED.user_group, country = EXCLUDED.country, zipcode = EXCLUDED.zipcode, user_id = EXCLUDED.user_id, "
+                            f"  user_balance = EXCLUDED.user_balance, user_credit = EXCLUDED.user_credit",
+                            to_insert, page_size=2000)
+
+                # Helper: group closed rows per login
+                def _group_closed_rows_per_login(rows: List[tuple], volume_divisor: float) -> Dict[int, Dict[str, Any]]:
+                    per_login: Dict[int, Dict[str, Any]] = {}
+                    for r in rows:
+                        # (TICKET, LOGIN, SYMBOL, CMD, VOLUME, OPEN_TIME, OPEN_PRICE, CLOSE_TIME, PROFIT, SWAPS, COMMISSION)
+                        _, login, _symbol, cmd, volume, open_time, _open_price, close_time, profit, swaps, commission = r
+                        side = 'BUY' if cmd == 0 else 'SELL'
+                        lots = (volume or 0) / 100.0  # MT4 volume to lots; default 100 divisor
+                        overnight = 1 if (open_time.date() != close_time.date()) else 0
+                        if login not in per_login:
+                            per_login[login] = {
+                                'closed_sell_volume_lots': 0.0,
+                                'closed_sell_count': 0,
+                                'closed_sell_profit': 0.0,
+                                'closed_sell_swap': 0.0,
+                                'closed_sell_overnight_count': 0,
+                                'closed_sell_overnight_volume_lots': 0.0,
+                                'closed_buy_volume_lots': 0.0,
+                                'closed_buy_count': 0,
+                                'closed_buy_profit': 0.0,
+                                'closed_buy_swap': 0.0,
+                                'closed_buy_overnight_count': 0,
+                                'closed_buy_overnight_volume_lots': 0.0,
+                                'total_commission': 0.0,
+                            }
+                        agg = per_login[login]
+                        if side == 'SELL':
+                            agg['closed_sell_volume_lots'] += lots
+                            agg['closed_sell_count'] += 1
+                            agg['closed_sell_profit'] += (profit or 0)
+                            agg['closed_sell_swap'] += (swaps or 0)
+                            agg['closed_sell_overnight_count'] += overnight
+                            agg['closed_sell_overnight_volume_lots'] += (lots if overnight else 0)
+                        else:
+                            agg['closed_buy_volume_lots'] += lots
+                            agg['closed_buy_count'] += 1
+                            agg['closed_buy_profit'] += (profit or 0)
+                            agg['closed_buy_swap'] += (swaps or 0)
+                            agg['closed_buy_overnight_count'] += overnight
+                            agg['closed_buy_overnight_volume_lots'] += (lots if overnight else 0)
+                        agg['total_commission'] += (commission or 0)
+                    return per_login
+
+                # Fetch current open orders tickets
+                open_ticket_ids: List[int] = []
+                with pg_conn.cursor() as cur:
+                    cur.execute("SELECT ticket FROM public.mt4_open_orders")
+                    open_ticket_ids = [int(r[0]) for r in cur.fetchall()]
+
+                # Closures among current open orders
+                closures: List[tuple] = []
+                if open_ticket_ids:
+                    # chunked IN
+                    sql = (
+                        "SELECT TICKET, LOGIN, SYMBOL, CMD, VOLUME, OPEN_TIME, OPEN_PRICE, CLOSE_TIME, PROFIT, SWAPS, COMMISSION "
+                        "FROM mt4_live2.mt4_trades WHERE TICKET IN ({ph}) AND CLOSE_TIME <> '1970-01-01 00:00:00'"
+                    )
+                    chunk = 1000
+                    with mysql_conn.cursor() as cur:
+                        for i in range(0, len(open_ticket_ids), chunk):
+                            part = open_ticket_ids[i:i+chunk]
+                            placeholders = ",".join(["%s"] * len(part))
+                            cur.execute(sql.format(ph=placeholders), part)
+                            closures.extend(cur.fetchall())
+                closed_ids = [int(r[0]) for r in closures]
+                per_login_a = _group_closed_rows_per_login(closures, 100.0) if closures else {}
+
+                # New opens after since_ticket
+                with mysql_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT TICKET, LOGIN, SYMBOL, CMD, VOLUME/ %s AS volume_lots, OPEN_TIME, OPEN_PRICE, DIGITS, COALESCE(SWAPS,0) AS swaps, COMMENT, MAGIC, MODIFY_TIME "
+                        "FROM mt4_live2.mt4_trades WHERE TICKET > %s AND CMD IN (0,1) AND CLOSE_TIME = '1970-01-01 00:00:00'",
+                        (100.0, since_ticket),
+                    )
+                    new_opens = [tuple(r) for r in cur.fetchall()]
+
+                # New closed after since_ticket excluding those already closed above
+                params: List[Any] = [since_ticket]
+                base = (
+                    "SELECT TICKET, LOGIN, SYMBOL, CMD, VOLUME, OPEN_TIME, OPEN_PRICE, CLOSE_TIME, PROFIT, SWAPS, COMMISSION "
+                    "FROM mt4_live2.mt4_trades WHERE TICKET > %s AND CMD IN (0,1) AND CLOSE_TIME <> '1970-01-01 00:00:00'"
+                )
+                if closed_ids:
+                    placeholders = ",".join(["%s"] * len(closed_ids))
+                    sql = base + f" AND TICKET NOT IN ({placeholders})"
+                    params.extend(closed_ids)
+                else:
+                    sql = base
+                with mysql_conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    new_closed = [tuple(r) for r in cur.fetchall()]
+
+                per_login_b = _group_closed_rows_per_login(new_closed, 100.0) if new_closed else {}
+
+                # Merge per-login deltas
+                per_login: Dict[int, Dict[str, Any]] = {}
+                for d in (per_login_a, per_login_b):
+                    for login, agg in d.items():
+                        if login not in per_login:
+                            per_login[login] = {k: (0.0 if isinstance(v, float) else 0) for k, v in agg.items()}
+                        for k, v in agg.items():
+                            per_login[login][k] += v
+
+                # Balance deltas
+                with mysql_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT LOGIN, "
+                        "SUM(CASE WHEN PROFIT > 0 THEN 1 ELSE 0 END) AS deposit_count, "
+                        "SUM(CASE WHEN PROFIT > 0 THEN PROFIT ELSE 0 END) AS deposit_amount, "
+                        "SUM(CASE WHEN PROFIT < 0 THEN 1 ELSE 0 END) AS withdrawal_count, "
+                        "SUM(CASE WHEN PROFIT < 0 THEN -PROFIT ELSE 0 END) AS withdrawal_amount "
+                        "FROM mt4_live2.mt4_trades WHERE CMD=6 AND TICKET > %s GROUP BY LOGIN",
+                        (since_ticket,),
+                    )
+                    balance_rows = [tuple(r) for r in cur.fetchall()]
+
+                # Fetch user snapshots for involved logins
+                login_list = sorted(set(list(per_login.keys()) + [int(r[0]) for r in balance_rows]))
+                snapshots: Dict[int, Dict[str, Any]] = {}
+                if login_list:
+                    placeholders = ",".join(["%s"] * len(login_list))
+                    with mysql_conn.cursor(dictionary=True) as cur:
+                        cur.execute(
+                            f"SELECT Login, `Name` AS name, `Group` AS `group`, Country, ZipCode, CAST(NULLIF(ID,'') AS SIGNED) AS user_id, COALESCE(balance,0) AS balance, COALESCE(credit,0) AS credit FROM mt4_live2.mt4_users WHERE Login IN ({placeholders})",
+                            login_list,
+                        )
+                        for r in cur.fetchall():
+                            snapshots[int(r['Login'])] = r
+
+                # Apply changes: delete closed from open_orders; insert new opens; upsert deltas
+                deleted_from_open = 0
+                if closed_ids:
+                    with pg_conn.cursor() as cur:
+                        # chunk delete
+                        chunk = 1000
+                        for i in range(0, len(closed_ids), chunk):
+                            part = closed_ids[i:i+chunk]
+                            placeholders = ",".join(["%s"] * len(part))
+                            cur.execute(f"DELETE FROM public.mt4_open_orders WHERE ticket IN ({placeholders})", part)
+                        deleted_from_open = len(closed_ids)
+
+                added_to_open = 0
+                if new_opens:
+                    from psycopg2.extras import execute_values
+                    with pg_conn.cursor() as cur:
+                        cur.execute(
+                            "CREATE TABLE IF NOT EXISTS public.mt4_open_orders (ticket bigint PRIMARY KEY, login bigint NOT NULL, symbol text NOT NULL, cmd smallint NOT NULL, volume_lots numeric(20,6) NOT NULL, open_time timestamptz NOT NULL, open_price numeric(20,6) NOT NULL, digits integer NOT NULL, swaps numeric(20,2) NOT NULL DEFAULT 0, comment text, magic integer, source_modify_time timestamptz, last_seen timestamptz NOT NULL DEFAULT now());"
+                        )
+                        execute_values(cur,
+                            "INSERT INTO public.mt4_open_orders (ticket, login, symbol, cmd, volume_lots, open_time, open_price, digits, swaps, comment, magic, source_modify_time) VALUES %s ON CONFLICT (ticket) DO UPDATE SET "
+                            "login=EXCLUDED.login, symbol=EXCLUDED.symbol, cmd=EXCLUDED.cmd, volume_lots=EXCLUDED.volume_lots, open_time=EXCLUDED.open_time, open_price=EXCLUDED.open_price, digits=EXCLUDED.digits, swaps=EXCLUDED.swaps, comment=EXCLUDED.comment, magic=EXCLUDED.magic, source_modify_time=EXCLUDED.source_modify_time, last_seen=now()",
+                            new_opens, page_size=2000)
+                        added_to_open = len(new_opens)
+
+                # Build upsert rows per login
+                zero_agg = {
+                    'closed_sell_volume_lots': 0.0,
+                    'closed_sell_count': 0,
+                    'closed_sell_profit': 0.0,
+                    'closed_sell_swap': 0.0,
+                    'closed_sell_overnight_count': 0,
+                    'closed_sell_overnight_volume_lots': 0.0,
+                    'closed_buy_volume_lots': 0.0,
+                    'closed_buy_count': 0,
+                    'closed_buy_profit': 0.0,
+                    'closed_buy_swap': 0.0,
+                    'closed_buy_overnight_count': 0,
+                    'closed_buy_overnight_volume_lots': 0.0,
+                    'total_commission': 0.0,
+                }
+                balance_map = {int(login): (int(dc or 0), float(da or 0.0), int(wc or 0), float(wa or 0.0)) for login, dc, da, wc, wa in balance_rows}
+                all_logins = sorted(set([int(l) for l in per_login.keys()]) | set(balance_map.keys()))
+                upsert_rows: List[tuple] = []
+                for login in all_logins:
+                    agg = per_login.get(login, zero_agg)
+                    snap = snapshots.get(int(login), {})
+                    dc, da, wc, wa = balance_map.get(int(login), (0, 0.0, 0, 0.0))
+                    upsert_rows.append((
+                        int(login), 'ALL',
+                        snap.get('name'), snap.get('group'), snap.get('Country'), snap.get('ZipCode'), snap.get('user_id'),
+                        float(snap.get('balance', 0) or 0), float(snap.get('credit', 0) or 0),
+                        0.0,
+                        float(agg['closed_sell_volume_lots']), int(agg['closed_sell_count']), float(agg['closed_sell_profit']), float(agg['closed_sell_swap']), int(agg['closed_sell_overnight_count']), float(agg['closed_sell_overnight_volume_lots']),
+                        float(agg['closed_buy_volume_lots']), int(agg['closed_buy_count']), float(agg['closed_buy_profit']), float(agg['closed_buy_swap']), int(agg['closed_buy_overnight_count']), float(agg['closed_buy_overnight_volume_lots']),
+                        float(agg['total_commission']),
+                        int(dc), float(da), int(wc), float(wa)
+                    ))
+
+                affected = 0
+                if upsert_rows:
+                    from psycopg2.extras import execute_values
+                    sql = f"""
+                    INSERT INTO {TARGET_TABLE} (
+                      login, symbol,
+                      user_name, user_group, country, zipcode, user_id,
+                      user_balance, user_credit, positions_floating_pnl,
+                      closed_sell_volume_lots, closed_sell_count, closed_sell_profit, closed_sell_swap, closed_sell_overnight_count, closed_sell_overnight_volume_lots,
+                      closed_buy_volume_lots,  closed_buy_count,  closed_buy_profit,  closed_buy_swap,  closed_buy_overnight_count,  closed_buy_overnight_volume_lots,
+                      total_commission,
+                      deposit_count, deposit_amount, withdrawal_count, withdrawal_amount
+                    ) VALUES %s
+                    ON CONFLICT (login, symbol) DO UPDATE SET
+                      user_name = EXCLUDED.user_name,
+                      user_group = EXCLUDED.user_group,
+                      country = EXCLUDED.country,
+                      zipcode = EXCLUDED.zipcode,
+                      user_id = EXCLUDED.user_id,
+                      user_balance = EXCLUDED.user_balance,
+                      user_credit = EXCLUDED.user_credit,
+                      positions_floating_pnl = {TARGET_TABLE}.positions_floating_pnl,
+                      closed_sell_volume_lots = {TARGET_TABLE}.closed_sell_volume_lots + EXCLUDED.closed_sell_volume_lots,
+                      closed_sell_count       = {TARGET_TABLE}.closed_sell_count       + EXCLUDED.closed_sell_count,
+                      closed_sell_profit      = {TARGET_TABLE}.closed_sell_profit      + EXCLUDED.closed_sell_profit,
+                      closed_sell_swap        = {TARGET_TABLE}.closed_sell_swap        + EXCLUDED.closed_sell_swap,
+                      closed_sell_overnight_count = {TARGET_TABLE}.closed_sell_overnight_count + EXCLUDED.closed_sell_overnight_count,
+                      closed_sell_overnight_volume_lots = {TARGET_TABLE}.closed_sell_overnight_volume_lots + EXCLUDED.closed_sell_overnight_volume_lots,
+                      closed_buy_volume_lots  = {TARGET_TABLE}.closed_buy_volume_lots  + EXCLUDED.closed_buy_volume_lots,
+                      closed_buy_count        = {TARGET_TABLE}.closed_buy_count        + EXCLUDED.closed_buy_count,
+                      closed_buy_profit       = {TARGET_TABLE}.closed_buy_profit       + EXCLUDED.closed_buy_profit,
+                      closed_buy_swap         = {TARGET_TABLE}.closed_buy_swap         + EXCLUDED.closed_buy_swap,
+                      closed_buy_overnight_count = {TARGET_TABLE}.closed_buy_overnight_count + EXCLUDED.closed_buy_overnight_count,
+                      closed_buy_overnight_volume_lots = {TARGET_TABLE}.closed_buy_overnight_volume_lots + EXCLUDED.closed_buy_overnight_volume_lots,
+                      total_commission        = {TARGET_TABLE}.total_commission        + EXCLUDED.total_commission,
+                      deposit_count           = {TARGET_TABLE}.deposit_count           + EXCLUDED.deposit_count,
+                      deposit_amount          = {TARGET_TABLE}.deposit_amount          + EXCLUDED.deposit_amount,
+                      withdrawal_count        = {TARGET_TABLE}.withdrawal_count        + EXCLUDED.withdrawal_count,
+                      withdrawal_amount       = {TARGET_TABLE}.withdrawal_amount       + EXCLUDED.withdrawal_amount,
+                      last_updated = now()
+                    """
+                    with pg_conn.cursor() as cur:
+                        execute_values(cur, sql, upsert_rows, page_size=2000)
+                        affected = len(upsert_rows)
+
+                # Refresh floating pnl using mt4_users snapshot: equity - balance
+                pairs: List[tuple] = []
+                with mysql_conn.cursor() as cur:
+                    cur.execute("SELECT Login, COALESCE(equity,0) - COALESCE(balance,0) - COALESCE(credit,0) AS floating_pnl FROM mt4_live2.mt4_users")
+                    for r in cur.fetchall():
+                        pairs.append((int(r[0]), float(r[1] or 0.0)))
+                if pairs:
+                    from psycopg2.extras import execute_values
+                    with pg_conn.cursor() as cur:
+                        cur.execute("CREATE TEMP TABLE tmp_mt4_floating (login bigint, symbol text, floating_pnl numeric) ON COMMIT DROP")
+                        execute_values(cur, "INSERT INTO tmp_mt4_floating (login, symbol, floating_pnl) VALUES %s", [(login, 'ALL', pnl) for login, pnl in pairs], page_size=2000)
+                        cur.execute(
+                            f"UPDATE {TARGET_TABLE} s SET positions_floating_pnl = t.floating_pnl, "
+                            "    last_updated = CASE WHEN s.positions_floating_pnl IS DISTINCT FROM t.floating_pnl THEN now() ELSE s.last_updated END "
+                            "FROM tmp_mt4_floating t WHERE s.login = t.login AND s.symbol = t.symbol AND s.positions_floating_pnl IS DISTINCT FROM t.floating_pnl"
+                        )
+                        # watermark last_time for floating
+                        cur.execute(
+                            "INSERT INTO public.etl_watermarks (dataset, partition_key, last_time, last_updated) VALUES (%s,%s, now(), now()) "
+                            "ON CONFLICT (dataset, partition_key) DO UPDATE SET last_time=now(), last_updated=now()",
+                            (DATASET, PARTITION),
+                        )
+
+                # Advance watermark last_deal_id
+                window_max = since_ticket
+                if new_opens:
+                    window_max = max(window_max, max(int(r[0]) for r in new_opens))
+                if new_closed:
+                    window_max = max(window_max, max(int(r[0]) for r in new_closed))
+                if balance_rows:
+                    with mysql_conn.cursor() as cur:
+                        cur.execute("SELECT COALESCE(MAX(TICKET), %s) FROM mt4_live2.mt4_trades WHERE CMD=6 AND TICKET > %s", (since_ticket, since_ticket))
+                        row = cur.fetchone()
+                        window_max = max(window_max, int(row[0] or since_ticket))
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO public.etl_watermarks (dataset, partition_key, last_deal_id, last_updated) VALUES (%s,%s,%s, now()) "
+                        "ON CONFLICT (dataset, partition_key) DO UPDATE SET last_deal_id=EXCLUDED.last_deal_id, last_updated=now()",
+                        (DATASET, PARTITION, window_max),
+                    )
+
+                pg_conn.commit()
+
+                result["success"] = True
+                result["processed_rows"] = affected
+                result["new_max_deal_id"] = window_max
+                result["new_trades_count"] = len(closures) + len(new_closed)
+                result["floating_only_count"] = len(pairs)
+            finally:
+                try:
+                    if mysql_conn and mysql_conn.is_connected():
+                        mysql_conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            pg_conn.rollback()
+            raise
+        finally:
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (LOCK_KEY,))
+                pg_conn.commit()
+
+    result["duration_seconds"] = round(time.time() - start_ts, 3)
+    return result
+

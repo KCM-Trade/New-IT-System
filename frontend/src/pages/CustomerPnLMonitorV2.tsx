@@ -1196,10 +1196,10 @@ export default function CustomerPnLMonitorV2() {
 
   
 
-  // 手动刷新处理（仅 MT5）
+  // 手动刷新处理（MT5 / MT4Live2）
   const handleManualRefresh = useCallback(async () => {
-    if (server !== "MT5") {
-      setError("仅支持 MT5 服务器刷新")
+    if (server !== "MT5" && server !== "MT4Live2") {
+      setError("仅支持 MT5/MT4Live2 服务器刷新")
       return
     }
     setIsRefreshing(true)
@@ -1210,11 +1210,22 @@ export default function CustomerPnLMonitorV2() {
         headers: { "Content-Type": "application/json", accept: "application/json" },
         body: JSON.stringify({ server })
       }, 60000)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        try {
+          const err = await res.json()
+          const msg = (err && (err.detail || err.message)) ? `HTTP ${res.status}: ${err.detail || err.message}` : `HTTP ${res.status}`
+          throw new Error(msg)
+        } catch {
+          throw new Error(`HTTP ${res.status}`)
+        }
+      }
       const data = (await res.json()) as EtlRefreshResponse
       const parts: string[] = []
       if (typeof data.new_trades_count === 'number') parts.push(`处理${data.new_trades_count}新交易`)
-      if (typeof data.floating_only_count === 'number') parts.push(`更新${data.floating_only_count}条浮动盈亏`)
+      // MT4Live2：不显示“浮动盈亏更新条数”
+      if (server !== 'MT4Live2' && typeof data.floating_only_count === 'number') {
+        parts.push(`更新${data.floating_only_count}条浮动盈亏`)
+      }
       if (typeof data.duration_seconds === 'number') parts.push(`耗时 ${Number(data.duration_seconds).toFixed(1)} 秒`)
       const msg = parts.length > 0 ? parts.join('，') : '刷新完成'
       setRefreshInfo(msg)
@@ -1299,7 +1310,7 @@ export default function CustomerPnLMonitorV2() {
 
             {/* actions */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-              <Button onClick={handleManualRefresh} disabled={isRefreshing || server !== 'MT5'} className="h-9 w-full sm:w-auto">
+              <Button onClick={handleManualRefresh} disabled={isRefreshing || (server !== 'MT5' && server !== 'MT4Live2')} className="h-9 w-full sm:w-auto">
                 {isRefreshing ? '刷新中...' : '刷新'}
               </Button>
             </div>
