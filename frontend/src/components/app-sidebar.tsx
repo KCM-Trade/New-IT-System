@@ -35,7 +35,6 @@ const data = {
   },
   navMain: [
     { title: "客户盈亏监控（V2）", url: "/customer-pnl-monitor-v2", icon: IconCoin },
-    { title: "客户盈亏监控", url: "/customer-pnl-monitor", icon: IconCoin },
     { title: "客户交易分析", url: "/client-trading", icon: IconReport },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
@@ -56,6 +55,7 @@ const data = {
       children: [
         { title: "模板", url: "/template" },
         { title: "代理统计Global", url: "/warehouse/agent-global" },
+        { title: "客户盈亏监控", url: "/customer-pnl-monitor" },
       ],
     },
   ],
