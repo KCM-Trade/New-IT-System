@@ -236,6 +236,25 @@ export default function CustomerPnLMonitorV2() {
     } catch {}
   }, [gridApi, gridStateStorageKey])
 
+  // throttle save to reduce frequent localStorage writes during column operations
+  const throttledSaveGridState = useMemo(() => {
+    let last = 0
+    let timer: any
+    return () => {
+      const now = Date.now()
+      if (now - last >= 300) {
+        last = now
+        saveGridState()
+      } else {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          last = Date.now()
+          saveGridState()
+        }, 300 - (now - last))
+      }
+    }
+  }, [saveGridState])
+
   // AG Grid 列定义
   const columnDefs = useMemo<Array<ColDef<PnlSummaryRow> | ColGroupDef<PnlSummaryRow>>>(() => [
     {
@@ -1162,7 +1181,19 @@ export default function CustomerPnLMonitorV2() {
     setTotalCount(payload.total)
     setTotalPages(payload.total_pages)
     
-    return Array.isArray(payload.data) ? payload.data : []
+    // front-end recompute: closed_total_profit should include swaps (buy+sell profit + buy+sell swap)
+    const rawArray = Array.isArray(payload.data) ? payload.data : []
+    const computed = rawArray.map((row: any) => {
+      const buyProfit = toNumber(row?.closed_buy_profit)
+      const sellProfit = toNumber(row?.closed_sell_profit)
+      const buySwap = toNumber(row?.closed_buy_swap)
+      const sellSwap = toNumber(row?.closed_sell_swap)
+      return {
+        ...row,
+        closed_total_profit: buyProfit + sellProfit + buySwap + sellSwap,
+      }
+    })
+    return computed
   }, [server, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
 
   
@@ -1466,10 +1497,10 @@ export default function CustomerPnLMonitorV2() {
             }}
             onGridReady={onGridReady}
             onSortChanged={onSortChanged}
-            onColumnResized={(e: any) => { if (e.finished) saveGridState() }}
-            onColumnMoved={() => saveGridState()}
-            onColumnVisible={() => saveGridState()}
-            onColumnPinned={() => saveGridState()}
+            onColumnResized={(e: any) => { if (e.finished) throttledSaveGridState() }}
+            onColumnMoved={() => throttledSaveGridState()}
+            onColumnVisible={() => throttledSaveGridState()}
+            onColumnPinned={() => throttledSaveGridState()}
             animateRows={true}
             rowSelection="multiple"
             suppressRowClickSelection={true}
