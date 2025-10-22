@@ -156,10 +156,8 @@ def get_pnl_user_summary_paginated(
         "closed_buy_volume_lots, closed_buy_count, closed_buy_profit, closed_buy_swap, "
         "closed_buy_overnight_count, closed_buy_overnight_volume_lots, "
         "total_commission, deposit_count, deposit_amount, withdrawal_count, withdrawal_amount, net_deposit, "
-        # 兼容性：即使数据库未添加生成列，也计算一个别名
-        "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0)) AS closed_total_profit, "
-        # 新字段：平仓总盈亏（含 swap），需数据库已添加该列
-        "closed_total_profit_with_swap, "
+        # 平仓总盈亏（含 swap）：从数据库字段 closed_total_profit_with_swap 映射为 closed_total_profit
+        "closed_total_profit_with_swap AS closed_total_profit, "
         "overnight_volume_ratio, last_updated "
         f"FROM {source_table}" + where_clause
     )
@@ -172,12 +170,7 @@ def get_pnl_user_summary_paginated(
         "total_volume_all": "(closed_buy_volume_lots + closed_sell_volume_lots)",
         "overnight_order_all": "(closed_buy_overnight_count + closed_sell_overnight_count)",
         "total_order_all": "(closed_buy_count + closed_sell_count)",
-        # 平仓总盈亏（不含 swap）：保持老语义
-        "closed_total_profit_without_swap": "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0))",
-        # 平仓总盈亏（含 swap）：用于与前端展示对齐
-        "closed_total_profit_with_swap": "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0) + COALESCE(closed_buy_swap,0) + COALESCE(closed_sell_swap,0))",
-        # 将 closed_total_profit 的排序映射到“含 swap”以保证与前端展示一致
-        "closed_total_profit": "(COALESCE(closed_buy_profit,0) + COALESCE(closed_sell_profit,0) + COALESCE(closed_buy_swap,0) + COALESCE(closed_sell_swap,0))",
+        # closed_total_profit 现在直接映射到数据库字段 closed_total_profit_with_swap，无需额外映射
     }
 
     if sort_by and sort_by in allowed_sort_fields:

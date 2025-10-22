@@ -48,10 +48,8 @@ class PnlUserSummaryItem(BaseModel):
     withdrawal_amount: float = 0.0
     net_deposit: float = 0.0
 
-    # 平仓总盈亏（buy+sell），由数据库生成列或后端显式选择的别名
+    # 平仓总盈亏（buy+sell+swap），从数据库字段 closed_total_profit_with_swap 映射而来
     closed_total_profit: float = 0.0
-    # 平仓总盈亏（buy+sell+swap），数据库生成列，或由查询表达式提供
-    closed_total_profit_with_swap: float = 0.0
 
     # 夜间成交量占比（-1 表示不可计算）
     overnight_volume_ratio: Optional[float] = None

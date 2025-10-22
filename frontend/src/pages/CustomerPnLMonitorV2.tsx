@@ -6,10 +6,15 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Settings2, Search } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Settings2, Search, Filter, X } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ColGroupDef, GridReadyEvent, SortChangedEvent, GridApi } from 'ag-grid-community'
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox"
+import { FilterBuilder } from "@/components/FilterBuilder"
+import { FilterGroup, operatorNeedsValue, operatorNeedsTwoValues } from "@/types/filter"
+import { getColumnMeta } from "@/config/filterColumns"
+import { OPERATOR_LABELS } from "@/types/filter"
  
 
 // 产品配置接口
@@ -140,6 +145,7 @@ export default function CustomerPnLMonitorV2() {
 
   // 本地存储 key 生成（按服务器隔离）
   const storageKeyForGroups = useCallback((srv: string) => `pnl_user_groups:${srv}`, [])
+  const storageKeyForFilters = useCallback((srv: string) => `pnl_v2_filters:${srv}`, [])
 
   // 统一处理组别变更：更新状态并持久化
   const handleUserGroupsChange = useCallback((next: string[]) => {
@@ -165,6 +171,10 @@ export default function CustomerPnLMonitorV2() {
   // 刷新状态
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshInfo, setRefreshInfo] = useState<string | null>(null)
+
+  // 筛选状态
+  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false)
+  const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(null)
 
   // 分页状态管理
   const [pageIndex, setPageIndex] = useState(0)
@@ -1181,19 +1191,8 @@ export default function CustomerPnLMonitorV2() {
     setTotalCount(payload.total)
     setTotalPages(payload.total_pages)
     
-    // front-end recompute: closed_total_profit should include swaps (buy+sell profit + buy+sell swap)
-    const rawArray = Array.isArray(payload.data) ? payload.data : []
-    const computed = rawArray.map((row: any) => {
-      const buyProfit = toNumber(row?.closed_buy_profit)
-      const sellProfit = toNumber(row?.closed_sell_profit)
-      const buySwap = toNumber(row?.closed_buy_swap)
-      const sellSwap = toNumber(row?.closed_sell_swap)
-      return {
-        ...row,
-        closed_total_profit: buyProfit + sellProfit + buySwap + sellSwap,
-      }
-    })
-    return computed
+    // 直接返回后端数据，closed_total_profit 已由数据库字段 closed_total_profit_with_swap 提供
+    return Array.isArray(payload.data) ? payload.data : []
   }, [server, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
 
   
@@ -1278,6 +1277,62 @@ export default function CustomerPnLMonitorV2() {
     const t = setTimeout(() => setRefreshInfo(null), 20000)
     return () => clearTimeout(t)
   }, [refreshInfo])
+
+  // 筛选器：应用筛选
+  const handleApplyFilters = useCallback((filters: FilterGroup) => {
+    setAppliedFilters(filters)
+    // 持久化到 localStorage
+    try {
+      localStorage.setItem(storageKeyForFilters(server), JSON.stringify(filters))
+    } catch {}
+    // 重置到第一页（未来对接后端时会触发数据拉取）
+    setPageIndex(0)
+    // 静态阶段：输出 JSON 到控制台
+    console.log('✅ 已应用筛选条件（静态 JSON）:', JSON.stringify(filters, null, 2))
+  }, [server, storageKeyForFilters])
+
+  // 筛选器：移除单个规则
+  const handleRemoveFilter = useCallback((ruleIndex: number) => {
+    setAppliedFilters(prev => {
+      if (!prev) return null
+      const nextRules = prev.rules.filter((_, i) => i !== ruleIndex)
+      const next = nextRules.length > 0 ? { ...prev, rules: nextRules } : null
+      try {
+        if (next) {
+          localStorage.setItem(storageKeyForFilters(server), JSON.stringify(next))
+        } else {
+          localStorage.removeItem(storageKeyForFilters(server))
+        }
+      } catch {}
+      setPageIndex(0)
+      return next
+    })
+  }, [server, storageKeyForFilters])
+
+  // 筛选器：清空所有规则
+  const handleClearFilters = useCallback(() => {
+    setAppliedFilters(null)
+    try {
+      localStorage.removeItem(storageKeyForFilters(server))
+    } catch {}
+    setPageIndex(0)
+    console.log('🗑️ 已清空所有筛选条件')
+  }, [server, storageKeyForFilters])
+
+  // 筛选器：从 localStorage 恢复（切换服务器时）
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(storageKeyForFilters(server))
+      if (saved) {
+        const parsed = JSON.parse(saved) as FilterGroup
+        setAppliedFilters(parsed)
+      } else {
+        setAppliedFilters(null)
+      }
+    } catch {
+      setAppliedFilters(null)
+    }
+  }, [server, storageKeyForFilters])
 
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -1373,46 +1428,63 @@ export default function CustomerPnLMonitorV2() {
       )}
 
 
-      {/* 状态栏 + 列显示切换 */}
+      {/* 状态栏 + 筛选 + 列显示切换 */}
       <Card>
         <CardContent className="py-3">
-          <div className="flex items-center justify-between gap-3">
-            {/* 左侧状态信息 */}
-            <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-              <span>共 {totalCount} 条记录</span>
-              <span>当前页 {pageIndex + 1}/{totalPages}</span>
-              {sortModel.length > 0 && (
-                <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
-                  排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
-                </span>
-              )}
-              {lastUpdated && (
-                <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800/40 rounded">
-                  数据更新时间（UTC+8）：{new Intl.DateTimeFormat('zh-CN', {
-                    timeZone: 'Asia/Shanghai',
-                    year: 'numeric', month: '2-digit', day: '2-digit',
-                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-                  }).format(lastUpdated)}
-                </span>
-              )}
-              {refreshInfo && (
-                <span className="px-2 py-1 bg-green-100 dark:bg-green-900/20 rounded text-green-700 dark:text-green-300">
-                  {refreshInfo}
-                </span>
-              )}
-            </div>
-            {/* 右侧：列显示切换按钮 */}
-            <div className="flex items-center">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="h-9 gap-2 whitespace-nowrap">
-                    <Settings2 className="h-4 w-4" />
-                    列显示切换
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>显示列</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
+          <div className="flex flex-col gap-3">
+            {/* 第一行：状态信息与按钮 */}
+            <div className="flex items-center justify-between gap-3">
+              {/* 左侧状态信息 */}
+              <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
+                <span>共 {totalCount} 条记录</span>
+                <span>当前页 {pageIndex + 1}/{totalPages}</span>
+                {sortModel.length > 0 && (
+                  <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
+                    排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
+                  </span>
+                )}
+                {lastUpdated && (
+                  <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800/40 rounded">
+                    数据更新时间（UTC+8）：{new Intl.DateTimeFormat('zh-CN', {
+                      timeZone: 'Asia/Shanghai',
+                      year: 'numeric', month: '2-digit', day: '2-digit',
+                      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                    }).format(lastUpdated)}
+                  </span>
+                )}
+                {refreshInfo && (
+                  <span className="px-2 py-1 bg-green-100 dark:bg-green-900/20 rounded text-green-700 dark:text-green-300">
+                    {refreshInfo}
+                  </span>
+                )}
+              </div>
+              {/* 右侧：筛选器 + 列显示切换按钮 */}
+              <div className="flex items-center gap-2">
+                {/* 筛选器按钮（黑色主题） */}
+                <Button 
+                  onClick={() => setFilterBuilderOpen(true)} 
+                  className="h-9 gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+                >
+                  <Filter className="h-4 w-4" />
+                  筛选
+                  {appliedFilters && appliedFilters.rules.length > 0 && (
+                    <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                      {appliedFilters.rules.length}
+                    </Badge>
+                  )}
+                </Button>
+                
+                {/* 列显示切换按钮 */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="h-9 gap-2 whitespace-nowrap">
+                      <Settings2 className="h-4 w-4" />
+                      列显示切换
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>显示列</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
                   {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
                     const columnLabels: Record<string, string> = {
                       login: "账户ID",
@@ -1471,7 +1543,54 @@ export default function CustomerPnLMonitorV2() {
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              </div>
             </div>
+
+            {/* 第二行：激活的筛选条件展示 */}
+            {appliedFilters && appliedFilters.rules.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
+                <span className="text-xs text-muted-foreground">筛选条件 ({appliedFilters.join}):</span>
+                {appliedFilters.rules.map((rule, index) => {
+                  const colMeta = getColumnMeta(rule.field)
+                  const opLabel = OPERATOR_LABELS[rule.op]
+                  let valueDisplay = ''
+                  if (operatorNeedsValue(rule.op)) {
+                    if (operatorNeedsTwoValues(rule.op)) {
+                      valueDisplay = ` ${rule.value ?? ''} ~ ${rule.value2 ?? ''}`
+                    } else {
+                      valueDisplay = ` ${rule.value ?? ''}`
+                    }
+                  }
+                  return (
+                    <Badge 
+                      key={index} 
+                      variant="outline" 
+                      className="gap-1.5 pr-1 bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300"
+                    >
+                      <span className="text-xs">
+                        {colMeta?.label || rule.field} {opLabel}{valueDisplay}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveFilter(index)}
+                        className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-900"
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </Badge>
+                  )
+                })}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearFilters}
+                  className="h-7 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+                >
+                  清空所有
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -1612,6 +1731,14 @@ export default function CustomerPnLMonitorV2() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Filter Builder Dialog/Drawer */}
+      <FilterBuilder
+        open={filterBuilderOpen}
+        onOpenChange={setFilterBuilderOpen}
+        initialFilters={appliedFilters || undefined}
+        onApply={handleApplyFilters}
+      />
     </div>
   )
 }
