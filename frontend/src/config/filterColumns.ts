@@ -50,7 +50,7 @@ export const FILTER_COLUMNS: ColumnMeta[] = [
   { id: 'closed_total_profit', label: '平仓总盈亏', type: 'number', filterable: true, note: '从数据库字段 closed_total_profit_with_swap 映射' },
   
   // Frontend-computed columns (disabled until backend supports)
-  { id: 'overnight_volume_ratio', label: '过夜成交量占比', type: 'percent', filterable: false, note: '前端计算列，暂不支持筛选' },
+  { id: 'overnight_volume_ratio', label: '过夜成交量占比', type: 'percent', filterable: true, note: '数据库计算列（Generated Column），支持筛选' },
   // Aggregated columns from valueGetter (disabled until backend supports)
   // { id: 'overnight_volume_all', label: '过夜订单手数', type: 'number', filterable: false, note: '前端聚合列，暂不支持筛选' },
   // { id: 'total_volume_all', label: '总订单手数', type: 'number', filterable: false, note: '前端聚合列，暂不支持筛选' },

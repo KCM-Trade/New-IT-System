@@ -1164,6 +1164,12 @@ export default function CustomerPnLMonitorV2() {
       params.set('search', searchDebounced)
     }
 
+    // 添加筛选条件参数（FilterGroup 序列化为 JSON 字符串）
+    // 注意：URLSearchParams 会自动进行 URL 编码，无需手动 encodeURIComponent
+    if (appliedFilters && appliedFilters.rules.length > 0) {
+      params.set('filters_json', JSON.stringify(appliedFilters))
+    }
+
     // 切换为新的 ETL API（直查 PostgreSQL 的 pnl_user_summary）
     const url = `/api/v1/etl/pnl-user-summary/paginated?${params.toString()}`
     const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } }, 20000)
@@ -1193,7 +1199,7 @@ export default function CustomerPnLMonitorV2() {
     
     // 直接返回后端数据，closed_total_profit 已由数据库字段 closed_total_profit_with_swap 提供
     return Array.isArray(payload.data) ? payload.data : []
-  }, [server, pageIndex, pageSize, sortModel, userGroups, searchDebounced])
+  }, [server, pageIndex, pageSize, sortModel, userGroups, searchDebounced, appliedFilters])
 
   
 
@@ -1220,7 +1226,7 @@ export default function CustomerPnLMonitorV2() {
         setError(e instanceof Error ? e.message : "加载失败")
       }
     })()
-  }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced, groupsReady])
+  }, [pageIndex, pageSize, sortModel, server, userGroups, searchDebounced, groupsReady, appliedFilters])
 
   
 
@@ -1486,6 +1492,11 @@ export default function CustomerPnLMonitorV2() {
                     <DropdownMenuLabel>显示列</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                   {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
+                    // 在列显示切换菜单中隐藏 closed 开头的列（除了 closed_total_profit）
+                    if (columnId.startsWith('closed_') && columnId !== 'closed_total_profit') {
+                      return null
+                    }
+
                     const columnLabels: Record<string, string> = {
                       login: "账户ID",
                       user_name: "客户名称",
@@ -1497,26 +1508,14 @@ export default function CustomerPnLMonitorV2() {
                       user_balance: "balance",
                       positions_floating_pnl: "持仓浮动盈亏",
                       equity: "equity",
-                      closed_sell_volume_lots: "closed_sell_volume_lots",
-                      closed_sell_count: "closed_sell_count",
-                      closed_sell_profit: "closed_sell_profit",
-                      closed_sell_swap: "closed_sell_swap",
-                      closed_sell_overnight_count: "closed_sell_overnight_count",
-                      closed_sell_overnight_volume_lots: "closed_sell_overnight_volume_lots",
-                      closed_buy_volume_lots: "closed_buy_volume_lots",
-                      closed_buy_count: "closed_buy_count",
-                      closed_buy_profit: "closed_buy_profit",
-                      closed_buy_swap: "closed_buy_swap",
-                      closed_buy_overnight_count: "closed_buy_overnight_count",
-                      closed_buy_overnight_volume_lots: "closed_buy_overnight_volume_lots",
                       total_commission: "total_commission",
                       deposit_count: "入金笔数",
                       deposit_amount: "入金金额",
                       withdrawal_count: "出金笔数",
                       withdrawal_amount: "出金金额",
                       net_deposit: "net_deposit",
-                      closed_total_profit: "平仓总盈亏",
-                      overnight_volume_ratio: "overnight_volume_ratio",
+                      closed_total_profit: "平仓总盈亏（包含swap）",
+                      overnight_volume_ratio: "过夜成交占比",
                       overnight_volume_all: "过夜订单手数",
                       total_volume_all: "总订单手数",
                       overnight_order_all: "过夜订单数",

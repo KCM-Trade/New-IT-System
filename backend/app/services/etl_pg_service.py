@@ -42,8 +42,12 @@ def get_pnl_user_summary_paginated(
     user_groups: Optional[List[str]] = None,
     search: Optional[str] = None,
     source_table: str = "public.pnl_user_summary",
+    filters: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[dict], int, int]:
     """分页查询 public.pnl_user_summary
+
+    Args:
+        filters: 筛选条件字典，格式：{join:'AND'|'OR', rules:[{field,op,value,value2?}]}
 
     Returns: rows, total_count, total_pages
     """
@@ -142,6 +146,55 @@ def get_pnl_user_summary_paginated(
             sub.append("user_name ILIKE %s")
             params.append(f"%{s}%")
             where_conditions.append("(" + " OR ".join(sub) + ")")
+
+    # 解析筛选条件（filters）
+    if filters and isinstance(filters, dict):
+        join_type = filters.get("join", "AND")
+        rules = filters.get("rules", [])
+        
+        if rules:
+            filter_conditions: List[str] = []
+            for rule in rules:
+                field = rule.get("field")
+                op = rule.get("op")
+                value = rule.get("value")
+                value2 = rule.get("value2")
+                
+                # 字段与操作符白名单校验（防注入）
+                allowed_filter_fields = {
+                    "login", "symbol", "user_name", "user_group", "country", "zipcode", "user_id",
+                    "user_balance", "user_credit", "positions_floating_pnl", "equity",
+                    "closed_sell_volume_lots", "closed_sell_count", "closed_sell_profit", "closed_sell_swap",
+                    "closed_sell_overnight_count", "closed_sell_overnight_volume_lots",
+                    "closed_buy_volume_lots", "closed_buy_count", "closed_buy_profit", "closed_buy_swap",
+                    "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
+                    "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
+                    "withdrawal_amount", "net_deposit", "closed_total_profit", "overnight_volume_ratio", "last_updated",
+                }
+                allowed_operators = {
+                    # 文本操作符
+                    "contains", "not_contains", "equals", "not_equals", "starts_with", "ends_with", "blank", "not_blank",
+                    # 数字/日期操作符
+                    "=", "!=", ">", ">=", "<", "<=", "between", "on", "before", "after",
+                }
+                
+                if field not in allowed_filter_fields:
+                    continue  # 跳过非法字段
+                if op not in allowed_operators:
+                    continue  # 跳过非法操作符
+                
+                # 字段映射：closed_total_profit -> closed_total_profit_with_swap
+                db_field = "closed_total_profit_with_swap" if field == "closed_total_profit" else field
+                
+                # 生成 SQL 条件
+                condition = _build_filter_condition(db_field, op, value, value2, params)
+                if condition:
+                    filter_conditions.append(condition)
+            
+            # 组合所有筛选条件
+            if filter_conditions:
+                combined = f"({f' {join_type} '.join(filter_conditions)})"
+                where_conditions.append(combined)
 
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
@@ -1100,4 +1153,101 @@ def mt4live2_incremental_refresh() -> Dict[str, Any]:
 
     result["duration_seconds"] = round(time.time() - start_ts, 3)
     return result
+
+
+def _build_filter_condition(field: str, op: str, value: Any, value2: Any, params: List) -> Optional[str]:
+    """根据操作符构建 SQL WHERE 条件片段（用于筛选功能）
+    
+    Args:
+        field: 列名（已通过白名单校验）
+        op: 操作符（已通过白名单校验）
+        value: 主值
+        value2: 副值（between 使用）
+        params: 参数列表（用于 psycopg2 的 %s 占位符）
+    
+    Returns:
+        SQL 条件字符串，如 "user_name ILIKE %s"；返回 None 表示跳过该条件
+    """
+    # 定义数字字段（不能使用空字符串比较）
+    numeric_fields = {
+        "login", "user_id", "user_balance", "user_credit", "positions_floating_pnl", "equity",
+        "closed_sell_volume_lots", "closed_sell_count", "closed_sell_profit", "closed_sell_swap",
+        "closed_sell_overnight_count", "closed_sell_overnight_volume_lots",
+        "closed_buy_volume_lots", "closed_buy_count", "closed_buy_profit", "closed_buy_swap",
+        "closed_buy_overnight_count", "closed_buy_overnight_volume_lots",
+        "total_commission", "deposit_count", "deposit_amount", "withdrawal_count",
+        "withdrawal_amount", "net_deposit", "closed_total_profit_with_swap", "overnight_volume_ratio",
+    }
+    
+    # 文本操作符
+    if op == "contains":
+        params.append(f"%{value}%")
+        return f"{field} ILIKE %s"
+    elif op == "not_contains":
+        params.append(f"%{value}%")
+        return f"{field} NOT ILIKE %s"
+    elif op == "equals":
+        params.append(value)
+        return f"{field} = %s"
+    elif op == "not_equals":
+        params.append(value)
+        return f"{field} != %s"
+    elif op == "starts_with":
+        params.append(f"{value}%")
+        return f"{field} ILIKE %s"
+    elif op == "ends_with":
+        params.append(f"%{value}")
+        return f"{field} ILIKE %s"
+    elif op == "blank":
+        # 数字字段：只检查 NULL；文本字段：检查 NULL 或空字符串
+        if field in numeric_fields:
+            return f"{field} IS NULL"
+        else:
+            return f"({field} IS NULL OR {field} = '')"
+    elif op == "not_blank":
+        # 数字字段：只检查 NOT NULL；文本字段：检查非 NULL 且非空字符串
+        if field in numeric_fields:
+            return f"{field} IS NOT NULL"
+        else:
+            return f"({field} IS NOT NULL AND {field} != '')"
+    
+    # 数字/日期操作符
+    elif op == "=":
+        params.append(value)
+        return f"{field} = %s"
+    elif op == "!=":
+        params.append(value)
+        return f"{field} != %s"
+    elif op == ">":
+        params.append(value)
+        return f"{field} > %s"
+    elif op == ">=":
+        params.append(value)
+        return f"{field} >= %s"
+    elif op == "<":
+        params.append(value)
+        return f"{field} < %s"
+    elif op == "<=":
+        params.append(value)
+        return f"{field} <= %s"
+    elif op == "between":
+        if value is None or value2 is None:
+            return None  # 跳过无效区间
+        params.append(value)
+        params.append(value2)
+        return f"{field} BETWEEN %s AND %s"
+    
+    # 日期特殊操作符
+    elif op == "on":
+        # 匹配整个日期（DATE(field) = value）
+        params.append(value)
+        return f"DATE({field}) = %s"
+    elif op == "before":
+        params.append(value)
+        return f"DATE({field}) < %s"
+    elif op == "after":
+        params.append(value)
+        return f"DATE({field}) > %s"
+    
+    return None
 

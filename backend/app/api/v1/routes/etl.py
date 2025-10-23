@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, HTTPException
 
@@ -32,6 +33,7 @@ def get_pnl_user_summary(
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
     user_groups: Optional[List[str]] = Query(None, description="用户组别筛选，使用重复键传递；例如 user_groups=G1&user_groups=G2"),
     search: Optional[str] = Query(None, description="统一搜索：支持 login/user_id(精确) 或 user_name(模糊)"),
+    filters_json: Optional[str] = Query(None, description="筛选条件 JSON，格式：{join:'AND'|'OR', rules:[{field,op,value,value2?}]}"),
 ) -> PaginatedPnlUserSummaryResponse:
     try:
         source_table, dataset = resolve_table_and_dataset(server)
@@ -59,6 +61,25 @@ def get_pnl_user_summary(
                 if token.startswith("__") and token not in allowed_internal:
                     raise HTTPException(status_code=422, detail=f"Invalid internal token in user_groups: {token}")
 
+        # 解析筛选条件 JSON
+        filters_dict: Optional[Dict[str, Any]] = None
+        if filters_json:
+            try:
+                filters_dict = json.loads(filters_json)
+                # 基本结构校验
+                if not isinstance(filters_dict, dict):
+                    raise ValueError("filters_json must be a JSON object")
+                if "join" not in filters_dict or "rules" not in filters_dict:
+                    raise ValueError("filters_json must contain 'join' and 'rules' fields")
+                if filters_dict["join"] not in ["AND", "OR"]:
+                    raise ValueError("join must be 'AND' or 'OR'")
+                if not isinstance(filters_dict["rules"], list):
+                    raise ValueError("rules must be an array")
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=422, detail=f"Invalid filters_json format: {str(e)}")
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
         rows, total_count, total_pages = get_pnl_user_summary_paginated(
             page=page,
             page_size=page_size,
@@ -67,6 +88,7 @@ def get_pnl_user_summary(
             user_groups=groups_list,
             search=search,
             source_table=source_table,
+            filters=filters_dict,
         )
 
         watermark = get_etl_watermark_last_updated(dataset=dataset)
