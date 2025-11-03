@@ -36,6 +36,7 @@ const data = {
   navMain: [
     { title: "客户盈亏监控（V2）", url: "/customer-pnl-monitor-v2", icon: IconCoin },
     { title: "客户交易分析", url: "/client-trading", icon: IconReport },
+    { title: "Swap Free Control", url: "/swap-free-control", icon: IconSettings },
     { title: "基差分析", url: "/basis", icon: IconDashboard },
     { title: "数据下载", url: "/downloads", icon: IconListDetails },
     {

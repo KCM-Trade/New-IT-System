@@ -19,6 +19,7 @@ const titleMap: Record<string, string> = {
   "/login-ips": "Login IP监测",
   "/profit": "利润分析",
   "/client-trading": "客户交易分析",
+  "/swap-free-control": "Swap Free Control",
   "/customer-pnl-monitor": "客户盈亏监控",
   "/customer-pnl-monitor-v2": "客户盈亏监控（V2）",
   "/settings": "Settings",
