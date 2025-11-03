@@ -2,41 +2,49 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useLocation } from "react-router-dom"
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { ModeToggle } from "@/components/mode-toggle"
+import { LanguageToggle } from "@/components/language-toggle"
+import { useI18n } from "@/components/i18n-provider"
 
-const titleMap: Record<string, string> = {
-  "/template": "模板",
-  "/gold": "黄金报价",
-  "/basis": "基差分析",
-  "/downloads": "数据下载",
-  "/warehouse/agent-global": "代理统计Global",
-  "/warehouse": "报仓数据",
-  "/warehouse/products": "产品报仓",
-  "/warehouse/others": "其他报仓",
-  "/positions": "实时全仓报表",
-  "/position": "全仓报表",
-  "/login-ips": "Login IP监测",
-  "/profit": "利润分析",
-  "/client-trading": "客户交易分析",
-  "/swap-free-control": "Swap Free Control",
-  "/customer-pnl-monitor": "客户盈亏监控",
-  "/customer-pnl-monitor-v2": "客户盈亏监控（V2）",
-  "/settings": "Settings",
-  "/search": "Search",
+// Route to translation key mapping
+const routeToKeyMap: Record<string, string> = {
+  "/template": "pages.template",
+  "/gold": "pages.goldQuote",
+  "/basis": "pages.basisAnalysis",
+  "/downloads": "pages.downloads",
+  "/warehouse/agent-global": "pages.warehouseAgentGlobal",
+  "/warehouse": "pages.warehouse",
+  "/warehouse/products": "pages.warehouseProducts",
+  "/warehouse/others": "pages.warehouseOthers",
+  "/positions": "pages.position",
+  "/position": "pages.position",
+  "/login-ips": "pages.loginIPs",
+  "/profit": "pages.profitAnalysis",
+  "/client-trading": "pages.clientTrading",
+  "/swap-free-control": "pages.swapFreeControl",
+  "/customer-pnl-monitor": "pages.customerPnLMonitor",
+  "/customer-pnl-monitor-v2": "pages.customerPnLMonitorV2",
+  "/settings": "pages.settings",
+  "/search": "pages.search",
 }
 
 export function SiteHeader() {
   const location = useLocation()
-  const pageTitle = (() => {
+  const { t } = useI18n()
+  
+  const pageTitle = useMemo(() => {
     const path = location.pathname
-    // fresh grad note: handle root and cfg/* prefix
-    if (path === "/") return "基差分析"
-    if (path.startsWith("/cfg")) return "Configuration"
-    return titleMap[path] || "KCM Analytics System"
-  })()
+    // Handle root path
+    if (path === "/") return t("pages.basisAnalysis")
+    // Handle configuration routes
+    if (path.startsWith("/cfg")) return t("pages.configuration")
+    // Get translation key for current route
+    const key = routeToKeyMap[path]
+    return key ? t(key) : t("header.title")
+  }, [location.pathname, t])
 
-  const fullTitle = `KCM Analytics System | ${pageTitle}`
+  const fullTitle = `${t("header.title")} | ${pageTitle}`
 
   // Keep browser tab title in sync
   useEffect(() => {
@@ -53,6 +61,7 @@ export function SiteHeader() {
         />
         <h1 className="text-base font-medium">{fullTitle}</h1>
         <div className="ml-auto flex items-center gap-2">
+          <LanguageToggle />
           <ModeToggle />
           <Button variant="ghost" asChild size="sm" className="hidden sm:flex">
             <a

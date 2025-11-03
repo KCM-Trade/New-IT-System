@@ -26,106 +26,109 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from "@/components/ui/sidebar"
-
-const data = {
-  user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
-  navMain: [
-    { title: "客户盈亏监控（V2）", url: "/customer-pnl-monitor-v2", icon: IconCoin },
-    { title: "客户交易分析", url: "/client-trading", icon: IconReport },
-    { title: "Swap Free Control", url: "/swap-free-control", icon: IconSettings },
-    { title: "基差分析", url: "/basis", icon: IconDashboard },
-    { title: "数据下载", url: "/downloads", icon: IconListDetails },
-    {
-      title: "报仓数据",
-      icon: IconChartBar,
-      children: [
-        { title: "产品报仓", url: "/warehouse/products" },
-        { title: "全仓报表", url: "/position" },
-        { title: "其他", url: "/warehouse/others" },
-      ],
-    },
-    { title: "Login IP监测", url: "/login-ips", icon: IconUsers },
-    { title: "利润分析", url: "/profit", icon: IconReport },
-    {
-      title: "其他",
-      icon: IconSettings,
-      children: [
-        { title: "模板", url: "/template" },
-        { title: "代理统计Global", url: "/warehouse/agent-global" },
-        { title: "客户盈亏监控", url: "/customer-pnl-monitor" },
-      ],
-    },
-  ],
-  navClouds: [
-    {
-      title: "Capture",
-      icon: IconCamera,
-      isActive: true,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Proposal",
-      icon: IconFileDescription,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Prompts",
-      icon: IconFileAi,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-  ],
-  navSecondary: [
-    { title: "Settings", url: "/settings", icon: IconSettings },
-    { title: "Get Help", url: "https://ui.shadcn.com/docs/installation", icon: IconHelp }, 
-    { title: "Search", url: "/search", icon: IconSearch },
-  ],
-  documents: [
-    { name: "Managers", url: "/cfg/managers", icon: IconDatabase },
-    { name: "自定义组别", url: "/cfg/custom-groups", icon: IconSettings },
-    { name: "Reports", url: "/cfg/reports", icon: IconReport },
-    { name: "Financial", url: "/cfg/financial", icon: IconFileWord },
-    { name: "Clients", url: "/cfg/clients", icon: IconDatabase },
-    { name: "Tasks", url: "/cfg/tasks", icon: IconReport },
-    { name: "Marketing", url: "/cfg/marketing", icon: IconFileWord },
-    
-  ],
-}
+import { useI18n } from "@/components/i18n-provider"
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { t } = useI18n()
+  
+  // Navigation data with translations
+  const data = React.useMemo(() => ({
+    user: {
+      name: "shadcn",
+      email: "m@example.com",
+      avatar: "/avatars/shadcn.jpg",
+    },
+    navMain: [
+      { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2", icon: IconCoin },
+      { title: t("nav.clientTrading"), url: "/client-trading", icon: IconReport },
+      { title: t("nav.swapFreeControl"), url: "/swap-free-control", icon: IconSettings },
+      { title: t("nav.basisAnalysis"), url: "/basis", icon: IconDashboard },
+      { title: t("nav.downloads"), url: "/downloads", icon: IconListDetails },
+      {
+        title: t("nav.warehouse"),
+        icon: IconChartBar,
+        children: [
+          { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
+          { title: t("nav.position"), url: "/position" },
+          { title: t("nav.warehouseOthers"), url: "/warehouse/others" },
+        ],
+      },
+      { title: t("nav.loginIPs"), url: "/login-ips", icon: IconUsers },
+      { title: t("nav.profitAnalysis"), url: "/profit", icon: IconReport },
+      {
+        title: t("nav.others"),
+        icon: IconSettings,
+        children: [
+          { title: t("nav.template"), url: "/template" },
+          { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
+          { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
+        ],
+      },
+    ],
+    navClouds: [
+      {
+        title: "Capture",
+        icon: IconCamera,
+        isActive: true,
+        url: "#",
+        items: [
+          {
+            title: "Active Proposals",
+            url: "#",
+          },
+          {
+            title: "Archived",
+            url: "#",
+          },
+        ],
+      },
+      {
+        title: "Proposal",
+        icon: IconFileDescription,
+        url: "#",
+        items: [
+          {
+            title: "Active Proposals",
+            url: "#",
+          },
+          {
+            title: "Archived",
+            url: "#",
+          },
+        ],
+      },
+      {
+        title: "Prompts",
+        icon: IconFileAi,
+        url: "#",
+        items: [
+          {
+            title: "Active Proposals",
+            url: "#",
+          },
+          {
+            title: "Archived",
+            url: "#",
+          },
+        ],
+      },
+    ],
+    navSecondary: [
+      { title: t("common.settings"), url: "/settings", icon: IconSettings },
+      { title: t("nav.getHelp"), url: "https://ui.shadcn.com/docs/installation", icon: IconHelp }, 
+      { title: t("common.search"), url: "/search", icon: IconSearch },
+    ],
+    documents: [
+      { name: t("config.managers"), url: "/cfg/managers", icon: IconDatabase },
+      { name: t("config.customGroups"), url: "/cfg/custom-groups", icon: IconSettings },
+      { name: t("config.reports"), url: "/cfg/reports", icon: IconReport },
+      { name: t("config.financial"), url: "/cfg/financial", icon: IconFileWord },
+      { name: t("config.clients"), url: "/cfg/clients", icon: IconDatabase },
+      { name: t("config.tasks"), url: "/cfg/tasks", icon: IconReport },
+      { name: t("config.marketing"), url: "/cfg/marketing", icon: IconFileWord },
+    ],
+  }), [t])
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>

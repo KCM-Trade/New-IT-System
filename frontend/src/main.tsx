@@ -9,11 +9,14 @@ import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 ModuleRegistry.registerModules([AllCommunityModule])
 import App from './App'
 import { ThemeProvider } from '@/components/theme-provider'
+import { I18nProvider } from '@/components/i18n-provider'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-      <App />
-    </ThemeProvider>
+    <I18nProvider defaultLang="zh-CN" storageKey="vite-ui-language">
+      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+        <App />
+      </ThemeProvider>
+    </I18nProvider>
   </StrictMode>,
 )
