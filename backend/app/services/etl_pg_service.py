@@ -403,10 +403,10 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                 # Step 0: insert new logins skeleton rows
                 to_insert = []
                 with mysql_conn.cursor(dictionary=True) as cur:
-                    cur.execute("SELECT u.Login, u.Name, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit FROM mt5_live.mt5_users u")
+                    cur.execute("SELECT u.Login, u.Name, u.Group, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit FROM mt5_live.mt5_users u")
                     for r in cur.fetchall():
                         to_insert.append((
-                            int(r['Login']), 'ALL', r.get('Name'), r.get('Country'), r.get('ZipCode'), r.get('ID') or None,
+                            int(r['Login']), 'ALL', r.get('Name'), r.get('Group'), r.get('Country'), r.get('ZipCode'), r.get('ID') or None,
                             r.get('Balance') or 0, r.get('Credit') or 0, 0,
                         ))
                 if to_insert:
@@ -414,9 +414,9 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                     with pg_conn.cursor() as cur:
                         execute_values(
                             cur,
-                            "INSERT INTO public.pnl_user_summary (login, symbol, user_name, country, zipcode, user_id, user_balance, user_credit, positions_floating_pnl) VALUES %s "
+                            "INSERT INTO public.pnl_user_summary (login, symbol, user_name, user_group, country, zipcode, user_id, user_balance, user_credit, positions_floating_pnl) VALUES %s "
                             "ON CONFLICT (login, symbol) DO UPDATE SET "
-                            "  user_name=EXCLUDED.user_name, country=EXCLUDED.country, zipcode=EXCLUDED.zipcode, user_id=EXCLUDED.user_id, "
+                            "  user_name=EXCLUDED.user_name, user_group=EXCLUDED.user_group, country=EXCLUDED.country, zipcode=EXCLUDED.zipcode, user_id=EXCLUDED.user_id, "
                             "  user_balance=EXCLUDED.user_balance, user_credit=EXCLUDED.user_credit",
                             to_insert,
                             page_size=5000,
@@ -478,6 +478,7 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                 SELECT
                   u.Login,
                   u.Name          AS user_name,
+                  u.Group         AS user_group,
                   u.Country,
                   u.ZipCode       AS zipcode,
                   u.ID            AS user_id,
@@ -511,7 +512,7 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                 WHERE u.Login IN (
                   SELECT DISTINCT Login FROM deals_window
                 )
-                GROUP BY u.Login, u.Name, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit, cm.total_commission, b.deposit_count, b.deposit_amount, b.withdrawal_count, b.withdrawal_amount
+                GROUP BY u.Login, u.Name, u.Group, u.Country, u.ZipCode, u.ID, u.Balance, u.Credit, cm.total_commission, b.deposit_count, b.deposit_amount, b.withdrawal_count, b.withdrawal_amount
                 """
 
                 rows: List[Tuple] = []
@@ -525,7 +526,7 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                         max_deal_id = max(max_deal_id, int(r['max_deal_id'] or last_deal_id))
                         rows.append((
                             int(r['Login']), 'ALL',
-                            r.get('user_name'), r.get('Country'), r.get('ZipCode'), r.get('user_id') or None,
+                            r.get('user_name'), r.get('user_group'), r.get('Country'), r.get('ZipCode'), r.get('user_id') or None,
                             r.get('user_balance') or 0, r.get('user_credit') or 0,
                             r.get('closed_sell_volume_lots') or 0, r.get('closed_sell_count') or 0, r.get('closed_sell_profit') or 0, r.get('closed_sell_swap') or 0, r.get('closed_sell_overnight_count') or 0, r.get('closed_sell_overnight_volume_lots') or 0,
                             r.get('closed_buy_volume_lots') or 0, r.get('closed_buy_count') or 0, r.get('closed_buy_profit') or 0, r.get('closed_buy_swap') or 0, r.get('closed_buy_overnight_count') or 0, r.get('closed_buy_overnight_volume_lots') or 0,
@@ -539,7 +540,7 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                     upsert_sql = """
                     INSERT INTO public.pnl_user_summary (
                       login, symbol,
-                      user_name, country, zipcode, user_id,
+                      user_name, user_group, country, zipcode, user_id,
                       user_balance, user_credit,
                       closed_sell_volume_lots, closed_sell_count, closed_sell_profit, closed_sell_swap, closed_sell_overnight_count, closed_sell_overnight_volume_lots,
                       closed_buy_volume_lots,  closed_buy_count,  closed_buy_profit,  closed_buy_swap,  closed_buy_overnight_count,  closed_buy_overnight_volume_lots,
@@ -548,6 +549,7 @@ def mt5_incremental_refresh() -> Dict[str, Any]:
                     ) VALUES %s
                     ON CONFLICT (login, symbol) DO UPDATE SET
                       user_name = EXCLUDED.user_name,
+                      user_group = EXCLUDED.user_group,
                       country = EXCLUDED.country,
                       zipcode = EXCLUDED.zipcode,
                       user_id = EXCLUDED.user_id,
