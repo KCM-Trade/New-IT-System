@@ -40,6 +40,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     },
     navMain: [
       { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2", icon: IconCoin },
+      { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor", icon: IconCoin },
       { title: t("nav.clientTrading"), url: "/client-trading", icon: IconReport },
       { title: t("nav.swapFreeControl"), url: "/swap-free-control", icon: IconSettings },
       { title: t("nav.basisAnalysis"), url: "/basis", icon: IconDashboard },

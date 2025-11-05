@@ -21,6 +21,7 @@ export const zhCN = {
   // Navigation
   nav: {
     customerPnLMonitorV2: "客户盈亏监控（V2）",
+    clientPnLMonitor: "ClientID 盈亏监控",
     clientTrading: "客户交易分析",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "基差分析",
