@@ -38,6 +38,7 @@ interface PnlSummaryRow {
   user_group?: string | null
   country?: string | null
   zipcode?: string | null
+  currency?: string | null
   user_id?: number | string | null
 
   // 账户与浮盈
@@ -198,6 +199,7 @@ export default function CustomerPnLMonitorV2() {
     symbol: false,
     country: false,
     zipcode: true,
+    currency: true,
     user_id: false,
 
     user_balance: true,
@@ -366,6 +368,19 @@ export default function CustomerPnLMonitorV2() {
         <span className="text-muted-foreground">{params.value || ""}</span>
       ),
       hide: !columnVisibility.zipcode,
+    },
+    {
+      field: "currency",
+      headerName: "Currency",
+      width: 100,
+      minWidth: 80,
+      maxWidth: 150,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => (
+        <span className="font-mono text-sm text-muted-foreground">{params.value || ""}</span>
+      ),
+      hide: !columnVisibility.currency,
     },
     {
       field: "user_id",
@@ -1512,6 +1527,7 @@ export default function CustomerPnLMonitorV2() {
                       symbol: t("pnlMonitor.columns.symbol"),
                       country: t("pnlMonitor.columns.country"),
                       zipcode: t("pnlMonitor.columns.zipcode"),
+                      currency: "Currency",
                       user_id: t("pnlMonitor.columns.userId"),
                       user_balance: t("pnlMonitor.columns.balance"),
                       positions_floating_pnl: t("pnlMonitor.columns.floatingPnL"),

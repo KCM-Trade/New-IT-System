@@ -16,6 +16,7 @@ class PnlUserSummaryItem(BaseModel):
     user_group: Optional[str] = None
     country: Optional[str] = None
     zipcode: Optional[str] = None
+    currency: Optional[str] = None
     user_id: Optional[int] = None
 
     # 账户与浮盈

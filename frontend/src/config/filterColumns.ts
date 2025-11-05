@@ -11,6 +11,7 @@ export const FILTER_COLUMNS: ColumnMeta[] = [
   { id: 'user_group', label: 'Group', type: 'text', filterable: true },
   { id: 'country', label: '国家/地区', type: 'text', filterable: true },
   { id: 'zipcode', label: 'ZipCode', type: 'text', filterable: true },
+  { id: 'currency', label: 'Currency', type: 'text', filterable: true },
   { id: 'user_id', label: 'ClientID', type: 'text', filterable: true },
   { id: 'symbol', label: 'Symbol', type: 'text', filterable: true },
 

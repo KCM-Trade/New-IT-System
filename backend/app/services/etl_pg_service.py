@@ -54,7 +54,7 @@ def get_pnl_user_summary_paginated(
 
     # 排序白名单（防注入）
     allowed_sort_fields = {
-        "login", "symbol", "user_name", "user_group", "country", "zipcode", "user_id",
+        "login", "symbol", "user_name", "user_group", "country", "zipcode", "currency", "user_id",
         "user_balance", "user_credit", "positions_floating_pnl", "equity",
         "closed_sell_volume_lots", "closed_sell_count", "closed_sell_profit", "closed_sell_swap",
         "closed_sell_overnight_count", "closed_sell_overnight_volume_lots",
@@ -162,7 +162,7 @@ def get_pnl_user_summary_paginated(
                 
                 # 字段与操作符白名单校验（防注入）
                 allowed_filter_fields = {
-                    "login", "symbol", "user_name", "user_group", "country", "zipcode", "user_id",
+                    "login", "symbol", "user_name", "user_group", "country", "zipcode", "currency", "user_id",
                     "user_balance", "user_credit", "positions_floating_pnl", "equity",
                     "closed_sell_volume_lots", "closed_sell_count", "closed_sell_profit", "closed_sell_swap",
                     "closed_sell_overnight_count", "closed_sell_overnight_volume_lots",
@@ -199,7 +199,7 @@ def get_pnl_user_summary_paginated(
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
     base_select = (
-        "SELECT login, symbol, user_name, user_group, country, zipcode, user_id, "
+        "SELECT login, symbol, user_name, user_group, country, zipcode, currency, user_id, "
         "user_balance, user_credit, positions_floating_pnl, equity, "
         "closed_sell_volume_lots, closed_sell_count, closed_sell_profit, closed_sell_swap, "
         "closed_sell_overnight_count, closed_sell_overnight_volume_lots, "
