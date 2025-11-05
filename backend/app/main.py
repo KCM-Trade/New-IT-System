@@ -4,6 +4,7 @@ from starlette.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 
 from .api.v1.routers import api_v1_router
+from .routers import client_pnl
 
 
 def create_app() -> FastAPI:
@@ -20,6 +21,9 @@ def create_app() -> FastAPI:
 
     # Mount versioned routers
     app.include_router(api_v1_router, prefix="/api/v1")
+    
+    # Mount ClientID PnL router
+    app.include_router(client_pnl.router)
 
     # Serve static files under /static from local ./public directory
     app.mount("/static", StaticFiles(directory="public"), name="static")
