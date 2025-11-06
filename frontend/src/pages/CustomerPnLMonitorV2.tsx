@@ -1255,48 +1255,83 @@ export default function CustomerPnLMonitorV2() {
       setError(t("pnlMonitor.serverNotSupported"))
       return
     }
+
     setIsRefreshing(true)
     setError(null)
+    setRefreshInfo(null)
     try {
       const res = await fetchWithTimeout(`/api/v1/etl/pnl-user-summary/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json", accept: "application/json" },
         body: JSON.stringify({ server })
       }, 60000)
+      
       if (!res.ok) {
         try {
           const err = await res.json()
           const msg = (err && (err.detail || err.message)) ? `HTTP ${res.status}: ${err.detail || err.message}` : `HTTP ${res.status}`
           throw new Error(msg)
-        } catch {
-          throw new Error(`HTTP ${res.status}`)
+        } catch (parseErr) {
+          // If JSON parsing fails, use status text or generic error
+          const statusText = res.statusText || "Unknown error"
+          throw new Error(`HTTP ${res.status}: ${statusText}`)
         }
       }
+
       const data = (await res.json()) as EtlRefreshResponse
+      
+      // fresh grad note: check response status from backend
+      if (data.status === "error") {
+        const errorMsg = data.message || t("pnlMonitor.refreshFailed")
+        throw new Error(errorMsg)
+      }
+
       const parts: string[] = []
-      if (typeof data.new_trades_count === 'number') {
+      if (typeof data.new_trades_count === "number") {
         parts.push(t("pnlMonitor.refreshMessages.processedTrades", { count: data.new_trades_count }))
       }
       // MT4Live2：不显示"浮动盈亏更新条数"
-      if (server !== 'MT4Live2' && typeof data.floating_only_count === 'number') {
+      if (server !== "MT4Live2" && typeof data.floating_only_count === "number") {
         parts.push(t("pnlMonitor.refreshMessages.updatedFloating", { count: data.floating_only_count }))
       }
-      if (typeof data.duration_seconds === 'number') {
+      if (typeof data.duration_seconds === "number") {
         parts.push(t("pnlMonitor.refreshMessages.duration", { seconds: Number(data.duration_seconds).toFixed(1) }))
       }
-      // Use language-appropriate separator: Chinese uses '，', English uses ', '
-      const separator = t("common.comma") || '，'
-      const msg = parts.length > 0 ? parts.join(separator) : t("pnlMonitor.refreshMessages.completed")
-      setRefreshInfo(msg)
 
+      // Use language-appropriate separator: Chinese uses '，', English uses ', '
+      const separator = t("common.comma") || "，"
+      const messageCandidate = parts.length > 0 ? parts.join(separator) : t("pnlMonitor.refreshMessages.completed")
+      const successFallback = t("common.success")
+      const safeMessage = messageCandidate.trim().length > 0
+        ? messageCandidate
+        : (successFallback.trim().length > 0 ? successFallback : "刷新完成")
+      setRefreshInfo(safeMessage)
+    } catch (e) {
+      setRefreshInfo(null)
+      // fresh grad note: handle timeout and network errors more gracefully
+      if (e instanceof Error) {
+        if (e.name === "AbortError" || e.message.includes("aborted")) {
+          setError("刷新请求超时（60秒），数据可能仍在处理中，请稍后重试")
+        } else {
+          setError(e.message)
+        }
+      } else {
+        setError(t("pnlMonitor.refreshFailed"))
+      }
+      return
+    } finally {
+      // fresh grad note: end the loading state before触发下一次数据加载，这样按钮就不会"卡住"
+      setIsRefreshing(false)
+    }
+
+    // fresh grad note: 按钮复位后再异步更新数据，避免刷新流程显得缓慢
+    try {
       const refreshed = await fetchData()
       setRows(refreshed)
     } catch (e) {
-      setRefreshInfo(null)
-      setRows([])
-      setError(e instanceof Error ? e.message : t("pnlMonitor.refreshFailed"))
-    } finally {
-      setIsRefreshing(false)
+      // fresh grad note: only set error if refresh was successful (no error was set)
+      // Note: error state check is done via closure, no need to add to deps
+      setError(e instanceof Error ? e.message : t("pnlMonitor.loadFailed"))
     }
   }, [server, fetchData, t])
 

@@ -1,19 +1,13 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react"
 import { useTheme } from "@/components/theme-provider"
-import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Badge } from "@/components/ui/badge"
-import { Settings2, Filter, X, Search, RefreshCw } from "lucide-react"
+import { Settings2, X, Search, RefreshCw } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent, GridApi, PostSortRowsParams, IRowNode } from 'ag-grid-community'
-import { FilterBuilder } from "@/components/FilterBuilder"
-import { FilterGroup } from "@/types/filter"
-import { getColumnMeta } from "@/config/filterColumns"
-import { OPERATOR_LABELS } from "@/types/filter"
 
 // ClientID 汇总数据接口
 interface ClientPnLSummaryRow {
@@ -23,6 +17,8 @@ interface ClientPnLSummaryRow {
   // 客户基本信息
   client_name?: string | null
   primary_server?: string | null
+  zipcode?: string | null
+  is_enabled?: number | boolean | null
   countries?: string[] | null
   currencies?: string[] | null
   
@@ -48,7 +44,7 @@ interface ClientPnLSummaryRow {
   // 聚合手数
   total_volume_lots: number | string
   total_overnight_volume_lots: number | string
-  overnight_volume_ratio?: number | string
+  auto_swap_free_status?: number | string
   
   // 聚合订单数
   total_closed_count: number
@@ -79,13 +75,15 @@ interface ClientAccountDetail {
   deposit_usd: number | string
   withdrawal_usd: number | string
   volume_lots: number | string
+  auto_swap_free_status?: number | string
   last_updated?: string | null
 }
 
 function formatCurrency(value: number) {
   const sign = value >= 0 ? "" : "-"
   const abs = Math.abs(value)
-  return `${sign}$${abs.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  // Show up to 4 decimals, trim trailing zeros (e.g., 0.0000 -> 0, 134.4300 -> 134.43)
+  return `${sign}$${abs.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}`
 }
 
 function toNumber(v: unknown, fallback = 0): number {
@@ -111,7 +109,6 @@ function getAccountCrmLink(server: string | null | undefined, login: number | st
 
 export default function ClientPnLMonitor() {
   const { theme } = useTheme()
-  const { t } = useI18n()
   
   // 数据状态
   const [rows, setRows] = useState<ClientPnLSummaryRow[]>([])
@@ -128,10 +125,6 @@ export default function ClientPnLMonitor() {
   const [searchValue, setSearchValue] = useState("")
   const [searchInput, setSearchInput] = useState("")
   
-  // 筛选状态
-  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false)
-  const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(null)
-  
   // 展开/收起状态：记录哪些 client_id 被展开
   const [expandedClients, setExpandedClients] = useState<Set<number | string>>(new Set())
   // Track per-client detail loading to avoid duplicate fetches
@@ -144,7 +137,7 @@ export default function ClientPnLMonitor() {
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     client_id: true,
     client_name: true,
-    primary_server: false,
+    primary_server: true,
     account_count: true,
     total_balance_usd: true,
     total_floating_pnl_usd: true,
@@ -155,12 +148,16 @@ export default function ClientPnLMonitor() {
     total_withdrawal_usd: false,
     net_deposit_usd: true,
     total_volume_lots: true,
-    overnight_volume_ratio: true,
-    total_closed_count: false,
+    auto_swap_free_status: true,
+    is_enabled: true,
     last_updated: true,
   })
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
+
+  // 刷新状态与 Banner 文本
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshBanner, setRefreshBanner] = useState<string | null>(null)
 
   // 记录主行，便于在排序时获取父级值
   const parentRowMap = useMemo(() => {
@@ -175,6 +172,9 @@ export default function ClientPnLMonitor() {
     if (params?.data?._rowType === 'detail' && params?.data?._parentClientId != null && params?.colDef?.field) {
       const parent = parentRowMap.get(params.data._parentClientId)
       if (parent) {
+        if (params.colDef.field === 'primary_server') {
+          return (parent as any)['zipcode']
+        }
         return (parent as any)[params.colDef.field]
       }
     }
@@ -241,7 +241,7 @@ export default function ClientPnLMonitor() {
         params.append('search', searchValue)
       }
       
-      const response = await fetch(`/api/client-pnl/summary?${params}`)
+      const response = await fetch(`/api/v1/client-pnl/summary/paginated?${params}`)
       const result = await response.json()
       
       if (result.ok) {
@@ -266,10 +266,56 @@ export default function ClientPnLMonitor() {
     fetchData()
   }, [fetchData])
   
-  // 刷新按钮
-  const handleManualRefresh = useCallback(async () => {
-    await fetchData()
-  }, [fetchData])
+  // 触发后端增量刷新（client-pnl），完成后刷新当前页并显示 10s Banner
+  const handleClientRefresh = useCallback(async () => {
+    if (isRefreshing) return
+    setIsRefreshing(true)
+    setRefreshBanner(null)
+    try {
+      const res = await fetch('/api/v1/etl/client-pnl/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+      })
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try { const err = await res.json(); if (err?.detail) msg = `HTTP ${res.status}: ${err.detail}` } catch {}
+        throw new Error(msg)
+      }
+      const data = await res.json()
+      // 汇总关键信息
+      const steps: any[] = Array.isArray(data?.steps) ? data.steps : []
+      const find = (name: string) => steps.find(s => s?.name === name) || {}
+      const cand = find('candidates')
+      const acc = find('accounts_upsert')
+      const del = find('delete_orphans')
+      const map = find('mapping')
+      const sum = find('summary_upsert')
+      const parts: string[] = []
+      if (typeof cand.total === 'number') parts.push(`候选客户 ${cand.total}`)
+      if (typeof cand.missing === 'number' || typeof cand.lag === 'number') parts.push(`(missing:${cand.missing ?? 0}, lag:${cand.lag ?? 0})`)
+      if (typeof acc.affected_rows === 'number') parts.push(`UPSERT账户 ${acc.affected_rows}`)
+      if (typeof del.affected_rows === 'number') parts.push(`清理孤儿 ${del.affected_rows}`)
+      if (typeof map.loaded_mapping === 'number') parts.push(`映射 ${map.loaded_mapping}`)
+      if (typeof map.zipcode_changes === 'number') parts.push(`Zip变更 ${map.zipcode_changes}`)
+      if (typeof sum.affected_rows === 'number') parts.push(`更新客户汇总 ${sum.affected_rows}`)
+      if (typeof data?.duration_seconds === 'number') parts.push(`耗时 ${Number(data.duration_seconds).toFixed(2)}s`)
+      const message = parts.join('，') || (data?.message || '刷新完成')
+      setRefreshBanner(message)
+      // 刷新表格数据
+      try { await fetchData() } catch {}
+    } catch (e: any) {
+      setRefreshBanner(e?.message || '刷新失败')
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [isRefreshing, fetchData])
+
+  // 刷新 Banner 10 秒后自动消失
+  useEffect(() => {
+    if (!refreshBanner) return
+    const timer = setTimeout(() => setRefreshBanner(null), 10000)
+    return () => clearTimeout(timer)
+  }, [refreshBanner])
   
   // 搜索处理
   const handleSearch = useCallback(() => {
@@ -299,25 +345,46 @@ export default function ClientPnLMonitor() {
     setAccountLoadingMap(prev => ({ ...prev, [key]: true }))
 
     try {
-      const response = await fetch(`/api/client-pnl/accounts/${clientId}`)
+      // Ensure clientId is converted to number for API call
+      const clientIdNum = typeof clientId === 'string' ? Number(clientId) : clientId
+      if (!Number.isFinite(clientIdNum) || clientIdNum <= 0) {
+        throw new Error(`Invalid client_id: ${clientId}`)
+      }
+
+      const response = await fetch(`/api/v1/client-pnl/${clientIdNum}/accounts`)
+      
+      // Check HTTP status before parsing JSON
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`)
+      }
+
       const result = await response.json()
 
       if (result.ok && Array.isArray(result.accounts)) {
+        // Convert client_id to string for comparison to handle type mismatch
+        const clientIdStr = String(clientId)
         setRows(prevRows =>
-          prevRows.map(row =>
-            row.client_id === clientId
-              ? {
-                  ...row,
-                  accounts: result.accounts,
-                }
-              : row,
-          ),
+          prevRows.map(row => {
+            // Compare as strings to handle type mismatch (number vs string)
+            const rowClientIdStr = String(row.client_id)
+            if (rowClientIdStr === clientIdStr) {
+              return {
+                ...row,
+                accounts: result.accounts,
+              }
+            }
+            return row
+          }),
         )
       } else {
-        console.error('加载账户失败:', result.error)
+        const errorMsg = result.error || 'Unknown error'
+        console.error(`加载账户失败 (ClientID: ${clientId}):`, errorMsg)
+        // Show error to user (optional: you can add a toast notification here)
       }
-    } catch (error) {
-      console.error('加载账户异常:', error)
+    } catch (error: any) {
+      console.error(`加载账户异常 (ClientID: ${clientId}):`, error)
+      // Show error to user (optional: you can add a toast notification here)
     } finally {
       setAccountLoadingMap(prev => {
         const { [key]: _ignored, ...rest } = prev
@@ -329,20 +396,32 @@ export default function ClientPnLMonitor() {
   // 切换展开/收起
   const toggleExpand = useCallback(async (row: ClientPnLSummaryRow) => {
     const clientId = row.client_id
+    // Normalize clientId to string for consistent comparison
+    const clientIdStr = String(clientId)
 
-    if (expandedClients.has(clientId)) {
+    // Check if already expanded (compare as strings)
+    const isExpanded = Array.from(expandedClients).some(id => String(id) === clientIdStr)
+    
+    if (isExpanded) {
       setExpandedClients(prev => {
         const next = new Set(prev)
-        next.delete(clientId)
+        // Remove by matching string representation
+        Array.from(next).forEach(id => {
+          if (String(id) === clientIdStr) {
+            next.delete(id)
+          }
+        })
         return next
       })
       return
     }
 
+    // Fetch accounts if not already loaded
     if (typeof row.accounts === "undefined") {
       await fetchAccountsForClient(clientId)
     }
 
+    // Add to expanded set (use original value to maintain type consistency)
     setExpandedClients(prev => {
       const next = new Set(prev)
       next.add(clientId)
@@ -463,10 +542,10 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "primary_server",
-      headerName: "服务器",
-      width: 120,
-      minWidth: 100,
-      maxWidth: 150,
+      headerName: "Zipcode / 服务器",
+      width: 140,
+      minWidth: 120,
+      maxWidth: 200,
       sortable: true,
       filter: true,
       sortValueGetter: detailSortValueGetter,
@@ -480,8 +559,8 @@ export default function ClientPnLMonitor() {
           )
         }
         
-        // 主行显示主服务器
-        return <span className="text-muted-foreground">{params.value || ""}</span>
+        // 主行显示 zipcode
+        return <span className="text-muted-foreground">{params.data?.zipcode || ''}</span>
       },
       hide: !columnVisibility.primary_server,
     },
@@ -507,8 +586,10 @@ export default function ClientPnLMonitor() {
         // 主行显示账户数（可点击展开）
         const clientRow = params.data as ClientPnLSummaryRow & { _rowType?: string }
         const clientId = clientRow.client_id
-        const isExpanded = expandedClients.has(clientId)
-        const isLoadingAccounts = !!accountLoadingMap[String(clientId)]
+        // Check expansion status by comparing string representations
+        const clientIdStr = String(clientId)
+        const isExpanded = Array.from(expandedClients).some(id => String(id) === clientIdStr)
+        const isLoadingAccounts = !!accountLoadingMap[clientIdStr]
         const count = params.value || 0
         
         return (
@@ -665,9 +746,14 @@ export default function ClientPnLMonitor() {
       sortable: true,
       filter: true,
       sortValueGetter: detailSortValueGetter,
-      cellRenderer: (params: any) => (
-        <span className="text-right">{formatCurrency(toNumber(params.value))}</span>
-      ),
+      cellRenderer: (params: any) => {
+        const rowType = params.data?._rowType
+        // fresh grad note: detail row uses per-account deposit_usd
+        const value = rowType === 'detail' ? toNumber(params.data.deposit_usd) : toNumber(params.value)
+        return (
+          <span className="text-right">{formatCurrency(value)}</span>
+        )
+      },
       hide: !columnVisibility.total_deposit_usd,
     },
     {
@@ -679,9 +765,14 @@ export default function ClientPnLMonitor() {
       sortable: true,
       filter: true,
       sortValueGetter: detailSortValueGetter,
-      cellRenderer: (params: any) => (
-        <span className="text-right">{formatCurrency(toNumber(params.value))}</span>
-      ),
+      cellRenderer: (params: any) => {
+        const rowType = params.data?._rowType
+        // fresh grad note: detail row uses per-account withdrawal_usd
+        const value = rowType === 'detail' ? toNumber(params.data.withdrawal_usd) : toNumber(params.value)
+        return (
+          <span className="text-right">{formatCurrency(value)}</span>
+        )
+      },
       hide: !columnVisibility.total_withdrawal_usd,
     },
     {
@@ -694,7 +785,11 @@ export default function ClientPnLMonitor() {
       filter: true,
       sortValueGetter: detailSortValueGetter,
       cellRenderer: (params: any) => {
-        const value = toNumber(params.value)
+        const rowType = params.data?._rowType
+        // fresh grad note: detail row computes deposit_usd - withdrawal_usd
+        const value = rowType === 'detail'
+          ? toNumber(params.data.deposit_usd) - toNumber(params.data.withdrawal_usd)
+          : toNumber(params.value)
         return (
           <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
             {formatCurrency(value)}
@@ -718,73 +813,59 @@ export default function ClientPnLMonitor() {
         
         return (
           <span className={`text-right tabular-nums ${rowType === 'detail' ? 'text-sm' : ''}`}>
-            {value.toLocaleString()}
+            {value.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
           </span>
         )
       },
       hide: !columnVisibility.total_volume_lots,
     },
     {
-      field: "overnight_volume_ratio",
-      headerName: "过夜成交量占比",
-      width: 150,
-      minWidth: 120,
-      maxWidth: 200,
+      field: "auto_swap_free_status",
+      headerName: "auto_swap_free_status",
+      width: 180,
+      minWidth: 140,
+      maxWidth: 240,
+      sortable: true,
+      filter: true,
+      sortValueGetter: detailSortValueGetter,
+      cellRenderer: (params: any) => {
+        const raw = toNumber(params.value ?? (params.data?._rowType === 'detail' ? params.data?.auto_swap_free_status : params.data?.auto_swap_free_status), -1)
+        if (!Number.isFinite(raw) || raw < 0) {
+          return <span className="text-muted-foreground">-</span>
+        }
+        const ratio = Math.max(0, Math.min(1, raw))
+        const pct = (ratio * 100).toFixed(1) + '%'
+        return <span className="tabular-nums">{pct}</span>
+      },
+      cellStyle: (params: any) => {
+        const raw = toNumber(params.value ?? (params.data?._rowType === 'detail' ? params.data?.auto_swap_free_status : params.data?.auto_swap_free_status), -1)
+        if (!Number.isFinite(raw) || raw < 0) return null
+        const ratio = Math.max(0, Math.min(1, raw))
+        if (ratio < 0.2) return { backgroundColor: 'rgba(16,185,129,0.15)', color: '#111' } as any
+        if (ratio < 0.5) return { backgroundColor: 'rgba(245,158,11,0.18)', color: '#111' } as any
+        return { backgroundColor: 'rgba(239,68,68,0.18)', color: '#111' } as any
+      },
+      hide: !columnVisibility.auto_swap_free_status,
+    },
+    {
+      field: "is_enabled",
+      headerName: "isenable",
+      width: 120,
+      minWidth: 100,
+      maxWidth: 180,
       sortable: true,
       filter: true,
       sortValueGetter: detailSortValueGetter,
       cellRenderer: (params: any) => {
         const rowType = params.data?._rowType
-        
-        // 明细行不显示此字段
         if (rowType === 'detail') {
-          return <span className="text-muted-foreground text-sm">-</span>
+          return <span className="text-muted-foreground">-</span>
         }
-        
-        const raw = toNumber(params.value, -1)
-        if (!Number.isFinite(raw) || raw < 0) {
-          return (
-            <span className="text-muted-foreground">-</span>
-          )
-        }
-        const ratio = Math.max(0, Math.min(1, raw))
-        const pct = (ratio * 100).toFixed(1) + '%'
-        return (
-          <span className="tabular-nums">{pct}</span>
-        )
+        const v = params.value ?? params.data?.is_enabled
+        const isOn = (typeof v === 'number') ? v === 1 : !!v
+        return <span className={isOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>{isOn ? 'enable' : 'disable'}</span>
       },
-      cellStyle: (params: any) => {
-        const rowType = params.data?._rowType
-        if (rowType === 'detail') return null
-        
-        const raw = toNumber(params.value, -1)
-        if (!Number.isFinite(raw) || raw < 0) {
-          return null
-        }
-        const ratio = Math.max(0, Math.min(1, raw))
-        if (ratio < 0.2) {
-          return { backgroundColor: 'rgba(16,185,129,0.15)', color: '#111' } as any
-        }
-        if (ratio < 0.5) {
-          return { backgroundColor: 'rgba(245,158,11,0.18)', color: '#111' } as any
-        }
-        return { backgroundColor: 'rgba(239,68,68,0.18)', color: '#111' } as any
-      },
-      hide: !columnVisibility.overnight_volume_ratio,
-    },
-    {
-      field: "total_closed_count",
-      headerName: "总平仓订单数",
-      width: 140,
-      minWidth: 100,
-      maxWidth: 200,
-      sortable: true,
-      filter: true,
-      sortValueGetter: detailSortValueGetter,
-      cellRenderer: (params: any) => (
-        <span className="text-right tabular-nums">{toNumber(params.value).toLocaleString()}</span>
-      ),
-      hide: !columnVisibility.total_closed_count,
+      hide: !columnVisibility.is_enabled,
     },
     {
       field: "last_updated",
@@ -863,7 +944,11 @@ export default function ClientPnLMonitor() {
       })
       
       // 如果该客户被展开，则添加账户明细行
-      if (expandedClients.has(row.client_id) && row.accounts && row.accounts.length > 0) {
+      // Check expansion status by comparing string representations
+      const rowClientIdStr = String(row.client_id)
+      const isExpanded = Array.from(expandedClients).some(id => String(id) === rowClientIdStr)
+      
+      if (isExpanded && row.accounts && row.accounts.length > 0) {
         row.accounts.forEach(acc => {
           result.push({
             ...acc,
@@ -877,23 +962,7 @@ export default function ClientPnLMonitor() {
     return result
   }, [rows, expandedClients])
   
-  // 筛选处理
-  const handleApplyFilters = useCallback((filters: FilterGroup) => {
-    setAppliedFilters(filters)
-    console.log('应用筛选条件:', JSON.stringify(filters, null, 2))
-  }, [])
-  
-  const handleRemoveFilter = useCallback((ruleIndex: number) => {
-    setAppliedFilters(prev => {
-      if (!prev) return null
-      const nextRules = prev.rules.filter((_, i) => i !== ruleIndex)
-      return nextRules.length > 0 ? { ...prev, rules: nextRules } : null
-    })
-  }, [])
-  
-  const handleClearFilters = useCallback(() => {
-    setAppliedFilters(null)
-  }, [])
+  // 筛选功能暂时移除，等待新后端方案
   
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -923,7 +992,7 @@ export default function ClientPnLMonitor() {
                 )}
               </div>
               
-              {/* 右侧：搜索 + 刷新 + 筛选 + 列显示切换按钮 */}
+              {/* 右侧：搜索 + 列显示切换按钮 */}
               <div className="flex items-center gap-2">
                 {/* 搜索框 */}
                 <div className="flex items-center gap-1">
@@ -953,31 +1022,10 @@ export default function ClientPnLMonitor() {
                     <Search className="h-4 w-4" />
                   </Button>
                 </div>
-                
-                {/* 刷新按钮 */}
-                <Button 
-                  onClick={handleManualRefresh} 
-                  className="h-9 gap-2 whitespace-nowrap"
-                  disabled={loading}
-                >
-                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                  刷新
+                {/* 增量刷新 */}
+                <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={isRefreshing}>
+                  {isRefreshing ? '刷新中…' : '刷新'}
                 </Button>
-                
-                {/* 筛选按钮 */}
-                <Button 
-                  onClick={() => setFilterBuilderOpen(true)} 
-                  className="h-9 gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
-                >
-                  <Filter className="h-4 w-4" />
-                  筛选
-                  {appliedFilters && appliedFilters.rules.length > 0 && (
-                    <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
-                      {appliedFilters.rules.length}
-                    </Badge>
-                  )}
-                </Button>
-                
                 {/* 列显示切换按钮 */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -993,7 +1041,7 @@ export default function ClientPnLMonitor() {
                       const columnLabels: Record<string, string> = {
                         client_id: "Client ID",
                         client_name: "客户名称",
-                        primary_server: "主服务器",
+                        primary_server: "Zipcode/服务器",
                         account_count: "账户数",
                         total_balance_usd: "总余额 (USD)",
                         total_floating_pnl_usd: "总浮动盈亏 (USD)",
@@ -1004,8 +1052,8 @@ export default function ClientPnLMonitor() {
                         total_withdrawal_usd: "总出金 (USD)",
                         net_deposit_usd: "净入金 (USD)",
                         total_volume_lots: "总交易手数",
-                        overnight_volume_ratio: "过夜成交量占比",
-                        total_closed_count: "总平仓订单数",
+                        auto_swap_free_status: "auto_swap_free_status",
+                        is_enabled: "isenable",
                         last_updated: "最后更新",
                       }
                       return (
@@ -1030,55 +1078,21 @@ export default function ClientPnLMonitor() {
               </div>
             </div>
             
-            {/* 第二行：激活的筛选条件展示 */}
-            {appliedFilters && appliedFilters.rules.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
-                <span className="text-xs text-muted-foreground">筛选条件（{appliedFilters.join}）：</span>
-                {appliedFilters.rules.map((rule, index) => {
-                  const colMeta = getColumnMeta(rule.field)
-                  const opLabel = OPERATOR_LABELS[rule.op]
-                  let valueDisplay = ''
-                  if (rule.op !== 'blank' && rule.op !== 'not_blank') {
-                    if (rule.op === 'between') {
-                      valueDisplay = ` ${rule.value ?? ''} ~ ${rule.value2 ?? ''}`
-                    } else {
-                      valueDisplay = ` ${rule.value ?? ''}`
-                    }
-                  }
-                  return (
-                    <Badge 
-                      key={index} 
-                      variant="outline" 
-                      className="gap-1.5 pr-1 bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300"
-                    >
-                      <span className="text-xs">
-                        {colMeta?.label || rule.field} {opLabel}{valueDisplay}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemoveFilter(index)}
-                        className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-900"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </Badge>
-                  )
-                })}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClearFilters}
-                  className="h-7 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
-                >
-                  清空全部
-                </Button>
-              </div>
-            )}
+            {/* 筛选区已移除，等待新后端筛选方案 */}
           </div>
         </CardContent>
       </Card>
       
+      {/* 刷新结果 Banner */}
+      {refreshBanner && (
+        <div className="px-1 sm:px-0">
+          <div className="flex items-center gap-2 px-4 py-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+            <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-8.414l-1.293-1.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0l5-5a1 1 0 10-1.414-1.414L9 9.586z" clipRule="evenodd"/></svg>
+            <p className="text-sm text-green-800 dark:text-green-200">{refreshBanner}</p>
+          </div>
+        </div>
+      )}
+
       {/* AG Grid 表格 */}
       <div className="flex-1">
         <div
@@ -1210,14 +1224,7 @@ export default function ClientPnLMonitor() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Filter Builder Dialog/Drawer */}
-      <FilterBuilder
-        open={filterBuilderOpen}
-        onOpenChange={setFilterBuilderOpen}
-        initialFilters={appliedFilters || undefined}
-        onApply={handleApplyFilters}
-      />
+      {/* 筛选器已暂时移除，待新后端方案接入 */}
     </div>
   )
 }

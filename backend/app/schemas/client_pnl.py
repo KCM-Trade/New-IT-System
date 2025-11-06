@@ -14,6 +14,8 @@ class ClientPnLSummaryItem(BaseModel):
     # 客户基本信息
     client_name: Optional[str] = None
     primary_server: Optional[str] = None
+    zipcode: Optional[str] = None
+    is_enabled: Optional[int] = None
     countries: Optional[List[str]] = None
     currencies: Optional[List[str]] = None
     
@@ -39,7 +41,7 @@ class ClientPnLSummaryItem(BaseModel):
     # 聚合手数
     total_volume_lots: float = 0.0
     total_overnight_volume_lots: float = 0.0
-    overnight_volume_ratio: Optional[float] = None
+    auto_swap_free_status: Optional[float] = None
     
     # 聚合订单数
     total_closed_count: int = 0
@@ -98,6 +100,7 @@ class ClientAccountItem(BaseModel):
     deposit_usd: float = 0.0
     withdrawal_usd: float = 0.0
     volume_lots: float = 0.0
+    auto_swap_free_status: Optional[float] = None
     
     # 更新时间
     last_updated: datetime
@@ -153,4 +156,26 @@ class RefreshStatusResponse(BaseModel):
     total_accounts: int = 0
     data_source: str = "pnl_client_summary"
     error: Optional[str] = None
+
+
+# 刷新步骤与响应（用于前端详细进度 Banner）
+class ClientPnlRefreshStep(BaseModel):
+    name: str
+    duration_seconds: float = 0.0
+    # 以下字段可选，按步骤类型返回
+    affected_rows: Optional[int] = None
+    total: Optional[int] = None
+    missing: Optional[int] = None
+    lag: Optional[int] = None
+    loaded_mapping: Optional[int] = None
+    zipcode_changes: Optional[int] = None
+
+
+class ClientPnlRefreshResponse(BaseModel):
+    status: str
+    message: Optional[str] = None
+    duration_seconds: float = 0.0
+    steps: List[ClientPnlRefreshStep] = []
+    max_last_updated: Optional[str] = None
+    raw_log: Optional[str] = None
 
