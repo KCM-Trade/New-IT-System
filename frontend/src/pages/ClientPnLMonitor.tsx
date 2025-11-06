@@ -301,16 +301,42 @@ export default function ClientPnLMonitor() {
       const del = find('delete_orphans')
       const map = find('mapping')
       const sum = find('summary_upsert')
+      // 仅展示：更新的 clientid 数量 + Zipcode 变化详情
       const parts: string[] = []
-      if (typeof cand.total === 'number') parts.push(`候选客户 ${cand.total}`)
-      if (typeof cand.missing === 'number' || typeof cand.lag === 'number') parts.push(`(missing:${cand.missing ?? 0}, lag:${cand.lag ?? 0})`)
-      if (typeof acc.affected_rows === 'number') parts.push(`UPSERT账户 ${acc.affected_rows}`)
-      if (typeof del.affected_rows === 'number') parts.push(`清理孤儿 ${del.affected_rows}`)
-      if (typeof map.loaded_mapping === 'number') parts.push(`映射 ${map.loaded_mapping}`)
-      if (typeof map.zipcode_changes === 'number') parts.push(`Zip变更 ${map.zipcode_changes}`)
-      if (typeof sum.affected_rows === 'number') parts.push(`更新客户汇总 ${sum.affected_rows}`)
-      if (typeof data?.duration_seconds === 'number') parts.push(`耗时 ${Number(data.duration_seconds).toFixed(2)}s`)
-      const message = parts.join('，') || (data?.message || '刷新完成')
+
+      // 更新数量：优先 summary_upsert.affected_rows；否则 candidates.total；否则 0
+      const updatedCount = (typeof sum.affected_rows === 'number')
+        ? Number(sum.affected_rows)
+        : (typeof cand.total === 'number' ? Number(cand.total) : 0)
+      parts.push(`更新客户汇总 ${updatedCount}`)
+
+      // Zipcode 变化数量
+      const zipcodeChanges = typeof map.zipcode_changes === 'number' ? Number(map.zipcode_changes) : 0
+
+      // Zipcode 详情：优先 steps.zipcode_details；否则从 raw_log 解析
+      let zipcodeDetails: Array<{ clientid: string | number, before: string | null, after: string | null }> = []
+      if (Array.isArray((map as any)?.zipcode_details)) {
+        zipcodeDetails = (map as any).zipcode_details as any
+      } else if (typeof (data as any)?.raw_log === 'string') {
+        try {
+          const raw: string = (data as any).raw_log
+          const regex = /client_id=(\d+)\s+old_zipcode=([^\s]+)?\s+new_zipcode=([^\s]+)?/g
+          let m: RegExpExecArray | null
+          while ((m = regex.exec(raw)) !== null) {
+            zipcodeDetails.push({ clientid: m[1], before: m[2] || null, after: m[3] || null })
+          }
+        } catch {}
+      }
+
+      if (zipcodeChanges > 0) {
+        const detailTexts = zipcodeDetails.map(d => `clientid ${d.clientid} (before: ${d.before ?? ''}, after: ${d.after ?? ''})`)
+        const detailsJoined = detailTexts.join('；')
+        parts.push(`Zipcode变更 ${zipcodeChanges}${detailsJoined ? `：${detailsJoined}` : ''}`)
+      } else {
+        parts.push(`Zipcode变更 0`)
+      }
+
+      const message = parts.join('，')
       setRefreshBanner(message)
       // 刷新表格数据
       try { await fetchData() } catch {}
