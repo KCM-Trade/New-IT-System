@@ -594,7 +594,9 @@ export default function ClientPnLMonitor() {
         
         return (
           <button
+            type="button"
             onClick={(e) => {
+              e.preventDefault()
               e.stopPropagation()
               void toggleExpand(clientRow)
             }}
@@ -1110,6 +1112,15 @@ export default function ClientPnLMonitor() {
               resizable: true,
               minWidth: 100,
             }}
+            immutableData={true}
+            getRowId={(params) => {
+              const d = params.data as any
+              if (d && d._rowType === 'detail') {
+                return `detail-${String(d._parentClientId)}-${String(d.login)}`
+              }
+              return `main-${String(d?.client_id)}`
+            }}
+            suppressScrollOnNewData={true}
             onGridReady={onGridReady}
             onSortChanged={onSortChanged}
             onColumnResized={(e: any) => { if (e.finished) throttledSaveGridState() }}
