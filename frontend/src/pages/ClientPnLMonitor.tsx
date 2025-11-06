@@ -155,6 +155,17 @@ export default function ClientPnLMonitor() {
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
 
+  // 判定暗色模式（用于样式注入）
+  const isDarkMode = useMemo(() => {
+    if (theme === 'dark') return true
+    if (theme === 'light') return false
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    } catch {
+      return false
+    }
+  }, [theme])
+
   // 刷新状态与 Banner 文本
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshBanner, setRefreshBanner] = useState<string | null>(null)
@@ -1110,7 +1121,27 @@ export default function ClientPnLMonitor() {
       <div className="flex-1">
         <div
           ref={gridContainerRef}
-          className={`${(theme === 'dark' || (theme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} h-[600px] w-full min-h-[400px] relative`}
+          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} clientpnl-theme h-[600px] w-full min-h-[400px] relative`}
+          style={{
+            // Indigo 主题主色/对比色（shadcn 变量格式：H S L）
+            ['--primary' as any]: '243 75% 59%',             // indigo-600
+            ['--primary-foreground' as any]: '0 0% 100%',     // 白色文字
+            ['--accent' as any]: '243 75% 65%',               // 略浅的 indigo，用于子行底色
+            ['--accent-foreground' as any]: '0 0% 14%',
+
+            // 表头：浅黑底白字（light），白底黑字（dark）
+            ['--ag-header-background-color' as any]: isDarkMode ? 'hsl(0 0% 100% / 1)' : 'hsl(0 0% 8% / 1)',
+            ['--ag-header-foreground-color' as any]: isDarkMode ? 'hsl(0 0% 0% / 1)' : 'hsl(0 0% 100% / 1)',
+            ['--ag-header-column-separator-color' as any]: isDarkMode ? 'hsl(0 0% 0% / 1)' : 'hsl(0 0% 100% / 1)',
+            ['--ag-header-column-separator-width' as any]: '1px',
+
+            // 表格前景/背景/边框颜色使用 shadcn 语义色
+            ['--ag-background-color' as any]: 'hsl(var(--card))',
+            ['--ag-foreground-color' as any]: 'hsl(var(--foreground))',
+            ['--ag-row-border-color' as any]: 'hsl(var(--border))',
+            // 斑马纹（备用，不作为主逻辑）：primary 的极浅层次
+            ['--ag-odd-row-background-color' as any]: 'hsl(var(--primary) / 0.04)'
+          }}
         >
           <AgGridReact
             rowData={flatRows}
@@ -1123,7 +1154,6 @@ export default function ClientPnLMonitor() {
               resizable: true,
               minWidth: 100,
             }}
-            immutableData={true}
             getRowId={(params) => {
               const d = params.data as any
               if (d && d._rowType === 'detail') {
@@ -1147,22 +1177,30 @@ export default function ClientPnLMonitor() {
             getRowStyle={(params: any) => {
               const rowType = params.data?._rowType
               
-              // 明细行样式：浅色背景
+              // 明细行样式：使用 accent 的浅底，整体缩进 + 左侧细色条
               if (rowType === 'detail') {
                 return {
-                  backgroundColor: 'rgba(59, 130, 246, 0.05)',
-                  paddingLeft: 4,
+                  backgroundColor: 'hsl(var(--accent) / 0.12)',
+                  paddingLeft: 8,
+                  borderLeft: '2px solid hsl(var(--accent) / 0.50)'
                 }
               }
               
-              // 主行隔行变色
+              // 主行：基于 primary 的弱对比底色（两档深浅区分）
               if (params.node.rowIndex && params.node.rowIndex % 2 === 0) {
-                return { backgroundColor: 'var(--ag-background-color)' }
+                return { backgroundColor: 'hsl(var(--primary) / 0.03)', paddingLeft: 0, borderLeft: 'none' }
               }
-              return { backgroundColor: 'var(--ag-odd-row-background-color)' }
+              return { backgroundColor: 'hsl(var(--primary) / 0.06)', paddingLeft: 0, borderLeft: 'none' }
             }}
           />
         </div>
+        {/* 仅表头边框：light=白边框，dark=黑边框 */}
+        <style>{`
+          .clientpnl-theme .ag-header {
+            border: 1px solid ${isDarkMode ? '#000' : '#fff'};
+            border-bottom-width: 1px;
+          }
+        `}</style>
       </div>
       
       {/* 分页控件 */}
