@@ -475,13 +475,13 @@ export default function ClientPnLMonitor() {
         if (rowType === 'detail') {
           const loginLink = getAccountCrmLink(params.data?.server, params.data?.login)
           return (
-            <span className="pl-8 font-mono text-sm text-muted-foreground">
-              └ {loginLink ? (
+            <span className="font-mono text-sm font-semibold text-muted-foreground pl-1">
+              {loginLink ? (
                 <a
                   href={loginLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline hover:no-underline"
+                  className="underline hover:no-underline font-semibold"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {params.data.login}
@@ -525,7 +525,7 @@ export default function ClientPnLMonitor() {
         // 明细行显示组别
         if (rowType === 'detail') {
           return (
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm font-semibold text-muted-foreground pl-1">
               {params.data.user_group || '-'}
             </span>
           )
@@ -555,7 +555,7 @@ export default function ClientPnLMonitor() {
         // 明细行显示账户服务器
         if (rowType === 'detail') {
           return (
-            <span className="text-sm">{params.data.server || ''}</span>
+            <span className="text-sm font-semibold pl-1">{params.data.server || ''}</span>
           )
         }
         
@@ -578,8 +578,15 @@ export default function ClientPnLMonitor() {
         
         // 明细行显示币种
         if (rowType === 'detail') {
+          const cur = String(params.data.currency || '').toUpperCase()
+          let badge = 'bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200'
+          if (cur === 'CEN') badge = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+          else if (cur === 'USD') badge = 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300'
+          else if (cur === 'USDT') badge = 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
           return (
-            <span className="text-sm font-mono">{params.data.currency || '-'}</span>
+            <span className={`text-sm font-semibold font-mono pl-1`}>
+              <span className={`inline-block rounded px-1.5 py-0.5 ${badge}`}>{cur || '-'}</span>
+            </span>
           )
         }
         
@@ -632,7 +639,7 @@ export default function ClientPnLMonitor() {
           const value = toNumber(params.data.balance_usd)
           return (
             <span 
-              className={`text-right text-sm ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+              className={`text-right text-sm font-semibold ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
             >
               {formatCurrency(value)}
             </span>
@@ -666,7 +673,7 @@ export default function ClientPnLMonitor() {
         
         return (
           <span 
-            className={`text-right ${rowType === 'detail' ? 'text-sm' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+            className={`text-right ${rowType === 'detail' ? 'text-sm font-semibold' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
           >
             {formatCurrency(value)}
           </span>
@@ -689,7 +696,7 @@ export default function ClientPnLMonitor() {
         
         return (
           <span 
-            className={`text-right ${rowType === 'detail' ? 'text-sm' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
+            className={`text-right ${rowType === 'detail' ? 'text-sm font-semibold' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}
           >
             {formatCurrency(value)}
           </span>
@@ -715,7 +722,7 @@ export default function ClientPnLMonitor() {
         const value = rowType === 'detail' ? toNumber(params.data.closed_profit_usd) : toNumber(params.value)
         
         return (
-          <span className={`text-right ${rowType === 'detail' ? 'text-sm' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+          <span className={`text-right ${rowType === 'detail' ? 'text-sm font-semibold' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
             {formatCurrency(value)}
           </span>
         )
@@ -734,7 +741,7 @@ export default function ClientPnLMonitor() {
       cellRenderer: (params: any) => {
         const value = toNumber(params.value)
         return (
-          <span className="text-right">{formatCurrency(value)}</span>
+          <span className="text-right text-sm font-semibold">{formatCurrency(value)}</span>
         )
       },
       hide: !columnVisibility.total_commission_usd,
@@ -753,7 +760,7 @@ export default function ClientPnLMonitor() {
         // fresh grad note: detail row uses per-account deposit_usd
         const value = rowType === 'detail' ? toNumber(params.data.deposit_usd) : toNumber(params.value)
         return (
-          <span className="text-right">{formatCurrency(value)}</span>
+          <span className="text-right text-sm font-semibold">{formatCurrency(value)}</span>
         )
       },
       hide: !columnVisibility.total_deposit_usd,
@@ -793,7 +800,7 @@ export default function ClientPnLMonitor() {
           ? toNumber(params.data.deposit_usd) - toNumber(params.data.withdrawal_usd)
           : toNumber(params.value)
         return (
-          <span className={`text-right ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+          <span className={`text-right ${rowType === 'detail' ? 'text-sm font-semibold' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
             {formatCurrency(value)}
           </span>
         )
@@ -814,7 +821,7 @@ export default function ClientPnLMonitor() {
         const value = rowType === 'detail' ? toNumber(params.data.volume_lots) : toNumber(params.value)
         
         return (
-          <span className={`text-right tabular-nums ${rowType === 'detail' ? 'text-sm' : ''}`}>
+          <span className={`text-right tabular-nums ${rowType === 'detail' ? 'text-sm font-semibold' : ''}`}>
             {value.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
           </span>
         )
@@ -832,12 +839,13 @@ export default function ClientPnLMonitor() {
       sortValueGetter: detailSortValueGetter,
       cellRenderer: (params: any) => {
         const raw = toNumber(params.value ?? (params.data?._rowType === 'detail' ? params.data?.auto_swap_free_status : params.data?.auto_swap_free_status), -1)
+        const isDetail = params.data?._rowType === 'detail'
         if (!Number.isFinite(raw) || raw < 0) {
-          return <span className="text-muted-foreground">-</span>
+          return <span className={`text-muted-foreground ${isDetail ? 'text-sm font-semibold' : ''}`}>-</span>
         }
         const ratio = Math.max(0, Math.min(1, raw))
         const pct = (ratio * 100).toFixed(1) + '%'
-        return <span className="tabular-nums">{pct}</span>
+        return <span className={`tabular-nums ${isDetail ? 'text-sm font-semibold' : ''}`}>{pct}</span>
       },
       cellStyle: (params: any) => {
         const raw = toNumber(params.value ?? (params.data?._rowType === 'detail' ? params.data?.auto_swap_free_status : params.data?.auto_swap_free_status), -1)
@@ -861,7 +869,7 @@ export default function ClientPnLMonitor() {
       cellRenderer: (params: any) => {
         const rowType = params.data?._rowType
         if (rowType === 'detail') {
-          return <span className="text-muted-foreground">-</span>
+          return <span className="text-sm font-semibold text-muted-foreground">-</span>
         }
         const v = params.value ?? params.data?.is_enabled
         const isOn = (typeof v === 'number') ? v === 1 : !!v
@@ -878,11 +886,14 @@ export default function ClientPnLMonitor() {
       sortable: true,
       filter: false,
       sortValueGetter: detailSortValueGetter,
-      cellRenderer: (params: any) => (
-        <span className="whitespace-nowrap text-muted-foreground">
-          {params.value ? new Date(params.value).toLocaleString() : ""}
-        </span>
-      ),
+      cellRenderer: (params: any) => {
+        const isDetail = params.data?._rowType === 'detail'
+        return (
+          <span className={`whitespace-nowrap text-muted-foreground ${isDetail ? 'text-sm font-semibold pl-1' : ''}`}>
+            {params.value ? new Date(params.value).toLocaleString() : ""}
+          </span>
+        )
+      },
       hide: !columnVisibility.last_updated,
     },
   ], [columnVisibility, expandedClients, toggleExpand, accountLoadingMap, detailSortValueGetter])
@@ -1140,6 +1151,7 @@ export default function ClientPnLMonitor() {
               if (rowType === 'detail') {
                 return {
                   backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                  paddingLeft: 4,
                 }
               }
               
