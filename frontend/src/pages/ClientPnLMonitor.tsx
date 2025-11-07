@@ -5,7 +5,10 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Settings2, X, Search, RefreshCw } from "lucide-react"
+import { Settings2, X, Search, RefreshCw, Filter } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { FilterBuilder } from "@/components/FilterBuilder"
+import { FilterGroup, operatorNeedsValue, operatorNeedsTwoValues, OPERATOR_LABELS, ColumnMeta } from "@/types/filter"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridReadyEvent, SortChangedEvent, GridApi, PostSortRowsParams, IRowNode } from 'ag-grid-community'
 
@@ -170,6 +173,32 @@ export default function ClientPnLMonitor() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshBanner, setRefreshBanner] = useState<string | null>(null)
 
+  // filter state
+  // fresh grad note: keep filter UI local, persist by a simple localStorage key
+  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false)
+  const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(null)
+  const FILTERS_STORAGE_KEY = 'client_pnl_filters'
+
+  // ClientPnL 可筛选字段定义（供筛选器使用）
+  const CLIENT_FILTER_COLUMNS: ColumnMeta[] = [
+    { id: 'client_id', label: 'Client ID', type: 'text', filterable: true },
+    { id: 'client_name', label: '客户名称', type: 'text', filterable: true },
+    { id: 'zipcode', label: 'Zipcode', type: 'text', filterable: true },
+    { id: 'account_count', label: '账户数', type: 'number', filterable: true },
+    { id: 'total_balance_usd', label: '总余额 (USD)', type: 'number', filterable: true },
+    { id: 'total_floating_pnl_usd', label: '总浮动盈亏 (USD)', type: 'number', filterable: true },
+    { id: 'total_equity_usd', label: '总净值 (USD)', type: 'number', filterable: true },
+    { id: 'total_closed_profit_usd', label: '总平仓盈亏 (USD)', type: 'number', filterable: true },
+    { id: 'total_commission_usd', label: '总佣金 (USD)', type: 'number', filterable: true },
+    { id: 'total_deposit_usd', label: '总入金 (USD)', type: 'number', filterable: true },
+    { id: 'total_withdrawal_usd', label: '总出金 (USD)', type: 'number', filterable: true },
+    { id: 'net_deposit_usd', label: '净入金 (USD)', type: 'number', filterable: true },
+    { id: 'total_volume_lots', label: '总交易手数', type: 'number', filterable: true },
+    { id: 'auto_swap_free_status', label: 'auto_swap_free_status', type: 'percent', filterable: true },
+    { id: 'is_enabled', label: 'isenable', type: 'number', filterable: true },
+    { id: 'last_updated', label: '最后更新', type: 'date', filterable: true },
+  ]
+
   // 记录主行，便于在排序时获取父级值
   const parentRowMap = useMemo(() => {
     const map = new Map<number | string, ClientPnLSummaryRow>()
@@ -251,6 +280,11 @@ export default function ClientPnLMonitor() {
       if (searchValue) {
         params.append('search', searchValue)
       }
+
+      // add filters_json when there are active rules
+      if (appliedFilters && Array.isArray(appliedFilters.rules) && appliedFilters.rules.length > 0) {
+        params.append('filters_json', JSON.stringify(appliedFilters))
+      }
       
       const response = await fetch(`/api/v1/client-pnl/summary/paginated?${params}`)
       const result = await response.json()
@@ -270,7 +304,7 @@ export default function ClientPnLMonitor() {
     } finally {
       setLoading(false)
     }
-  }, [pageIndex, pageSize, sortModel, searchValue])
+  }, [pageIndex, pageSize, sortModel, searchValue, appliedFilters])
   
   // 初始化加载数据
   useEffect(() => {
@@ -297,8 +331,7 @@ export default function ClientPnLMonitor() {
       const steps: any[] = Array.isArray(data?.steps) ? data.steps : []
       const find = (name: string) => steps.find(s => s?.name === name) || {}
       const cand = find('candidates')
-      const acc = find('accounts_upsert')
-      const del = find('delete_orphans')
+      // steps 'accounts_upsert' and 'delete_orphans' are not used in banner
       const map = find('mapping')
       const sum = find('summary_upsert')
       // 仅展示：更新的 clientid 数量 + Zipcode 变化详情
@@ -353,6 +386,47 @@ export default function ClientPnLMonitor() {
     const timer = setTimeout(() => setRefreshBanner(null), 10000)
     return () => clearTimeout(timer)
   }, [refreshBanner])
+  
+  // filter: restore from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(FILTERS_STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved) as FilterGroup
+        setAppliedFilters(parsed)
+      }
+    } catch {}
+  }, [])
+
+  // filter: apply/save/clear helpers
+  const handleApplyFilters = useCallback((filters: FilterGroup) => {
+    setAppliedFilters(filters)
+    try { localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters)) } catch {}
+    // fresh grad note: reset to first page when filters applied
+    setPageIndex(0)
+    // optional: debug print
+    console.log('filters applied:', JSON.stringify(filters))
+  }, [])
+
+  const handleRemoveFilter = useCallback((ruleIndex: number) => {
+    setAppliedFilters(prev => {
+      if (!prev) return null
+      const nextRules = prev.rules.filter((_, i) => i !== ruleIndex)
+      const next = nextRules.length > 0 ? { ...prev, rules: nextRules } : null
+      try {
+        if (next) localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(next))
+        else localStorage.removeItem(FILTERS_STORAGE_KEY)
+      } catch {}
+      setPageIndex(0)
+      return next
+    })
+  }, [])
+
+  const handleClearFilters = useCallback(() => {
+    setAppliedFilters(null)
+    try { localStorage.removeItem(FILTERS_STORAGE_KEY) } catch {}
+    setPageIndex(0)
+  }, [])
   
   // 搜索处理
   const handleSearch = useCallback(() => {
@@ -1042,7 +1116,7 @@ export default function ClientPnLMonitor() {
                 )}
               </div>
               
-              {/* 右侧：搜索 + 列显示切换按钮 */}
+              {/* 右侧：搜索 + 筛选 + 列显示切换按钮 */}
               <div className="flex items-center gap-2">
                 {/* 搜索框 */}
                 <div className="flex items-center gap-1">
@@ -1075,6 +1149,19 @@ export default function ClientPnLMonitor() {
                 {/* 增量刷新 */}
                 <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={isRefreshing}>
                   {isRefreshing ? '刷新中…' : '刷新'}
+                </Button>
+                {/* 筛选按钮：放在列显示切换左边 */}
+                <Button 
+                  onClick={() => setFilterBuilderOpen(true)} 
+                  className="h-9 gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+                >
+                  <Filter className="h-4 w-4" />
+                  筛选
+                  {appliedFilters && appliedFilters.rules.length > 0 && (
+                    <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                      {appliedFilters.rules.length}
+                    </Badge>
+                  )}
                 </Button>
                 {/* 列显示切换按钮 */}
                 <DropdownMenu>
@@ -1128,7 +1215,51 @@ export default function ClientPnLMonitor() {
               </div>
             </div>
             
-            {/* 筛选区已移除，等待新后端筛选方案 */}
+            {/* 已应用筛选条件展示 */}
+            {appliedFilters && appliedFilters.rules.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
+                <span className="text-xs text-muted-foreground">逻辑: {appliedFilters.join}</span>
+                {appliedFilters.rules.map((rule, index) => {
+                  const colMeta = CLIENT_FILTER_COLUMNS.find(c => c.id === rule.field)
+                  const opLabel = OPERATOR_LABELS[rule.op]
+                  let valueDisplay = ''
+                  if (operatorNeedsValue(rule.op)) {
+                    if (operatorNeedsTwoValues(rule.op)) {
+                      valueDisplay = ` ${rule.value ?? ''} ~ ${rule.value2 ?? ''}`
+                    } else {
+                      valueDisplay = ` ${rule.value ?? ''}`
+                    }
+                  }
+                  return (
+                    <Badge 
+                      key={index} 
+                      variant="outline" 
+                      className="gap-1.5 pr-1 bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300"
+                    >
+                      <span className="text-xs">
+                        {(colMeta?.label || rule.field)} {opLabel}{valueDisplay}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveFilter(index)}
+                        className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-900"
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </Badge>
+                  )
+                })}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearFilters}
+                  className="h-7 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+                >
+                  清空全部
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -1311,7 +1442,14 @@ export default function ClientPnLMonitor() {
           </div>
         </CardContent>
       </Card>
-      {/* 筛选器已暂时移除，待新后端方案接入 */}
+      {/* Filter Builder Dialog/Drawer */}
+      <FilterBuilder
+        open={filterBuilderOpen}
+        onOpenChange={setFilterBuilderOpen}
+        initialFilters={appliedFilters || undefined}
+        onApply={handleApplyFilters}
+        columns={CLIENT_FILTER_COLUMNS}
+      />
     </div>
   )
 }

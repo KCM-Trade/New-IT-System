@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime as _dt
 import math
 import os
@@ -29,6 +29,7 @@ def get_client_pnl_summary_paginated(
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
     search: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[dict], int, int, Optional[_dt]]:
     """分页查询 ClientID 盈亏汇总表
     
@@ -81,7 +82,106 @@ def get_client_pnl_summary_paginated(
                 # 非数字，模糊匹配客户名称
                 where_conditions.append("client_name ILIKE %s")
                 params.append(f"%{s}%")
-    
+    # filters_json 解析结果（filters）转 WHERE
+    if filters and isinstance(filters.get("rules"), list) and filters.get("rules"):
+        joiner = " OR " if str(filters.get("join")).upper() == "OR" else " AND "
+
+        # 字段白名单映射（前端字段 -> 数据库列）
+        field_map: Dict[str, str] = {
+            "client_id": "client_id",
+            "client_name": "client_name",
+            "zipcode": "zipcode",
+            "is_enabled": "is_enabled",
+            "account_count": "account_count",
+            "total_balance_usd": "total_balance_usd",
+            "total_floating_pnl_usd": "total_floating_pnl_usd",
+            "total_equity_usd": "total_equity_usd",
+            "total_closed_profit_usd": "total_closed_profit_usd",
+            "total_commission_usd": "total_commission_usd",
+            "total_deposit_usd": "total_deposit_usd",
+            "total_withdrawal_usd": "total_withdrawal_usd",
+            "net_deposit_usd": "net_deposit_usd",
+            "total_volume_lots": "total_volume_lots",
+            "auto_swap_free_status": "auto_swap_free_status",
+            "last_updated": "last_updated",
+        }
+
+        # 运算符到 SQL 的映射工具
+        def _text_clause(col: str, op: str, val: Any) -> Tuple[str, List[Any]]:
+            if op == "blank":
+                return (f"({col} IS NULL OR {col} = '')", [])
+            if op == "not_blank":
+                return (f"({col} IS NOT NULL AND {col} <> '')", [])
+            if op == "contains":
+                return (f"{col} ILIKE %s", [f"%{val}%"])
+            if op == "not_contains":
+                return (f"{col} NOT ILIKE %s", [f"%{val}%"])
+            if op == "starts_with":
+                return (f"{col} ILIKE %s", [f"{val}%"])
+            if op == "ends_with":
+                return (f"{col} ILIKE %s", [f"%{val}"])
+            if op == "equals":
+                return (f"{col} = %s", [val])
+            if op == "not_equals":
+                return (f"{col} <> %s", [val])
+            return ("1=1", [])
+
+        def _num_clause(col: str, op: str, v1: Any, v2: Any) -> Tuple[str, List[Any]]:
+            if op in ("blank",): return (f"{col} IS NULL", [])
+            if op in ("not_blank",): return (f"{col} IS NOT NULL", [])
+            if op in ("=", "eq", "equals"): return (f"{col} = %s", [v1])
+            if op in ("!=", "ne", "not_equals"): return (f"{col} <> %s", [v1])
+            if op in (">", "gt"): return (f"{col} > %s", [v1])
+            if op in (">=", "ge", "gte"): return (f"{col} >= %s", [v1])
+            if op in ("<", "lt"): return (f"{col} < %s", [v1])
+            if op in ("<=", "le", "lte"): return (f"{col} <= %s", [v1])
+            if op in ("between",): return (f"{col} BETWEEN %s AND %s", [v1, v2])
+            return ("1=1", [])
+
+        def _date_clause(col: str, op: str, v1: Any, v2: Any) -> Tuple[str, List[Any]]:
+            # 接受 'YYYY-MM-DD' 或完整 ISO 字符串，由 PG 端转换
+            if op in ("blank",): return (f"{col} IS NULL", [])
+            if op in ("not_blank",): return (f"{col} IS NOT NULL", [])
+            if op in ("on", "eq", "equals"): return (f"DATE({col}) = %s::date", [v1])
+            if op in ("before", "lt", "<"): return (f"{col} < %s::timestamp", [v1])
+            if op in ("after", "gt", ">"): return (f"{col} > %s::timestamp", [v1])
+            if op in (">=", "ge", "gte"): return (f"{col} >= %s::timestamp", [v1])
+            if op in ("<=", "le", "lte"): return (f"{col} <= %s::timestamp", [v1])
+            if op in ("between",): return (f"{col} BETWEEN %s::timestamp AND %s::timestamp", [v1, v2])
+            return ("1=1", [])
+
+        sub_clauses: List[str] = []
+        sub_params: List[Any] = []
+        for rule in filters.get("rules", []):
+            try:
+                field = str(rule.get("field"))
+                op = str(rule.get("op"))
+                val = rule.get("value")
+                val2 = rule.get("value2")
+                col = field_map.get(field)
+                if not col:
+                    continue
+
+                # 类型选择：简单根据列推断；文本列
+                if field in ("client_name", "zipcode"):
+                    clause, ps = _text_clause(col, op, val)
+                # 日期列
+                elif field in ("last_updated",):
+                    clause, ps = _date_clause(col, op, val, val2)
+                # 其他数值/布尔视为数值
+                else:
+                    clause, ps = _num_clause(col, op, val, val2)
+
+                sub_clauses.append(f"({clause})")
+                sub_params.extend(ps)
+            except Exception:
+                # 忽略单条错误规则
+                continue
+
+        if sub_clauses:
+            where_conditions.append(f"(" + joiner.join(sub_clauses) + ")")
+            params.extend(sub_params)
+
     where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
     
     base_select = (

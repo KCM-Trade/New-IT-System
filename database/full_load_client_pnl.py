@@ -11,7 +11,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import psycopg2
 import psycopg2.extras
 import pymysql
+import dotenv
 
+dotenv.load_dotenv()
 
 def get_env(name: str, default: Optional[str] = None) -> str:
     """
@@ -118,6 +120,7 @@ def build_accounts(pg: psycopg2.extensions.connection) -> None:
         END AS overnight_volume_lots,
         s.last_updated  AS last_updated
       FROM public.pnl_user_summary s
+      WHERE s.user_id IS NOT NULL
 
       UNION ALL
 
@@ -144,6 +147,7 @@ def build_accounts(pg: psycopg2.extensions.connection) -> None:
         END AS overnight_volume_lots,
         s.last_updated  AS last_updated
       FROM public.pnl_user_summary_mt4live2 s
+      WHERE s.user_id IS NOT NULL
     ),
     rolled AS (
       SELECT
@@ -388,9 +392,10 @@ def update_watermark(pg: psycopg2.extensions.connection, max_last_updated_text: 
     """
     if not max_last_updated_text:
         return
+    # Use a non-null partition_key to satisfy NOT NULL constraint (e.g., 'all')
     sql_upsert = r"""
     INSERT INTO etl_watermarks (dataset, partition_key, last_deal_id, last_time, last_login, last_updated)
-    VALUES ('pnl_client', NULL, NULL, NULL, NULL, %(lu)s)
+    VALUES ('pnl_client', 'all', NULL, NULL, NULL, %(lu)s)
     ON CONFLICT (dataset, partition_key)
     DO UPDATE SET last_updated = EXCLUDED.last_updated;
     """

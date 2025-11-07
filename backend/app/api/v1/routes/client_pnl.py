@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict, Any
+import json
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
@@ -25,14 +26,33 @@ def get_client_summary_paginated(
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
     search: Optional[str] = Query(None, description="统一搜索：支持 client_id 或 account_id(精确)，客户名(模糊)"),
+    filters_json: Optional[str] = Query(None, description="筛选条件 JSON，格式：{join:'AND'|'OR', rules:[{field,op,value,value2?}]}"),
 ) -> PaginatedClientPnLSummaryResponse:
     try:
+        filters_dict: Optional[Dict[str, Any]] = None
+        if filters_json:
+            try:
+                filters_dict = json.loads(filters_json)
+                if not isinstance(filters_dict, dict):
+                    raise ValueError("filters_json must be a JSON object")
+                if "join" not in filters_dict or "rules" not in filters_dict:
+                    raise ValueError("filters_json must contain 'join' and 'rules' fields")
+                if filters_dict["join"] not in ["AND", "OR"]:
+                    raise ValueError("join must be 'AND' or 'OR'")
+                if not isinstance(filters_dict["rules"], list):
+                    raise ValueError("rules must be an array")
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=422, detail=f"Invalid filters_json format: {str(e)}")
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
         rows, total_count, total_pages, last_updated = get_client_pnl_summary_paginated(
             page=page,
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
             search=search,
+            filters=filters_dict,
         )
         return PaginatedClientPnLSummaryResponse(
             ok=True,

@@ -15,7 +15,8 @@ import {
   operatorNeedsValue, 
   operatorNeedsTwoValues,
   OPERATOR_LABELS,
-  FilterOperator
+  FilterOperator,
+  ColumnMeta,
 } from "@/types/filter"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
@@ -28,9 +29,11 @@ interface FilterBuilderProps {
   onOpenChange: (open: boolean) => void
   initialFilters?: FilterGroup
   onApply: (filters: FilterGroup) => void
+  // Optional override columns for current page (fallbacks to global config)
+  columns?: ColumnMeta[]
 }
 
-export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: FilterBuilderProps) {
+export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, columns }: FilterBuilderProps) {
   // Detect mobile viewport
   const [isMobile, setIsMobile] = useState(false)
 
@@ -53,9 +56,24 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: F
     }
   }, [open, initialFilters])
 
+  // Resolve columns/meta depending on optional override
+  const resolveFilterableColumns = useCallback((): ColumnMeta[] => {
+    if (Array.isArray(columns) && columns.length > 0) {
+      return columns.filter(c => c.filterable)
+    }
+    return getFilterableColumns()
+  }, [columns])
+
+  const resolveColumnMeta = useCallback((id: string): ColumnMeta | undefined => {
+    if (Array.isArray(columns) && columns.length > 0) {
+      return columns.find(c => c.id === id)
+    }
+    return getColumnMeta(id)
+  }, [columns])
+
   // Add new rule (default: first filterable column + first operator)
   const handleAddRule = useCallback(() => {
-    const filterableColumns = getFilterableColumns()
+    const filterableColumns = resolveFilterableColumns()
     if (filterableColumns.length === 0) return
     
     const firstCol = filterableColumns[0]
@@ -67,7 +85,7 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: F
       value: undefined,
       value2: undefined,
     }])
-  }, [])
+  }, [resolveFilterableColumns])
 
   // Remove rule
   const handleRemoveRule = useCallback((index: number) => {
@@ -78,7 +96,7 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: F
   const handleRuleFieldChange = useCallback((index: number, field: string) => {
     setRules(prev => {
       const next = [...prev]
-      const colMeta = getColumnMeta(field)
+      const colMeta = resolveColumnMeta(field)
       if (!colMeta) return prev
       
       const ops = getOperatorsForType(colMeta.type)
@@ -90,7 +108,7 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: F
       }
       return next
     })
-  }, [])
+  }, [resolveColumnMeta])
 
   // Update rule operator
   const handleRuleOpChange = useCallback((index: number, op: FilterOperator) => {
@@ -173,6 +191,8 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply }: F
             onOpChange={handleRuleOpChange}
             onValueChange={handleRuleValueChange}
             onRemove={handleRemoveRule}
+            availableColumns={resolveFilterableColumns()}
+            getColMeta={resolveColumnMeta}
           />
         ))}
       </div>
@@ -250,14 +270,17 @@ interface FilterRuleRowProps {
   onOpChange: (index: number, op: FilterOperator) => void
   onValueChange: (index: number, value: any, isSecondary?: boolean) => void
   onRemove: (index: number) => void
+  availableColumns: ColumnMeta[]
+  getColMeta: (id: string) => ColumnMeta | undefined
 }
 
-function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, onRemove }: FilterRuleRowProps) {
-  const filterableColumns = getFilterableColumns()
-  const colMeta = getColumnMeta(rule.field)
+function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, onRemove, availableColumns, getColMeta }: FilterRuleRowProps) {
+  const filterableColumns = availableColumns
+  const colMeta = getColMeta(rule.field)
   const operators = colMeta ? getOperatorsForType(colMeta.type) : []
   const needsValue = operatorNeedsValue(rule.op)
   const needsTwoValues = operatorNeedsTwoValues(rule.op)
+  const isIsEnabled = rule.field === 'is_enabled'
 
   return (
     <div className="flex flex-col sm:flex-row gap-2 p-3 border rounded-lg bg-muted/30">
@@ -276,38 +299,75 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
       </Select>
 
       {/* Operator Selector */}
-      <Select value={rule.op} onValueChange={(v) => onOpChange(index, v as FilterOperator)}>
-        <SelectTrigger className="h-9 w-full sm:w-[140px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {operators.map(op => (
-            <SelectItem key={op} value={op}>
-              {OPERATOR_LABELS[op]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {isIsEnabled ? (
+        <Select value={'='} onValueChange={() => { /* locked to '=' */ }} disabled>
+          <SelectTrigger className="h-9 w-full sm:w-[140px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="=">{OPERATOR_LABELS['=']}</SelectItem>
+          </SelectContent>
+        </Select>
+      ) : (
+        <Select value={rule.op} onValueChange={(v) => onOpChange(index, v as FilterOperator)}>
+          <SelectTrigger className="h-9 w-full sm:w-[140px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {operators.map(op => (
+              <SelectItem key={op} value={op}>
+                {OPERATOR_LABELS[op]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {/* Value Input(s) */}
-      {needsValue && (
+      {isIsEnabled ? (
         <div className="flex gap-2 flex-1">
-          <ValueInput
-            type={colMeta?.type || 'text'}
-            value={rule.value}
-            onChange={(v) => onValueChange(index, v, false)}
-          />
-          {needsTwoValues && (
-            <>
-              <span className="text-muted-foreground self-center">~</span>
-              <ValueInput
-                type={colMeta?.type || 'text'}
-                value={rule.value2}
-                onChange={(v) => onValueChange(index, v, true)}
-              />
-            </>
-          )}
+          <Select
+            value={rule.op === 'blank' ? 'NULL' : (rule.value === 1 ? '1' : (rule.value === 0 ? '0' : 'NULL'))}
+            onValueChange={(v) => {
+              if (v === 'NULL') {
+                onOpChange(index, 'blank')
+                onValueChange(index, undefined, false)
+              } else {
+                onOpChange(index, '=' as any)
+                onValueChange(index, Number(v), false)
+              }
+            }}
+          >
+            <SelectTrigger className="h-9 w-full sm:w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">enable</SelectItem>
+              <SelectItem value="0">disable</SelectItem>
+              <SelectItem value="NULL">其他（空值）</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+      ) : (
+        needsValue && (
+          <div className="flex gap-2 flex-1">
+            <ValueInput
+              type={colMeta?.type || 'text'}
+              value={rule.value}
+              onChange={(v) => onValueChange(index, v, false)}
+            />
+            {needsTwoValues && (
+              <>
+                <span className="text-muted-foreground self-center">~</span>
+                <ValueInput
+                  type={colMeta?.type || 'text'}
+                  value={rule.value2}
+                  onChange={(v) => onValueChange(index, v, true)}
+                />
+              </>
+            )}
+          </div>
+        )
       )}
 
       {/* Delete Button */}
