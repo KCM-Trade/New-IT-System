@@ -169,6 +169,8 @@ class ClientPnlRefreshStep(BaseModel):
     lag: Optional[int] = None
     loaded_mapping: Optional[int] = None
     zipcode_changes: Optional[int] = None
+    # 新增：zipcode 变更详情（前端用于展示哪个 client 从什么变成什么）
+    zipcode_details: Optional[List[dict]] = None
 
 
 class ClientPnlRefreshResponse(BaseModel):

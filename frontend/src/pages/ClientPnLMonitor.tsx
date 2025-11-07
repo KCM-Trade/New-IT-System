@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react"
 import { useTheme } from "@/components/theme-provider"
+import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -95,6 +96,26 @@ function toNumber(v: unknown, fallback = 0): number {
   return fallback
 }
 
+// simple fetch with timeout helper (abort after given ms)
+function fetchWithTimeout(url: string, options: any = {}, timeout = 60000) {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeout)
+  const opts = { ...options, signal: controller.signal }
+  return fetch(url, opts).finally(() => clearTimeout(id))
+}
+
+// backend response for V2 refresh endpoint
+interface EtlRefreshResponse {
+  status: string
+  message?: string | null
+  server: string
+  processed_rows?: number | null
+  duration_seconds?: number | null
+  new_max_deal_id?: number | null
+  new_trades_count?: number | null
+  floating_only_count?: number | null
+}
+
 // fresh grad note: keep CRM link helpers isolated for reuse
 function getClientCrmLink(clientId: number | string | null | undefined) {
   if (clientId === null || clientId === undefined || clientId === "") return null
@@ -112,6 +133,16 @@ function getAccountCrmLink(server: string | null | undefined, login: number | st
 
 export default function ClientPnLMonitor() {
   const { theme } = useTheme()
+  const { t } = useI18n()
+  // fresh grad note: tx() returns fallback when i18n key is missing
+  const tx = useCallback((key: string, fallback: string) => {
+    try {
+      const v = (t as any)(key)
+      return (typeof v === 'string' && v && v !== key) ? v : fallback
+    } catch {
+      return fallback
+    }
+  }, [t])
   
   // 数据状态
   const [rows, setRows] = useState<ClientPnLSummaryRow[]>([])
@@ -172,6 +203,8 @@ export default function ClientPnLMonitor() {
   // 刷新状态与 Banner 文本
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshBanner, setRefreshBanner] = useState<string | null>(null)
+  // 单独的 V2 刷新 Banner：与 client Banner 独立计时（各 10s）
+  const [v2Banner, setV2Banner] = useState<string | null>(null)
 
   // filter state
   // fresh grad note: keep filter UI local, persist by a simple localStorage key
@@ -180,24 +213,24 @@ export default function ClientPnLMonitor() {
   const FILTERS_STORAGE_KEY = 'client_pnl_filters'
 
   // ClientPnL 可筛选字段定义（供筛选器使用）
-  const CLIENT_FILTER_COLUMNS: ColumnMeta[] = [
-    { id: 'client_id', label: 'Client ID', type: 'text', filterable: true },
-    { id: 'client_name', label: '客户名称', type: 'text', filterable: true },
-    { id: 'zipcode', label: 'Zipcode', type: 'text', filterable: true },
-    { id: 'account_count', label: '账户数', type: 'number', filterable: true },
-    { id: 'total_balance_usd', label: '总余额 (USD)', type: 'number', filterable: true },
-    { id: 'total_floating_pnl_usd', label: '总浮动盈亏 (USD)', type: 'number', filterable: true },
-    { id: 'total_equity_usd', label: '总净值 (USD)', type: 'number', filterable: true },
-    { id: 'total_closed_profit_usd', label: '总平仓盈亏 (USD)', type: 'number', filterable: true },
-    { id: 'total_commission_usd', label: '总佣金 (USD)', type: 'number', filterable: true },
-    { id: 'total_deposit_usd', label: '总入金 (USD)', type: 'number', filterable: true },
-    { id: 'total_withdrawal_usd', label: '总出金 (USD)', type: 'number', filterable: true },
-    { id: 'net_deposit_usd', label: '净入金 (USD)', type: 'number', filterable: true },
-    { id: 'total_volume_lots', label: '总交易手数', type: 'number', filterable: true },
-    { id: 'auto_swap_free_status', label: 'auto_swap_free_status', type: 'percent', filterable: true },
-    { id: 'is_enabled', label: 'isenable', type: 'number', filterable: true },
-    { id: 'last_updated', label: '最后更新', type: 'date', filterable: true },
-  ]
+  const CLIENT_FILTER_COLUMNS: ColumnMeta[] = useMemo(() => ([
+    { id: 'client_id', label: tx('clientPnl.columns.clientId', 'Client ID'), type: 'text', filterable: true },
+    { id: 'client_name', label: tx('clientPnl.columns.clientName', '客户名称'), type: 'text', filterable: true },
+    { id: 'zipcode', label: tx('clientPnl.columns.zipcode', 'Zipcode'), type: 'text', filterable: true },
+    { id: 'account_count', label: tx('clientPnl.columns.accountCount', '账户数'), type: 'number', filterable: true },
+    { id: 'total_balance_usd', label: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'), type: 'number', filterable: true },
+    { id: 'total_floating_pnl_usd', label: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'), type: 'number', filterable: true },
+    { id: 'total_equity_usd', label: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'), type: 'number', filterable: true },
+    { id: 'total_closed_profit_usd', label: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'), type: 'number', filterable: true },
+    { id: 'total_commission_usd', label: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'), type: 'number', filterable: true },
+    { id: 'total_deposit_usd', label: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'), type: 'number', filterable: true },
+    { id: 'total_withdrawal_usd', label: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'), type: 'number', filterable: true },
+    { id: 'net_deposit_usd', label: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'), type: 'number', filterable: true },
+    { id: 'total_volume_lots', label: tx('clientPnl.columns.totalVolumeLots', '总交易手数'), type: 'number', filterable: true },
+    { id: 'auto_swap_free_status', label: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'), type: 'percent', filterable: true },
+    { id: 'is_enabled', label: tx('clientPnl.columns.isEnabled', 'isenable'), type: 'number', filterable: true },
+    { id: 'last_updated', label: tx('pnlMonitor.columns.lastUpdated', '最后更新'), type: 'date', filterable: true },
+  ]), [tx])
 
   // 记录主行，便于在排序时获取父级值
   const parentRowMap = useMemo(() => {
@@ -311,12 +344,58 @@ export default function ClientPnLMonitor() {
     fetchData()
   }, [fetchData])
   
-  // 触发后端增量刷新（client-pnl），完成后刷新当前页并显示 10s Banner
+  // 触发后端增量刷新：先刷新 V2 (MT5/MT4Live2) 并展示 Banner，再刷新 client 并展示 zipcode 详情 Banner
   const handleClientRefresh = useCallback(async () => {
     if (isRefreshing) return
     setIsRefreshing(true)
     setRefreshBanner(null)
     try {
+      // 1) 并发刷新 V2 的两个 server
+      const servers = ["MT5", "MT4Live2"] as const
+      const v2Results = await Promise.allSettled(
+        servers.map(async (srv) => {
+          const res = await fetchWithTimeout('/api/v1/etl/pnl-user-summary/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ server: srv })
+          }, 60000)
+          if (!res.ok) {
+            // try json detail then fallback
+            try {
+              const err = await res.json()
+              const msg = (err && (err.detail || err.message)) ? `HTTP ${res.status}: ${err.detail || err.message}` : `HTTP ${res.status}`
+              throw new Error(msg)
+            } catch {
+              throw new Error(`HTTP ${res.status}`)
+            }
+          }
+          const data = (await res.json()) as EtlRefreshResponse
+          if (data.status === 'error') {
+            throw new Error(data.message || '刷新失败')
+          }
+          const parts: string[] = []
+          if (typeof data.new_trades_count === 'number') parts.push(`成交 ${data.new_trades_count}`)
+          // 与 V2 页面一致：MT4Live2 不展示浮动更新数
+          if (srv !== 'MT4Live2' && typeof data.floating_only_count === 'number') parts.push(`浮盈更新 ${data.floating_only_count}`)
+          if (typeof data.duration_seconds === 'number') parts.push(`用时 ${Number(data.duration_seconds).toFixed(1)}s`)
+          const summary = parts.length > 0 ? parts.join('，') : '刷新完成'
+          return `${srv}: ${summary}`
+        })
+      )
+      const v2MsgParts: string[] = []
+      v2Results.forEach((r, idx) => {
+        const srv = servers[idx]
+        if (r.status === 'fulfilled') {
+          v2MsgParts.push(r.value)
+        } else {
+          v2MsgParts.push(`${srv}: 失败(${(r.reason as Error)?.message || 'Unknown'})`)
+        }
+      })
+      if (v2MsgParts.length > 0) {
+        setV2Banner(`Account Based Server updated：${v2MsgParts.join('，')}`)
+      }
+
+      // 2) 刷新 client 汇总，并展示 zipcode 变化详情
       const res = await fetch('/api/v1/etl/client-pnl/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', accept: 'application/json' },
@@ -341,7 +420,7 @@ export default function ClientPnLMonitor() {
       const updatedCount = (typeof sum.affected_rows === 'number')
         ? Number(sum.affected_rows)
         : (typeof cand.total === 'number' ? Number(cand.total) : 0)
-      parts.push(`更新客户汇总 ${updatedCount}`)
+      parts.push(tx('clientPnl.refreshMessages.updated', `更新客户汇总 ${updatedCount}`).replace('{count}', String(updatedCount)))
 
       // Zipcode 变化数量
       const zipcodeChanges = typeof map.zipcode_changes === 'number' ? Number(map.zipcode_changes) : 0
@@ -362,11 +441,18 @@ export default function ClientPnLMonitor() {
       }
 
       if (zipcodeChanges > 0) {
-        const detailTexts = zipcodeDetails.map(d => `clientid ${d.clientid} (before: ${d.before ?? ''}, after: ${d.after ?? ''})`)
-        const detailsJoined = detailTexts.join('；')
-        parts.push(`Zipcode变更 ${zipcodeChanges}${detailsJoined ? `：${detailsJoined}` : ''}`)
+        const detailTexts = zipcodeDetails.map(d => (tx('clientPnl.refreshMessages.zipcodeChangeDetail', `clientid ${d.clientid} (before: ${d.before ?? ''}, after: ${d.after ?? ''})`)
+          .replace('{clientid}', String(d.clientid))
+          .replace('{before}', String(d.before ?? ''))
+          .replace('{after}', String(d.after ?? ''))))
+        const detailsJoined = detailTexts.join(tx('common.comma', '，'))
+        parts.push(
+          tx('clientPnl.refreshMessages.zipcodeChanges', `Zipcode变更 ${zipcodeChanges}${detailsJoined ? `：${detailsJoined}` : ''}`)
+            .replace('{count}', String(zipcodeChanges))
+            .replace('{details}', detailsJoined)
+        )
       } else {
-        parts.push(`Zipcode变更 0`)
+        parts.push(tx('clientPnl.refreshMessages.zipcodeNoChange', 'Zipcode变更 0'))
       }
 
       const message = parts.join('，')
@@ -374,7 +460,7 @@ export default function ClientPnLMonitor() {
       // 刷新表格数据
       try { await fetchData() } catch {}
     } catch (e: any) {
-      setRefreshBanner(e?.message || '刷新失败')
+      setRefreshBanner(e?.message || (t('pnlMonitor.refreshFailed') || '刷新失败'))
     } finally {
       setIsRefreshing(false)
     }
@@ -386,6 +472,13 @@ export default function ClientPnLMonitor() {
     const timer = setTimeout(() => setRefreshBanner(null), 10000)
     return () => clearTimeout(timer)
   }, [refreshBanner])
+
+  // V2 Banner 10 秒后自动消失
+  useEffect(() => {
+    if (!v2Banner) return
+    const timer = setTimeout(() => setV2Banner(null), 10000)
+    return () => clearTimeout(timer)
+  }, [v2Banner])
   
   // filter: restore from localStorage on mount
   useEffect(() => {
@@ -572,7 +665,7 @@ export default function ClientPnLMonitor() {
   const columnDefs = useMemo<ColDef[]>(() => [
     {
       field: "client_id",
-      headerName: "Client ID / Login",
+      headerName: tx("clientPnl.columns.clientIdLogin", "Client ID / Login"),
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -623,7 +716,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "client_name",
-      headerName: "客户名称 / 组别",
+      headerName: tx("clientPnl.columns.clientNameGroup", "客户名称 / 组别"),
       width: 180,
       minWidth: 150,
       maxWidth: 300,
@@ -653,7 +746,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "primary_server",
-      headerName: "Zipcode / 服务器",
+      headerName: tx("clientPnl.columns.zipcodeServer", "Zipcode / 服务器"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -677,7 +770,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "account_count",
-      headerName: "账户数 / 币种",
+      headerName: tx("clientPnl.columns.accountCountCurrency", "账户数 / 币种"),
       width: 120,
       minWidth: 100,
       maxWidth: 150,
@@ -735,7 +828,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_balance_usd",
-      headerName: "余额 (USD)",
+      headerName: tx("clientPnl.columns.balanceUsd", "余额 (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -771,7 +864,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_floating_pnl_usd",
-      headerName: "浮动盈亏 (USD)",
+      headerName: tx("clientPnl.columns.floatingUsd", "浮动盈亏 (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -794,7 +887,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_equity_usd",
-      headerName: "净值 (USD)",
+      headerName: tx("clientPnl.columns.equityUsd", "净值 (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -817,7 +910,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_closed_profit_usd",
-      headerName: "平仓盈亏 (USD)",
+      headerName: tx("clientPnl.columns.closedProfitUsd", "平仓盈亏 (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -842,7 +935,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_commission_usd",
-      headerName: "总佣金 (USD)",
+      headerName: tx("clientPnl.columns.totalCommissionUsd", "总佣金 (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -859,7 +952,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_deposit_usd",
-      headerName: "总入金 (USD)",
+      headerName: tx("clientPnl.columns.totalDepositUsd", "总入金 (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -878,7 +971,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_withdrawal_usd",
-      headerName: "总出金 (USD)",
+      headerName: tx("clientPnl.columns.totalWithdrawalUsd", "总出金 (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -897,7 +990,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "net_deposit_usd",
-      headerName: "净入金 (USD)",
+      headerName: tx("clientPnl.columns.netDepositUsd", "净入金 (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -920,7 +1013,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_volume_lots",
-      headerName: "交易手数",
+      headerName: tx("clientPnl.columns.totalVolumeLots", "交易手数"),
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -941,7 +1034,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "auto_swap_free_status",
-      headerName: "auto_swap_free_status",
+      headerName: tx("clientPnl.columns.autoSwapFreeStatus", "auto_swap_free_status"),
       width: 180,
       minWidth: 140,
       maxWidth: 240,
@@ -970,7 +1063,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "is_enabled",
-      headerName: "isenable",
+      headerName: tx("clientPnl.columns.isEnabled", "isenable"),
       width: 120,
       minWidth: 100,
       maxWidth: 180,
@@ -984,13 +1077,13 @@ export default function ClientPnLMonitor() {
         }
         const v = params.value ?? params.data?.is_enabled
         const isOn = (typeof v === 'number') ? v === 1 : !!v
-        return <span className={isOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>{isOn ? 'enable' : 'disable'}</span>
+        return <span className={isOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>{isOn ? tx('clientPnl.enabled', 'enable') : tx('clientPnl.disabled', 'disable')}</span>
       },
       hide: !columnVisibility.is_enabled,
     },
     {
       field: "last_updated",
-      headerName: "最后更新",
+      headerName: t("pnlMonitor.columns.lastUpdated") || "最后更新",
       width: 180,
       minWidth: 160,
       maxWidth: 220,
@@ -1098,20 +1191,20 @@ export default function ClientPnLMonitor() {
             <div className="flex items-center justify-between gap-3">
               {/* 左侧状态信息 */}
               <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
-                <span>共 {totalCount.toLocaleString()} 条记录</span>
-                <span>当前页 {pageIndex + 1}/{totalPages}</span>
+                <span>{t("pnlMonitor.totalRecords", { count: totalCount })}</span>
+                <span>{t("pnlMonitor.currentPage", { current: pageIndex + 1, total: totalPages })}</span>
                 {sortModel.length > 0 && (
                   <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/20 rounded text-purple-700 dark:text-purple-300">
-                    排序: {sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ')}
+                    {t("pnlMonitor.sortBy", { sort: sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ') })}
                   </span>
                 )}
                 {lastUpdated && (
                   <span className="px-2 py-1 bg-slate-100 dark:bg-slate-800/40 rounded">
-                    数据更新时间（UTC+8）：{new Intl.DateTimeFormat('zh-CN', {
+                    {t("pnlMonitor.dataUpdateTime", { time: new Intl.DateTimeFormat('zh-CN', {
                       timeZone: 'Asia/Shanghai',
                       year: 'numeric', month: '2-digit', day: '2-digit',
                       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-                    }).format(lastUpdated)}
+                    }).format(lastUpdated) })}
                   </span>
                 )}
               </div>
@@ -1122,7 +1215,7 @@ export default function ClientPnLMonitor() {
                 <div className="flex items-center gap-1">
                   <Input
                     type="text"
-                    placeholder="搜索 ClientID / AccountID"
+                    placeholder={tx('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID')}
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
                     onKeyDown={handleSearchKeyDown}
@@ -1148,7 +1241,7 @@ export default function ClientPnLMonitor() {
                 </div>
                 {/* 增量刷新 */}
                 <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={isRefreshing}>
-                  {isRefreshing ? '刷新中…' : '刷新'}
+                  {isRefreshing ? (t('pnlMonitor.refreshing') || '刷新中…') : (t('pnlMonitor.refresh') || '刷新')}
                 </Button>
                 {/* 筛选按钮：放在列显示切换左边 */}
                 <Button 
@@ -1156,7 +1249,7 @@ export default function ClientPnLMonitor() {
                   className="h-9 gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
                 >
                   <Filter className="h-4 w-4" />
-                  筛选
+                  {t('pnlMonitor.filter')}
                   {appliedFilters && appliedFilters.rules.length > 0 && (
                     <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
                       {appliedFilters.rules.length}
@@ -1168,30 +1261,30 @@ export default function ClientPnLMonitor() {
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className="h-9 gap-2 whitespace-nowrap">
                       <Settings2 className="h-4 w-4" />
-                      列显示切换
+                      {t('pnlMonitor.columnToggle')}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel>显示列</DropdownMenuLabel>
+                    <DropdownMenuLabel>{t('pnlMonitor.showColumns')}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
                       const columnLabels: Record<string, string> = {
-                        client_id: "Client ID",
-                        client_name: "客户名称",
-                        primary_server: "Zipcode/服务器",
-                        account_count: "账户数",
-                        total_balance_usd: "总余额 (USD)",
-                        total_floating_pnl_usd: "总浮动盈亏 (USD)",
-                        total_equity_usd: "总净值 (USD)",
-                        total_closed_profit_usd: "总平仓盈亏 (USD)",
-                        total_commission_usd: "总佣金 (USD)",
-                        total_deposit_usd: "总入金 (USD)",
-                        total_withdrawal_usd: "总出金 (USD)",
-                        net_deposit_usd: "净入金 (USD)",
-                        total_volume_lots: "总交易手数",
-                        auto_swap_free_status: "auto_swap_free_status",
-                        is_enabled: "isenable",
-                        last_updated: "最后更新",
+                        client_id: tx('clientPnl.columns.clientId', 'Client ID'),
+                        client_name: tx('clientPnl.columns.clientName', '客户名称'),
+                        primary_server: tx('clientPnl.columns.zipcodeServer', 'Zipcode/服务器'),
+                        account_count: tx('clientPnl.columns.accountCount', '账户数'),
+                        total_balance_usd: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'),
+                        total_floating_pnl_usd: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'),
+                        total_equity_usd: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'),
+                        total_closed_profit_usd: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'),
+                        total_commission_usd: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'),
+                        total_deposit_usd: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'),
+                        total_withdrawal_usd: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'),
+                        net_deposit_usd: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'),
+                        total_volume_lots: tx('clientPnl.columns.totalVolumeLots', '总交易手数'),
+                        auto_swap_free_status: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'),
+                        is_enabled: tx('clientPnl.columns.isEnabled', 'isenable'),
+                        last_updated: tx('pnlMonitor.columns.lastUpdated', '最后更新'),
                       }
                       return (
                         <DropdownMenuCheckboxItem
@@ -1218,7 +1311,7 @@ export default function ClientPnLMonitor() {
             {/* 已应用筛选条件展示 */}
             {appliedFilters && appliedFilters.rules.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
-                <span className="text-xs text-muted-foreground">逻辑: {appliedFilters.join}</span>
+                <span className="text-xs text-muted-foreground">{t('pnlMonitor.filterConditions', { join: appliedFilters.join })}</span>
                 {appliedFilters.rules.map((rule, index) => {
                   const colMeta = CLIENT_FILTER_COLUMNS.find(c => c.id === rule.field)
                   const opLabel = OPERATOR_LABELS[rule.op]
@@ -1256,7 +1349,7 @@ export default function ClientPnLMonitor() {
                   onClick={handleClearFilters}
                   className="h-7 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
                 >
-                  清空全部
+                  {t('pnlMonitor.clearAll')}
                 </Button>
               </div>
             )}
@@ -1264,7 +1357,17 @@ export default function ClientPnLMonitor() {
         </CardContent>
       </Card>
       
-      {/* 刷新结果 Banner */}
+      {/* V2 刷新结果 Banner */}
+      {v2Banner && (
+        <div className="px-1 sm:px-0">
+          <div className="flex items-center gap-2 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-8.414l-1.293-1.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0l5-5a1 1 0 10-1.414-1.414L9 9.586z" clipRule="evenodd"/></svg>
+            <p className="text-sm text-blue-800 dark:text-blue-200">{v2Banner}</p>
+          </div>
+        </div>
+      )}
+
+      {/* client 刷新结果 Banner */}
       {refreshBanner && (
         <div className="px-1 sm:px-0">
           <div className="flex items-center gap-2 px-4 py-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
@@ -1367,12 +1470,16 @@ export default function ClientPnLMonitor() {
             {/* 左侧：显示信息和每页条数选择 */}
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:space-x-4">
               <div className="text-sm text-muted-foreground">
-                显示第 {pageIndex * pageSize + 1} - {Math.min((pageIndex + 1) * pageSize, totalCount)} 条，共 {totalCount.toLocaleString()} 条记录
+                {t("pnlMonitor.totalRecordsDisplay", { 
+                  start: pageIndex * pageSize + 1,
+                  end: Math.min((pageIndex + 1) * pageSize, totalCount),
+                  total: totalCount
+                })}
               </div>
               
               {/* 每页条数选择 */}
               <div className="flex items-center space-x-2">
-                <span className="text-sm text-muted-foreground">每页</span>
+                <span className="text-sm text-muted-foreground">{t('pnlMonitor.perPage')}</span>
                 <Select
                   value={pageSize.toString()}
                   onValueChange={(value: string) => {
@@ -1392,7 +1499,7 @@ export default function ClientPnLMonitor() {
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="text-sm text-muted-foreground">条</span>
+                <span className="text-sm text-muted-foreground">{t('pnlMonitor.records')}</span>
               </div>
             </div>
 
@@ -1404,7 +1511,7 @@ export default function ClientPnLMonitor() {
                 onClick={() => setPageIndex(0)}
                 disabled={pageIndex === 0}
               >
-                首页
+                {t('pnlMonitor.firstPage')}
               </Button>
               <Button
                 variant="outline"
@@ -1412,13 +1519,13 @@ export default function ClientPnLMonitor() {
                 onClick={() => setPageIndex(Math.max(0, pageIndex - 1))}
                 disabled={pageIndex === 0}
               >
-                上一页
+                {t('pnlMonitor.prevPage')}
               </Button>
               
               {/* 页码显示 */}
               <div className="flex items-center space-x-1">
                 <span className="text-sm text-muted-foreground">
-                  第 {pageIndex + 1} / {totalPages} 页
+                  {t('pnlMonitor.pageInfo', { current: pageIndex + 1, total: totalPages })}
                 </span>
               </div>
               
@@ -1428,7 +1535,7 @@ export default function ClientPnLMonitor() {
                 onClick={() => setPageIndex(Math.min(totalPages - 1, pageIndex + 1))}
                 disabled={pageIndex >= totalPages - 1}
               >
-                下一页
+                {t('pnlMonitor.nextPage')}
               </Button>
               <Button
                 variant="outline"
@@ -1436,7 +1543,7 @@ export default function ClientPnLMonitor() {
                 onClick={() => setPageIndex(totalPages - 1)}
                 disabled={pageIndex >= totalPages - 1}
               >
-                末页
+                {t('pnlMonitor.lastPage')}
               </Button>
             </div>
           </div>

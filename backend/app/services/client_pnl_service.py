@@ -714,6 +714,25 @@ def run_client_pnl_incremental_refresh() -> dict:
             )
             zipcode_changes = int(cur.fetchone()[0])
         loaded_mapping = len(mapping_rows)
+
+        # 额外收集 zipcode 变化详情（最多 100 条，避免响应过大）
+        zipcode_details: List[Dict[str, Any]] = []
+        with pg.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT c.client_id AS clientid,
+                       s.zipcode    AS before,
+                       m.zipcode    AS after
+                FROM temp_candidates c
+                LEFT JOIN temp_fx_user_map m ON m.client_id = c.client_id
+                LEFT JOIN public.pnl_client_summary s ON s.client_id = c.client_id
+                WHERE m.zipcode IS NOT NULL AND (m.zipcode IS DISTINCT FROM s.zipcode)
+                ORDER BY c.client_id
+                LIMIT 100
+                """
+            )
+            rows = cur.fetchall()
+            zipcode_details = [dict(r) for r in rows]
         map_t1 = time.perf_counter()
 
         # 6) 汇总 UPSERT（仅候选集）
@@ -806,7 +825,7 @@ def run_client_pnl_incremental_refresh() -> dict:
             {"name": "candidates", "duration_seconds": cand_t1 - cand_t0, "total": cand_total, "missing": missing_cnt, "lag": lag_cnt},
             {"name": "accounts_upsert", "duration_seconds": acc_t1 - acc_t0, "affected_rows": accounts_affected},
             {"name": "delete_orphans", "duration_seconds": del_t1 - del_t0, "affected_rows": orphan_deleted},
-            {"name": "mapping", "duration_seconds": map_t1 - map_t0, "loaded_mapping": loaded_mapping, "zipcode_changes": zipcode_changes},
+            {"name": "mapping", "duration_seconds": map_t1 - map_t0, "loaded_mapping": loaded_mapping, "zipcode_changes": zipcode_changes, "zipcode_details": zipcode_details},
             {"name": "summary_upsert", "duration_seconds": sum_t1 - sum_t0, "affected_rows": summary_affected},
             {"name": "stats", "duration_seconds": stats_t1 - stats_t0},
         ]
