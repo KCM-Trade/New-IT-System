@@ -1188,7 +1188,108 @@ export default function ClientPnLMonitor() {
         <CardContent className="py-3">
           <div className="flex flex-col gap-3">
             {/* 第一行：状态信息与按钮 */}
-            <div className="flex items-center justify-between gap-3">
+            {/* 移动端：第一行仅显示搜索（含清除/触发），保持一行 */}
+            <div className="sm:hidden flex items-center gap-2">
+              <div className="flex items-center gap-1 w-full">
+                <Input
+                  type="text"
+                  placeholder={tx('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID')}
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  className="h-9 w-full"
+                />
+                {searchValue && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearSearch}
+                    className="h-9 px-2"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+                <Button
+                  onClick={handleSearch}
+                  className="h-9 px-3"
+                  disabled={loading}
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            {/* 移动端：刷新单独一行，按钮占满整行 */}
+            <div className="sm:hidden">
+              <Button onClick={handleClientRefresh} className="h-9 w-full" disabled={isRefreshing}>
+                {isRefreshing ? (t('pnlMonitor.refreshing') || '刷新中…') : (t('pnlMonitor.refresh') || '刷新')}
+              </Button>
+            </div>
+
+            {/* 移动端：第二行两个操作按钮等宽一排（筛选/列切换） */}
+            <div className="grid grid-cols-2 gap-2 sm:hidden">
+              <Button 
+                onClick={() => setFilterBuilderOpen(true)} 
+                className="h-9 w-full gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+              >
+                <Filter className="h-4 w-4" />
+                {t('pnlMonitor.filter')}
+                {appliedFilters && appliedFilters.rules.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                    {appliedFilters.rules.length}
+                  </Badge>
+                )}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="h-9 w-full gap-2 whitespace-nowrap">
+                    <Settings2 className="h-4 w-4" />
+                    {t('pnlMonitor.columnToggle')}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>{t('pnlMonitor.showColumns')}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
+                    const columnLabels: Record<string, string> = {
+                      client_id: tx('clientPnl.columns.clientId', 'Client ID'),
+                      client_name: tx('clientPnl.columns.clientName', '客户名称'),
+                      primary_server: tx('clientPnl.columns.zipcodeServer', 'Zipcode/服务器'),
+                      account_count: tx('clientPnl.columns.accountCount', '账户数'),
+                      total_balance_usd: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'),
+                      total_floating_pnl_usd: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'),
+                      total_equity_usd: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'),
+                      total_closed_profit_usd: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'),
+                      total_commission_usd: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'),
+                      total_deposit_usd: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'),
+                      total_withdrawal_usd: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'),
+                      net_deposit_usd: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'),
+                      total_volume_lots: tx('clientPnl.columns.totalVolumeLots', '总交易手数'),
+                      auto_swap_free_status: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'),
+                      is_enabled: tx('clientPnl.columns.isEnabled', 'isenable'),
+                      last_updated: tx('pnlMonitor.columns.lastUpdated', '最后更新'),
+                    }
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={columnId}
+                        checked={isVisible}
+                        onSelect={(e) => { e.preventDefault() }}
+                        onCheckedChange={(value: boolean) => {
+                          try { gridApi?.setColumnsVisible([columnId], !!value) } catch {}
+                          setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
+                          saveGridState()
+                        }}
+                      >
+                        {columnLabels[columnId] || columnId}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            {/* 桌面端：原有一行布局（信息左、搜索/刷新/筛选/列切换右） */}
+            <div className="hidden sm:flex items-center justify-between gap-3">
               {/* 左侧状态信息 */}
               <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
                 <span>{t("pnlMonitor.totalRecords", { count: totalCount })}</span>
@@ -1306,6 +1407,26 @@ export default function ClientPnLMonitor() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+            </div>
+
+            {/* 移动端：信息分行展示（记录/页码/排序/更新时间） */}
+            <div className="sm:hidden text-xs text-muted-foreground space-y-1">
+              <div>{t('pnlMonitor.totalRecords', { count: totalCount })}</div>
+              <div>{t('pnlMonitor.currentPage', { current: pageIndex + 1, total: totalPages })}</div>
+              {sortModel.length > 0 && (
+                <div>
+                  {t('pnlMonitor.sortBy', { sort: sortModel.map(s => `${s.colId} ${s.sort === 'desc' ? '↓' : '↑'}`).join(', ') })}
+                </div>
+              )}
+              {lastUpdated && (
+                <div>
+                  {t('pnlMonitor.dataUpdateTime', { time: new Intl.DateTimeFormat('zh-CN', {
+                    timeZone: 'Asia/Shanghai',
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                  }).format(lastUpdated) })}
+                </div>
+              )}
             </div>
             
             {/* 已应用筛选条件展示 */}

@@ -1497,7 +1497,98 @@ export default function CustomerPnLMonitorV2() {
         <CardContent className="py-3">
           <div className="flex flex-col gap-3">
             {/* 第一行：状态信息与按钮 */}
-            <div className="flex items-center justify-between gap-3">
+            {/* Mobile-first actions: place Filter and Column Toggle at top in one row (equal width) */}
+            {/* fresh grad note: sm:hidden means only show this on small screens; on desktop we keep original row */}
+            <div className="grid grid-cols-2 gap-2 sm:hidden">
+              <Button 
+                onClick={() => setFilterBuilderOpen(true)} 
+                className="h-9 w-full gap-2 whitespace-nowrap bg-black hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+              >
+                <Filter className="h-4 w-4" />
+                {t("pnlMonitor.filter")}
+                {appliedFilters && appliedFilters.rules.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                    {appliedFilters.rules.length}
+                  </Badge>
+                )}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="h-9 w-full gap-2 whitespace-nowrap">
+                    <Settings2 className="h-4 w-4" />
+                    {t("pnlMonitor.columnToggle")}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>{t("pnlMonitor.showColumns")}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
+                    if (columnId.startsWith('closed_') && columnId !== 'closed_total_profit') {
+                      return null
+                    }
+                    const columnLabels: Record<string, string> = {
+                      login: t("pnlMonitor.columns.login"),
+                      user_name: t("pnlMonitor.columns.userName"),
+                      user_group: t("pnlMonitor.columns.userGroup"),
+                      symbol: t("pnlMonitor.columns.symbol"),
+                      country: t("pnlMonitor.columns.country"),
+                      zipcode: t("pnlMonitor.columns.zipcode"),
+                      currency: "Currency",
+                      user_id: t("pnlMonitor.columns.userId"),
+                      user_balance: t("pnlMonitor.columns.balance"),
+                      positions_floating_pnl: t("pnlMonitor.columns.floatingPnL"),
+                      equity: t("pnlMonitor.columns.equity"),
+                      total_commission: t("pnlMonitor.columns.totalCommission"),
+                      deposit_count: t("pnlMonitor.columns.depositCount"),
+                      deposit_amount: t("pnlMonitor.columns.depositAmount"),
+                      withdrawal_count: t("pnlMonitor.columns.withdrawalCount"),
+                      withdrawal_amount: t("pnlMonitor.columns.withdrawalAmount"),
+                      net_deposit: t("pnlMonitor.columns.netDeposit"),
+                      closed_total_profit: t("pnlMonitor.columns.closedTotalProfit"),
+                      overnight_volume_ratio: t("pnlMonitor.columns.overnightVolumeRatio"),
+                      overnight_volume_all: t("pnlMonitor.columns.overnightVolumeAll"),
+                      total_volume_all: t("pnlMonitor.columns.totalVolumeAll"),
+                      overnight_order_all: t("pnlMonitor.columns.overnightOrderAll"),
+                      total_order_all: t("pnlMonitor.columns.totalOrderAll"),
+                      last_updated: t("pnlMonitor.columns.lastUpdated"),
+                    }
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={columnId}
+                        checked={isVisible}
+                        onSelect={(e) => { e.preventDefault() }}
+                        onCheckedChange={(value: boolean) => {
+                          try { gridApi?.setColumnsVisible([columnId], !!value) } catch {}
+                          setColumnVisibility(prev => ({ ...prev, [columnId]: !!value }))
+                          saveGridState()
+                        }}
+                      >
+                        {columnLabels[columnId] || columnId}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            {/* Mobile status lines: display each info in its own line under actions */}
+            <div className="sm:hidden text-xs text-muted-foreground space-y-1">
+              <div>{t("pnlMonitor.totalRecords", { count: totalCount })}</div>
+              <div>{t("pnlMonitor.currentPage", { current: pageIndex + 1, total: totalPages })}</div>
+              {lastUpdated && (
+                <div>
+                  {t("pnlMonitor.dataUpdateTime", { time: new Intl.DateTimeFormat('zh-CN', {
+                    timeZone: 'Asia/Shanghai',
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                  }).format(lastUpdated) })}
+                </div>
+              )}
+              {refreshInfo && (
+                <div className="text-green-700 dark:text-green-300">{refreshInfo}</div>
+              )}
+            </div>
+            <div className="hidden sm:flex items-center justify-between gap-3">
               {/* 左侧状态信息 */}
               <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-muted-foreground">
                 <span>{t("pnlMonitor.totalRecords", { count: totalCount })}</span>
