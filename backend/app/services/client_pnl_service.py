@@ -68,20 +68,23 @@ def get_client_pnl_summary_paginated(
     where_conditions: List[str] = []
     params: List[object] = []
     
-    # 搜索：支持 client_id 或 account_id（在 account_list 中）
+    # 搜索：仅支持 client_id 或 account_id（login）的精确匹配
     if search is not None:
         s = str(search).strip()
         if s:
             try:
                 search_int = int(s)
-                # 尝试匹配 client_id 或 account_list 中的 login
-                where_conditions.append("(client_id = %s OR %s = ANY(account_list))")
+                # 精确匹配 client_id 或 account_id（在 pnl_client_accounts 表中查找）
+                # 使用 EXISTS 子查询检查 account_id 是否存在
+                where_conditions.append(
+                    "(client_id = %s OR EXISTS (SELECT 1 FROM public.pnl_client_accounts WHERE client_id = public.pnl_client_summary.client_id AND login = %s))"
+                )
                 params.append(search_int)
                 params.append(search_int)
             except ValueError:
-                # 非数字，模糊匹配客户名称
-                where_conditions.append("client_name ILIKE %s")
-                params.append(f"%{s}%")
+                # 非数字输入，忽略搜索（不添加任何条件）
+                # 这样可以避免无效的文本搜索导致性能问题
+                pass
     # filters_json 解析结果（filters）转 WHERE
     if filters and isinstance(filters.get("rules"), list) and filters.get("rules"):
         joiner = " OR " if str(filters.get("join")).upper() == "OR" else " AND "

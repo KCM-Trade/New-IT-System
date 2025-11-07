@@ -33,8 +33,8 @@ def get_client_pnl_summary(
     """分页查询 ClientID 盈亏汇总表
     
     搜索功能：
-    - 输入数字：精确匹配 client_id 或 account_id（在 account_list 中）
-    - 输入文本：模糊匹配客户名称
+    - 输入数字：精确匹配 client_id 或 account_id（login）
+    - 输入非数字：忽略搜索（不添加任何条件）
     """
     try:
         rows, total, total_pages, last_updated = client_pnl_service.get_client_pnl_summary_paginated(

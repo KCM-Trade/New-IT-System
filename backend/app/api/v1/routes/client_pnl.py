@@ -25,7 +25,7 @@ def get_client_summary_paginated(
     page_size: int = Query(50, ge=1, le=1000, description="每页记录数"),
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: str = Query("asc", description="排序方向: asc/desc"),
-    search: Optional[str] = Query(None, description="统一搜索：支持 client_id 或 account_id(精确)，客户名(模糊)"),
+    search: Optional[str] = Query(None, description="统一搜索：仅支持 client_id 或 account_id(login) 的精确匹配"),
     filters_json: Optional[str] = Query(None, description="筛选条件 JSON，格式：{join:'AND'|'OR', rules:[{field,op,value,value2?}]}"),
 ) -> PaginatedClientPnLSummaryResponse:
     try:
