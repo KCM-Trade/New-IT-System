@@ -548,6 +548,32 @@ def main() -> None:
         stats_t0 = time.perf_counter()
         candidates, accounts, max_lu = collect_run_stats(pg)
         stats_t1 = time.perf_counter()
+        # 7.1) 更新 pnl_client 的 ETL watermark（UTC+0）
+        with pg.cursor() as cur:
+            # 确保公共 watermarks 表存在（与服务端保持一致）
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS public.etl_watermarks (
+                  dataset       text        NOT NULL,
+                  partition_key text        NOT NULL DEFAULT 'ALL',
+                  last_deal_id  bigint,
+                  last_time     timestamptz,
+                  last_login    bigint,
+                  last_updated  timestamptz NOT NULL DEFAULT now(),
+                  CONSTRAINT pk_etl_watermarks PRIMARY KEY (dataset, partition_key)
+                );
+                """
+            )
+            # 使用 UPSERT 保证幂等：多次执行对同一主键只会更新 last_time/last_updated
+            cur.execute(
+                """
+                INSERT INTO public.etl_watermarks (dataset, partition_key, last_time, last_updated)
+                VALUES (%s, %s, now(), now())
+                ON CONFLICT (dataset, partition_key)
+                DO UPDATE SET last_time = now(), last_updated = now()
+                """,
+                ("pnl_client", "ALL"),
+            )
         pg.commit()
 
         elapsed = time.perf_counter() - start
