@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -20,6 +20,7 @@ import {
 } from "@/types/filter"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+import { useI18n } from "@/components/i18n-provider"
 
 // fresh grad note: This component uses Dialog for desktop, Drawer for mobile
 // Responsive breakpoint: 640px (sm)
@@ -36,6 +37,23 @@ interface FilterBuilderProps {
 export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, columns }: FilterBuilderProps) {
   // Detect mobile viewport
   const [isMobile, setIsMobile] = useState(false)
+  // i18n helpers
+  const { t } = useI18n()
+  const isZh = useMemo(() => {
+    try {
+      const sep = (t as any)('common.comma')
+      return typeof sep === 'string' && sep !== ', '
+    } catch {
+      return true
+    }
+  }, [t])
+  const tz = useCallback((key: string, zhFallback: string, enFallback: string) => {
+    try {
+      const v = (t as any)(key)
+      if (typeof v === 'string' && v && v !== key) return v
+    } catch {}
+    return isZh ? zhFallback : enFallback
+  }, [t, isZh])
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 640)
@@ -156,7 +174,7 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, col
     <div className="space-y-4">
       {/* AND/OR Join Toggle */}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">逻辑关系:</span>
+        <span className="text-sm text-muted-foreground">{tz('filter.logic', '逻辑关系', 'Logic')}</span>
         <div className="flex gap-1">
           <Button
             variant={join === 'AND' ? 'default' : 'outline'}
@@ -205,7 +223,7 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, col
         className="w-full h-9"
       >
         <Plus className="h-4 w-4 mr-2" />
-        新增条件
+        {tz('filter.addRule', '新增条件', 'Add Rule')}
       </Button>
     </div>
   )
@@ -213,13 +231,13 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, col
   const footer = (
     <>
       <Button variant="outline" onClick={handleReset} className="h-9">
-        重置
+        {tz('filter.reset', '重置', 'Reset')}
       </Button>
       <Button variant="outline" onClick={() => onOpenChange(false)} className="h-9">
-        取消
+        {tz('filter.cancel', '取消', 'Cancel')}
       </Button>
       <Button onClick={handleApply} className="h-9">
-        应用
+        {tz('filter.apply', '应用', 'Apply')}
       </Button>
     </>
   )
@@ -230,8 +248,8 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, col
       <Drawer open={open} onOpenChange={onOpenChange}>
         <DrawerContent>
           <DrawerHeader>
-            <DrawerTitle>筛选条件</DrawerTitle>
-            <DrawerDescription>设置筛选规则并应用到数据表格</DrawerDescription>
+            <DrawerTitle>{tz('filter.title', '筛选条件', 'Filter')}</DrawerTitle>
+            <DrawerDescription>{tz('filter.description', '设置筛选规则并应用到数据表格', 'Set filter rules and apply to the table')}</DrawerDescription>
           </DrawerHeader>
           <div className="px-4 pb-4">
             {content}
@@ -249,8 +267,8 @@ export function FilterBuilder({ open, onOpenChange, initialFilters, onApply, col
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[720px] lg:max-w-[860px]">
         <DialogHeader>
-          <DialogTitle>筛选条件</DialogTitle>
-          <DialogDescription>设置筛选规则并应用到数据表格</DialogDescription>
+          <DialogTitle>{tz('filter.title', '筛选条件', 'Filter')}</DialogTitle>
+          <DialogDescription>{tz('filter.description', '设置筛选规则并应用到数据表格', 'Set filter rules and apply to the table')}</DialogDescription>
         </DialogHeader>
         {content}
         <DialogFooter className="gap-2">
@@ -281,6 +299,48 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
   const needsValue = operatorNeedsValue(rule.op)
   const needsTwoValues = operatorNeedsTwoValues(rule.op)
   const isIsEnabled = rule.field === 'is_enabled'
+  // i18n helpers inside row
+  const { t } = useI18n()
+  const isZh = useMemo(() => {
+    try {
+      const sep = (t as any)('common.comma')
+      return typeof sep === 'string' && sep !== ', '
+    } catch {
+      return true
+    }
+  }, [t])
+  const tz = useCallback((key: string, zhFallback: string, enFallback: string) => {
+    try {
+      const v = (t as any)(key)
+      if (typeof v === 'string' && v && v !== key) return v
+    } catch {}
+    return isZh ? zhFallback : enFallback
+  }, [t, isZh])
+  const getOperatorLabel = useCallback((op: FilterOperator) => {
+    const map: Record<string, [string, string]> = {
+      contains: ['包含', 'contains'],
+      not_contains: ['不包含', 'not contains'],
+      equals: ['等于', 'equals'],
+      not_equals: ['不等于', 'not equals'],
+      starts_with: ['开头是', 'starts with'],
+      ends_with: ['结尾是', 'ends with'],
+      blank: ['为空', 'is empty'],
+      not_blank: ['不为空', 'is not empty'],
+      '=': ['等于', 'equals'],
+      '!=': ['不等于', 'not equals'],
+      '>': ['大于', 'greater than'],
+      '>=': ['大于等于', 'greater or equal'],
+      '<': ['小于', 'less than'],
+      '<=': ['小于等于', 'less or equal'],
+      between: ['区间', 'between'],
+      on: ['等于', 'equals'],
+      before: ['早于', 'before'],
+      after: ['晚于', 'after'],
+    }
+    const pair = map[op as string]
+    if (pair) return tz(`filter.op.${op}`, pair[0], pair[1])
+    return (OPERATOR_LABELS as any)[op] || String(op)
+  }, [tz])
 
   return (
     <div className="flex flex-col sm:flex-row gap-2 p-3 border rounded-lg bg-muted/30">
@@ -305,7 +365,7 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="=">{OPERATOR_LABELS['=']}</SelectItem>
+            <SelectItem value="=">{getOperatorLabel('=' as any)}</SelectItem>
           </SelectContent>
         </Select>
       ) : (
@@ -316,7 +376,7 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
           <SelectContent>
             {operators.map(op => (
               <SelectItem key={op} value={op}>
-                {OPERATOR_LABELS[op]}
+                {getOperatorLabel(op)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -342,9 +402,9 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="1">enable</SelectItem>
-              <SelectItem value="0">disable</SelectItem>
-              <SelectItem value="NULL">其他（空值）</SelectItem>
+              <SelectItem value="1">{tz('filter.enabled', '启用', 'Enabled')}</SelectItem>
+              <SelectItem value="0">{tz('filter.disabled', '禁用', 'Disabled')}</SelectItem>
+              <SelectItem value="NULL">{tz('filter.otherEmpty', '其他（空值）', 'Other (Empty)')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -393,6 +453,23 @@ interface ValueInputProps {
 function ValueInput({ type, value, onChange }: ValueInputProps) {
   // Date picker state
   const [dateOpen, setDateOpen] = useState(false)
+  // i18n helpers
+  const { t } = useI18n()
+  const isZh = useMemo(() => {
+    try {
+      const sep = (t as any)('common.comma')
+      return typeof sep === 'string' && sep !== ', '
+    } catch {
+      return true
+    }
+  }, [t])
+  const tz = useCallback((key: string, zhFallback: string, enFallback: string) => {
+    try {
+      const v = (t as any)(key)
+      if (typeof v === 'string' && v && v !== key) return v
+    } catch {}
+    return isZh ? zhFallback : enFallback
+  }, [t, isZh])
 
   if (type === 'date') {
     return (
@@ -406,7 +483,7 @@ function ValueInput({ type, value, onChange }: ValueInputProps) {
             )}
           >
             <CalendarIcon className="mr-2 h-4 w-4" />
-            {value ? format(new Date(value), "yyyy-MM-dd") : "选择日期"}
+            {value ? format(new Date(value), "yyyy-MM-dd") : tz('filter.chooseDate', '选择日期', 'Choose Date')}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="start">
@@ -447,7 +524,7 @@ function ValueInput({ type, value, onChange }: ValueInputProps) {
       type="text"
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="输入文本"
+      placeholder={tz('filter.enterText', '输入文本', 'Enter text')}
       className="h-9"
     />
   )

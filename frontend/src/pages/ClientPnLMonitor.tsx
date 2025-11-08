@@ -143,6 +143,22 @@ export default function ClientPnLMonitor() {
       return fallback
     }
   }, [t])
+  // language-aware fallback: choose zh/en fallback based on i18n separator
+  const isZh = useMemo(() => {
+    try {
+      const sep = (t as any)('common.comma')
+      return typeof sep === 'string' && sep !== ', '
+    } catch {
+      return false
+    }
+  }, [t])
+  const tz = useCallback((key: string, zhFallback: string, enFallback: string) => {
+    try {
+      const v = (t as any)(key)
+      if (typeof v === 'string' && v && v !== key) return v
+    } catch {}
+    return isZh ? zhFallback : enFallback
+  }, [t, isZh])
   
   // 数据状态
   const [rows, setRows] = useState<ClientPnLSummaryRow[]>([])
@@ -214,23 +230,23 @@ export default function ClientPnLMonitor() {
 
   // ClientPnL 可筛选字段定义（供筛选器使用）
   const CLIENT_FILTER_COLUMNS: ColumnMeta[] = useMemo(() => ([
-    { id: 'client_id', label: tx('clientPnl.columns.clientId', 'Client ID'), type: 'text', filterable: true },
-    { id: 'client_name', label: tx('clientPnl.columns.clientName', '客户名称'), type: 'text', filterable: true },
-    { id: 'zipcode', label: tx('clientPnl.columns.zipcode', 'Zipcode'), type: 'text', filterable: true },
-    { id: 'account_count', label: tx('clientPnl.columns.accountCount', '账户数'), type: 'number', filterable: true },
-    { id: 'total_balance_usd', label: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'), type: 'number', filterable: true },
-    { id: 'total_floating_pnl_usd', label: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'), type: 'number', filterable: true },
-    { id: 'total_equity_usd', label: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'), type: 'number', filterable: true },
-    { id: 'total_closed_profit_usd', label: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'), type: 'number', filterable: true },
-    { id: 'total_commission_usd', label: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'), type: 'number', filterable: true },
-    { id: 'total_deposit_usd', label: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'), type: 'number', filterable: true },
-    { id: 'total_withdrawal_usd', label: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'), type: 'number', filterable: true },
-    { id: 'net_deposit_usd', label: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'), type: 'number', filterable: true },
-    { id: 'total_volume_lots', label: tx('clientPnl.columns.totalVolumeLots', '总交易手数'), type: 'number', filterable: true },
-    { id: 'auto_swap_free_status', label: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'), type: 'percent', filterable: true },
-    { id: 'is_enabled', label: tx('clientPnl.columns.isEnabled', 'isenable'), type: 'number', filterable: true },
-    { id: 'last_updated', label: tx('pnlMonitor.columns.lastUpdated', '最后更新'), type: 'date', filterable: true },
-  ]), [tx])
+    { id: 'client_id', label: tz('clientPnl.columns.clientId', '客户ID', 'Client ID'), type: 'text', filterable: true },
+    { id: 'client_name', label: tz('clientPnl.columns.clientName', '客户名称', 'Client Name'), type: 'text', filterable: true },
+    { id: 'zipcode', label: tz('clientPnl.columns.zipcode', 'Zipcode', 'Zipcode'), type: 'text', filterable: true },
+    { id: 'account_count', label: tz('clientPnl.columns.accountCount', '账户数', 'Accounts'), type: 'number', filterable: true },
+    { id: 'total_balance_usd', label: tz('clientPnl.columns.totalBalanceUsd', '总余额 (USD)', 'Total Balance (USD)'), type: 'number', filterable: true },
+    { id: 'total_floating_pnl_usd', label: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'), type: 'number', filterable: true },
+    { id: 'total_equity_usd', label: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'), type: 'number', filterable: true },
+    { id: 'total_closed_profit_usd', label: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'), type: 'number', filterable: true },
+    { id: 'total_commission_usd', label: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'), type: 'number', filterable: true },
+    { id: 'total_deposit_usd', label: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'), type: 'number', filterable: true },
+    { id: 'total_withdrawal_usd', label: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'), type: 'number', filterable: true },
+    { id: 'net_deposit_usd', label: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'), type: 'number', filterable: true },
+    { id: 'total_volume_lots', label: tz('clientPnl.columns.totalVolumeLots', '总交易手数', 'Total Volume (lots)'), type: 'number', filterable: true },
+    { id: 'auto_swap_free_status', label: tz('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status', 'Auto Swap Free Status'), type: 'percent', filterable: true },
+    { id: 'is_enabled', label: tz('clientPnl.columns.isEnabled', '是否启用', 'Enabled'), type: 'number', filterable: true },
+    { id: 'last_updated', label: tz('pnlMonitor.columns.lastUpdated', '最后更新', 'Last Updated'), type: 'date', filterable: true },
+  ]), [tz])
 
   // 记录主行，便于在排序时获取父级值
   const parentRowMap = useMemo(() => {
@@ -253,6 +269,36 @@ export default function ClientPnLMonitor() {
     }
     return params.value
   }, [parentRowMap])
+
+  // operator label resolver: language-aware, fallback to OPERATOR_LABELS or op code
+  const getOperatorLabel = useCallback((op: string) => {
+    const mapping: Record<string, [string, string]> = {
+      eq: ['等于', 'equals'],
+      ne: ['不等于', 'not equals'],
+      gt: ['大于', 'greater than'],
+      gte: ['大于等于', 'greater or equal'],
+      lt: ['小于', 'less than'],
+      lte: ['小于等于', 'less or equal'],
+      contains: ['包含', 'contains'],
+      not_contains: ['不包含', 'not contains'],
+      starts_with: ['开头为', 'starts with'],
+      ends_with: ['结尾为', 'ends with'],
+      between: ['介于', 'between'],
+      in: ['属于', 'in'],
+      not_in: ['不属于', 'not in'],
+      is_empty: ['为空', 'is empty'],
+      is_not_empty: ['不为空', 'is not empty'],
+      before: ['早于', 'before'],
+      after: ['晚于', 'after'],
+    }
+    const pair = mapping[op]
+    if (pair) {
+      return tz(`filter.op.${op}`, pair[0], pair[1])
+    }
+    const alt = (OPERATOR_LABELS as any)?.[op]
+    if (typeof alt === 'string' && alt) return alt
+    return op
+  }, [tz])
 
   const postSortRows = useCallback((params: PostSortRowsParams<ClientPnLSummaryRow>) => {
     const mainOrder: IRowNode<ClientPnLSummaryRow>[] = []
@@ -665,7 +711,7 @@ export default function ClientPnLMonitor() {
   const columnDefs = useMemo<ColDef[]>(() => [
     {
       field: "client_id",
-      headerName: tx("clientPnl.columns.clientIdLogin", "Client ID / Login"),
+      headerName: tz("clientPnl.columns.clientIdLogin", "Client ID / Login", "Client ID / Login"),
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -716,7 +762,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "client_name",
-      headerName: tx("clientPnl.columns.clientNameGroup", "客户名称 / 组别"),
+      headerName: tz("clientPnl.columns.clientNameGroup", "客户名称 / 组别", "Client Name / Group"),
       width: 180,
       minWidth: 150,
       maxWidth: 300,
@@ -746,7 +792,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "primary_server",
-      headerName: tx("clientPnl.columns.zipcodeServer", "Zipcode / 服务器"),
+      headerName: tz("clientPnl.columns.zipcodeServer", "Zipcode / 服务器", "Zipcode / Server"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -770,7 +816,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "account_count",
-      headerName: tx("clientPnl.columns.accountCountCurrency", "账户数 / 币种"),
+      headerName: tz("clientPnl.columns.accountCountCurrency", "账户数 / 币种", "Accounts / Currency"),
       width: 120,
       minWidth: 100,
       maxWidth: 150,
@@ -828,7 +874,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_balance_usd",
-      headerName: tx("clientPnl.columns.balanceUsd", "余额 (USD)"),
+      headerName: tz("clientPnl.columns.balanceUsd", "余额 (USD)", "Balance (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -864,7 +910,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_floating_pnl_usd",
-      headerName: tx("clientPnl.columns.floatingUsd", "浮动盈亏 (USD)"),
+      headerName: tz("clientPnl.columns.floatingUsd", "浮动盈亏 (USD)", "Floating PnL (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -887,7 +933,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_equity_usd",
-      headerName: tx("clientPnl.columns.equityUsd", "净值 (USD)"),
+      headerName: tz("clientPnl.columns.equityUsd", "净值 (USD)", "Equity (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -910,7 +956,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_closed_profit_usd",
-      headerName: tx("clientPnl.columns.closedProfitUsd", "平仓盈亏 (USD)"),
+      headerName: tz("clientPnl.columns.closedProfitUsd", "平仓盈亏 (USD)", "Closed Profit (USD)"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -935,7 +981,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_commission_usd",
-      headerName: tx("clientPnl.columns.totalCommissionUsd", "总佣金 (USD)"),
+      headerName: tz("clientPnl.columns.totalCommissionUsd", "总佣金 (USD)", "Total Commission (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -952,7 +998,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_deposit_usd",
-      headerName: tx("clientPnl.columns.totalDepositUsd", "总入金 (USD)"),
+      headerName: tz("clientPnl.columns.totalDepositUsd", "总入金 (USD)", "Total Deposit (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -971,7 +1017,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_withdrawal_usd",
-      headerName: tx("clientPnl.columns.totalWithdrawalUsd", "总出金 (USD)"),
+      headerName: tz("clientPnl.columns.totalWithdrawalUsd", "总出金 (USD)", "Total Withdrawal (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -990,7 +1036,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "net_deposit_usd",
-      headerName: tx("clientPnl.columns.netDepositUsd", "净入金 (USD)"),
+      headerName: tz("clientPnl.columns.netDepositUsd", "净入金 (USD)", "Net Deposit (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -1013,7 +1059,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "total_volume_lots",
-      headerName: tx("clientPnl.columns.totalVolumeLots", "交易手数"),
+      headerName: tz("clientPnl.columns.totalVolumeLots", "交易手数", "Volume (lots)"),
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -1034,7 +1080,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "auto_swap_free_status",
-      headerName: tx("clientPnl.columns.autoSwapFreeStatus", "auto_swap_free_status"),
+      headerName: tz("clientPnl.columns.autoSwapFreeStatus", "auto_swap_free_status", "Auto Swap Free Status"),
       width: 180,
       minWidth: 140,
       maxWidth: 240,
@@ -1063,7 +1109,7 @@ export default function ClientPnLMonitor() {
     },
     {
       field: "is_enabled",
-      headerName: tx("clientPnl.columns.isEnabled", "isenable"),
+      headerName: tz("clientPnl.columns.isEnabled", "是否启用", "Enabled"),
       width: 120,
       minWidth: 100,
       maxWidth: 180,
@@ -1077,13 +1123,13 @@ export default function ClientPnLMonitor() {
         }
         const v = params.value ?? params.data?.is_enabled
         const isOn = (typeof v === 'number') ? v === 1 : !!v
-        return <span className={isOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>{isOn ? tx('clientPnl.enabled', 'enable') : tx('clientPnl.disabled', 'disable')}</span>
+        return <span className={isOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>{isOn ? tz('clientPnl.enabled', '启用', 'Enabled') : tz('clientPnl.disabled', '禁用', 'Disabled')}</span>
       },
       hide: !columnVisibility.is_enabled,
     },
     {
       field: "last_updated",
-      headerName: t("pnlMonitor.columns.lastUpdated") || "最后更新",
+      headerName: tz("pnlMonitor.columns.lastUpdated", "最后更新", "Last Updated"),
       width: 180,
       minWidth: 160,
       maxWidth: 220,
@@ -1100,7 +1146,7 @@ export default function ClientPnLMonitor() {
       },
       hide: !columnVisibility.last_updated,
     },
-  ], [columnVisibility, expandedClients, toggleExpand, accountLoadingMap, detailSortValueGetter])
+  ], [columnVisibility, expandedClients, toggleExpand, accountLoadingMap, detailSortValueGetter, tx, t])
   
   // AG Grid 事件处理
   const onGridReady = useCallback((params: GridReadyEvent) => {
@@ -1193,7 +1239,7 @@ export default function ClientPnLMonitor() {
               <div className="flex items-center gap-1 w-full">
                 <Input
                   type="text"
-                  placeholder={tx('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID')}
+                  placeholder={tz('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID', 'Search ClientID / AccountID')}
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
@@ -1252,22 +1298,22 @@ export default function ClientPnLMonitor() {
                   <DropdownMenuSeparator />
                   {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
                     const columnLabels: Record<string, string> = {
-                      client_id: tx('clientPnl.columns.clientId', 'Client ID'),
-                      client_name: tx('clientPnl.columns.clientName', '客户名称'),
-                      primary_server: tx('clientPnl.columns.zipcodeServer', 'Zipcode/服务器'),
-                      account_count: tx('clientPnl.columns.accountCount', '账户数'),
-                      total_balance_usd: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'),
-                      total_floating_pnl_usd: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'),
-                      total_equity_usd: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'),
-                      total_closed_profit_usd: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'),
-                      total_commission_usd: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'),
-                      total_deposit_usd: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'),
-                      total_withdrawal_usd: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'),
-                      net_deposit_usd: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'),
-                      total_volume_lots: tx('clientPnl.columns.totalVolumeLots', '总交易手数'),
-                      auto_swap_free_status: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'),
-                      is_enabled: tx('clientPnl.columns.isEnabled', 'isenable'),
-                      last_updated: tx('pnlMonitor.columns.lastUpdated', '最后更新'),
+                      client_id: tz('clientPnl.columns.clientId', '客户ID', 'Client ID'),
+                      client_name: tz('clientPnl.columns.clientName', '客户名称', 'Client Name'),
+                      primary_server: tz('clientPnl.columns.zipcodeServer', 'Zipcode/服务器', 'Zipcode/Server'),
+                      account_count: tz('clientPnl.columns.accountCount', '账户数', 'Accounts'),
+                      total_balance_usd: tz('clientPnl.columns.totalBalanceUsd', '总余额 (USD)', 'Total Balance (USD)'),
+                      total_floating_pnl_usd: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'),
+                      total_equity_usd: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'),
+                      total_closed_profit_usd: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'),
+                      total_commission_usd: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'),
+                      total_deposit_usd: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'),
+                      total_withdrawal_usd: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'),
+                      net_deposit_usd: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'),
+                      total_volume_lots: tz('clientPnl.columns.totalVolumeLots', '总交易手数', 'Total Volume (lots)'),
+                      auto_swap_free_status: tz('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status', 'Auto Swap Free Status'),
+                      is_enabled: tz('clientPnl.columns.isEnabled', '是否启用', 'Enabled'),
+                      last_updated: tz('pnlMonitor.columns.lastUpdated', '最后更新', 'Last Updated'),
                     }
                     return (
                       <DropdownMenuCheckboxItem
@@ -1316,7 +1362,7 @@ export default function ClientPnLMonitor() {
                 <div className="flex items-center gap-1">
                   <Input
                     type="text"
-                    placeholder={tx('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID')}
+                    placeholder={tz('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID', 'Search ClientID / AccountID')}
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
                     onKeyDown={handleSearchKeyDown}
@@ -1369,24 +1415,24 @@ export default function ClientPnLMonitor() {
                     <DropdownMenuLabel>{t('pnlMonitor.showColumns')}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {Object.entries(columnVisibility).map(([columnId, isVisible]) => {
-                      const columnLabels: Record<string, string> = {
-                        client_id: tx('clientPnl.columns.clientId', 'Client ID'),
-                        client_name: tx('clientPnl.columns.clientName', '客户名称'),
-                        primary_server: tx('clientPnl.columns.zipcodeServer', 'Zipcode/服务器'),
-                        account_count: tx('clientPnl.columns.accountCount', '账户数'),
-                        total_balance_usd: tx('clientPnl.columns.totalBalanceUsd', '总余额 (USD)'),
-                        total_floating_pnl_usd: tx('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)'),
-                        total_equity_usd: tx('clientPnl.columns.totalEquityUsd', '总净值 (USD)'),
-                        total_closed_profit_usd: tx('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)'),
-                        total_commission_usd: tx('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)'),
-                        total_deposit_usd: tx('clientPnl.columns.totalDepositUsd', '总入金 (USD)'),
-                        total_withdrawal_usd: tx('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)'),
-                        net_deposit_usd: tx('clientPnl.columns.netDepositUsd', '净入金 (USD)'),
-                        total_volume_lots: tx('clientPnl.columns.totalVolumeLots', '总交易手数'),
-                        auto_swap_free_status: tx('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status'),
-                        is_enabled: tx('clientPnl.columns.isEnabled', 'isenable'),
-                        last_updated: tx('pnlMonitor.columns.lastUpdated', '最后更新'),
-                      }
+                    const columnLabels: Record<string, string> = {
+                      client_id: tz('clientPnl.columns.clientId', '客户ID', 'Client ID'),
+                      client_name: tz('clientPnl.columns.clientName', '客户名称', 'Client Name'),
+                      primary_server: tz('clientPnl.columns.zipcodeServer', 'Zipcode/服务器', 'Zipcode/Server'),
+                      account_count: tz('clientPnl.columns.accountCount', '账户数', 'Accounts'),
+                      total_balance_usd: tz('clientPnl.columns.totalBalanceUsd', '总余额 (USD)', 'Total Balance (USD)'),
+                      total_floating_pnl_usd: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'),
+                      total_equity_usd: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'),
+                      total_closed_profit_usd: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'),
+                      total_commission_usd: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'),
+                      total_deposit_usd: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'),
+                      total_withdrawal_usd: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'),
+                      net_deposit_usd: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'),
+                      total_volume_lots: tz('clientPnl.columns.totalVolumeLots', '总交易手数', 'Total Volume (lots)'),
+                      auto_swap_free_status: tz('clientPnl.columns.autoSwapFreeStatus', 'auto_swap_free_status', 'Auto Swap Free Status'),
+                      is_enabled: tz('clientPnl.columns.isEnabled', '是否启用', 'Enabled'),
+                      last_updated: tz('pnlMonitor.columns.lastUpdated', '最后更新', 'Last Updated'),
+                    }
                       return (
                         <DropdownMenuCheckboxItem
                           key={columnId}
@@ -1435,7 +1481,7 @@ export default function ClientPnLMonitor() {
                 <span className="text-xs text-muted-foreground">{t('pnlMonitor.filterConditions', { join: appliedFilters.join })}</span>
                 {appliedFilters.rules.map((rule, index) => {
                   const colMeta = CLIENT_FILTER_COLUMNS.find(c => c.id === rule.field)
-                  const opLabel = OPERATOR_LABELS[rule.op]
+                  const opLabel = getOperatorLabel(rule.op)
                   let valueDisplay = ''
                   if (operatorNeedsValue(rule.op)) {
                     if (operatorNeedsTwoValues(rule.op)) {
@@ -1568,7 +1614,9 @@ export default function ClientPnLMonitor() {
               }
               
               // 主行：基于 primary 的弱对比底色（两档深浅区分）
-              if (params.node.rowIndex && params.node.rowIndex % 2 === 0) {
+              // fresh grad note: ensure index 0 is treated as even; guard for non-number
+              const idx = typeof params.node.rowIndex === 'number' ? params.node.rowIndex : -1
+              if (idx % 2 === 0) {
                 return { backgroundColor: 'hsl(var(--primary) / 0.03)', paddingLeft: 0, borderLeft: 'none' }
               }
               return { backgroundColor: 'hsl(var(--primary) / 0.06)', paddingLeft: 0, borderLeft: 'none' }

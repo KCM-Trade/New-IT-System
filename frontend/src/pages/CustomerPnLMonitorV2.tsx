@@ -138,6 +138,16 @@ export default function CustomerPnLMonitorV2() {
   const { t } = useI18n()
   // server filter
   const [server, setServer] = useState<string>("MT5")
+  // fresh grad note: compute dark mode with guard instead of using window directly in render
+  const isDarkMode = useMemo(() => {
+    if (theme === 'dark') return true
+    if (theme === 'light') return false
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    } catch {
+      return false
+    }
+  }, [theme])
   
   // 用户组别筛选
   const [userGroups, setUserGroups] = useState<string[]>(["__ALL__"])
@@ -358,7 +368,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "zipcode",
-      headerName: "ZipCode",
+      headerName: t("pnlMonitor.columns.zipcode"),
       width: 80,
       minWidth: 80,
       maxWidth: 200,
@@ -384,7 +394,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "user_id",
-      headerName: "ClientID",
+      headerName: t("pnlMonitor.columns.userId"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -416,7 +426,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "symbol",
-      headerName: "Symbol",
+      headerName: t("pnlMonitor.columns.symbol"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -431,7 +441,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "user_balance",
-      headerName: "balance",
+      headerName: t("pnlMonitor.columns.balance"),
       width: 140,
       minWidth: 100,
       maxWidth: 200,
@@ -471,7 +481,7 @@ export default function CustomerPnLMonitorV2() {
     },
     {
       field: "equity",
-      headerName: "equity",
+      headerName: t("pnlMonitor.columns.equity"),
       width: 150,
       minWidth: 120,
       maxWidth: 200,
@@ -938,6 +948,36 @@ export default function CustomerPnLMonitorV2() {
     },
   ], [productConfig, columnVisibility, server, t])
 
+  // fresh grad note: centralize column labels for column toggle menus to avoid duplication
+  const columnLabelsMap = useMemo(() => {
+    return {
+      login: t("pnlMonitor.columns.login"),
+      user_name: t("pnlMonitor.columns.userName"),
+      user_group: t("pnlMonitor.columns.userGroup"),
+      symbol: t("pnlMonitor.columns.symbol"),
+      country: t("pnlMonitor.columns.country"),
+      zipcode: t("pnlMonitor.columns.zipcode"),
+      currency: "Currency",
+      user_id: t("pnlMonitor.columns.userId"),
+      user_balance: t("pnlMonitor.columns.balance"),
+      positions_floating_pnl: t("pnlMonitor.columns.floatingPnL"),
+      equity: t("pnlMonitor.columns.equity"),
+      total_commission: t("pnlMonitor.columns.totalCommission"),
+      deposit_count: t("pnlMonitor.columns.depositCount"),
+      deposit_amount: t("pnlMonitor.columns.depositAmount"),
+      withdrawal_count: t("pnlMonitor.columns.withdrawalCount"),
+      withdrawal_amount: t("pnlMonitor.columns.withdrawalAmount"),
+      net_deposit: t("pnlMonitor.columns.netDeposit"),
+      closed_total_profit: t("pnlMonitor.columns.closedTotalProfit"),
+      overnight_volume_ratio: t("pnlMonitor.columns.overnightVolumeRatio"),
+      overnight_volume_all: t("pnlMonitor.columns.overnightVolumeAll"),
+      total_volume_all: t("pnlMonitor.columns.totalVolumeAll"),
+      overnight_order_all: t("pnlMonitor.columns.overnightOrderAll"),
+      total_order_all: t("pnlMonitor.columns.totalOrderAll"),
+      last_updated: t("pnlMonitor.columns.lastUpdated"),
+    } as Record<string, string>
+  }, [t])
+
   // AG Grid 事件处理函数
   const onGridReady = useCallback((params: GridReadyEvent) => {
     setGridApi(params.api as any)
@@ -1114,7 +1154,7 @@ export default function CustomerPnLMonitorV2() {
     } finally {
       setIsLoadingGroups(false)
     }
-  }, [server])
+  }, [server, handleUserGroupsChange, storageKeyForGroups])
 
   // 搜索输入防抖处理（300ms）
   useEffect(() => {
@@ -1526,32 +1566,6 @@ export default function CustomerPnLMonitorV2() {
                     if (columnId.startsWith('closed_') && columnId !== 'closed_total_profit') {
                       return null
                     }
-                    const columnLabels: Record<string, string> = {
-                      login: t("pnlMonitor.columns.login"),
-                      user_name: t("pnlMonitor.columns.userName"),
-                      user_group: t("pnlMonitor.columns.userGroup"),
-                      symbol: t("pnlMonitor.columns.symbol"),
-                      country: t("pnlMonitor.columns.country"),
-                      zipcode: t("pnlMonitor.columns.zipcode"),
-                      currency: "Currency",
-                      user_id: t("pnlMonitor.columns.userId"),
-                      user_balance: t("pnlMonitor.columns.balance"),
-                      positions_floating_pnl: t("pnlMonitor.columns.floatingPnL"),
-                      equity: t("pnlMonitor.columns.equity"),
-                      total_commission: t("pnlMonitor.columns.totalCommission"),
-                      deposit_count: t("pnlMonitor.columns.depositCount"),
-                      deposit_amount: t("pnlMonitor.columns.depositAmount"),
-                      withdrawal_count: t("pnlMonitor.columns.withdrawalCount"),
-                      withdrawal_amount: t("pnlMonitor.columns.withdrawalAmount"),
-                      net_deposit: t("pnlMonitor.columns.netDeposit"),
-                      closed_total_profit: t("pnlMonitor.columns.closedTotalProfit"),
-                      overnight_volume_ratio: t("pnlMonitor.columns.overnightVolumeRatio"),
-                      overnight_volume_all: t("pnlMonitor.columns.overnightVolumeAll"),
-                      total_volume_all: t("pnlMonitor.columns.totalVolumeAll"),
-                      overnight_order_all: t("pnlMonitor.columns.overnightOrderAll"),
-                      total_order_all: t("pnlMonitor.columns.totalOrderAll"),
-                      last_updated: t("pnlMonitor.columns.lastUpdated"),
-                    }
                     return (
                       <DropdownMenuCheckboxItem
                         key={columnId}
@@ -1563,7 +1577,7 @@ export default function CustomerPnLMonitorV2() {
                           saveGridState()
                         }}
                       >
-                        {columnLabels[columnId] || columnId}
+                        {columnLabelsMap[columnId] || columnId}
                       </DropdownMenuCheckboxItem>
                     )
                   })}
@@ -1646,32 +1660,6 @@ export default function CustomerPnLMonitorV2() {
                       return null
                     }
 
-                    const columnLabels: Record<string, string> = {
-                      login: t("pnlMonitor.columns.login"),
-                      user_name: t("pnlMonitor.columns.userName"),
-                      user_group: t("pnlMonitor.columns.userGroup"),
-                      symbol: t("pnlMonitor.columns.symbol"),
-                      country: t("pnlMonitor.columns.country"),
-                      zipcode: t("pnlMonitor.columns.zipcode"),
-                      currency: "Currency",
-                      user_id: t("pnlMonitor.columns.userId"),
-                      user_balance: t("pnlMonitor.columns.balance"),
-                      positions_floating_pnl: t("pnlMonitor.columns.floatingPnL"),
-                      equity: t("pnlMonitor.columns.equity"),
-                      total_commission: t("pnlMonitor.columns.totalCommission"),
-                      deposit_count: t("pnlMonitor.columns.depositCount"),
-                      deposit_amount: t("pnlMonitor.columns.depositAmount"),
-                      withdrawal_count: t("pnlMonitor.columns.withdrawalCount"),
-                      withdrawal_amount: t("pnlMonitor.columns.withdrawalAmount"),
-                      net_deposit: t("pnlMonitor.columns.netDeposit"),
-                      closed_total_profit: t("pnlMonitor.columns.closedTotalProfit"),
-                      overnight_volume_ratio: t("pnlMonitor.columns.overnightVolumeRatio"),
-                      overnight_volume_all: t("pnlMonitor.columns.overnightVolumeAll"),
-                      total_volume_all: t("pnlMonitor.columns.totalVolumeAll"),
-                      overnight_order_all: t("pnlMonitor.columns.overnightOrderAll"),
-                      total_order_all: t("pnlMonitor.columns.totalOrderAll"),
-                      last_updated: t("pnlMonitor.columns.lastUpdated"),
-                    }
                     return (
                       <DropdownMenuCheckboxItem
                         key={columnId}
@@ -1686,7 +1674,7 @@ export default function CustomerPnLMonitorV2() {
                           }
                         }
                       >
-                        {columnLabels[columnId] || columnId}
+                        {columnLabelsMap[columnId] || columnId}
                       </DropdownMenuCheckboxItem>
                     )
                   })}
@@ -1749,7 +1737,7 @@ export default function CustomerPnLMonitorV2() {
         {/* ag-grid requires an explicit height on the container */}
         <div
           ref={gridContainerRef}
-          className={`${(theme === 'dark' || (theme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} h-[600px] w-full min-h-[400px] relative`}
+          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} h-[600px] w-full min-h-[400px] relative`}
         >
           <AgGridReact
             rowData={rows}
@@ -1775,7 +1763,9 @@ export default function CustomerPnLMonitorV2() {
             enableCellTextSelection={true}
             domLayout="normal"
             getRowStyle={(params) => {
-              if (params.node.rowIndex && params.node.rowIndex % 2 === 0) {
+              // fresh grad note: ensure rowIndex 0 is treated as even; guard for non-number
+              const idx = typeof params.node.rowIndex === 'number' ? params.node.rowIndex : -1
+              if (idx % 2 === 0) {
                 return { backgroundColor: 'var(--ag-background-color)' }
               }
               return { backgroundColor: 'var(--ag-odd-row-background-color)' }

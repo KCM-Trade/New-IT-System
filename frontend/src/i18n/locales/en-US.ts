@@ -20,7 +20,8 @@ export const enUS = {
   
   // Navigation
   nav: {
-    customerPnLMonitorV2: "Customer P&L Monitor (V2)",
+    customerPnLMonitorV2: "AccountID PnL Monitor",
+    clientPnLMonitor: "ClientID PnL Monitor",
     clientTrading: "Client Trading Analysis",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "Basis Analysis",
