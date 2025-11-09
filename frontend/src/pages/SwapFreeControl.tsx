@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Calendar as CalendarIcon } from "lucide-react"
+import { Calendar as CalendarIcon, ArrowUp, ArrowDown } from "lucide-react"
 import type { DateRange } from "react-day-picker"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 // Swap Free Control page component
 export default function SwapFreeControlPage() {
@@ -42,6 +43,10 @@ export default function SwapFreeControlPage() {
   const [exRows, setExRows] = useState<ExclusionRow[]>([])
   const [exLoading, setExLoading] = useState(false)
   const [exError, setExError] = useState<string | null>(null)
+  // fresh grad: exclusions filter/sort
+  type ReasonKey = "ALL" | "PERM_LOSS" | "MANUAL" | "OTHER"
+  const [exReasonFilter, setExReasonFilter] = useState<ReasonKey>("ALL")
+  const [exAddedAtSort, setExAddedAtSort] = useState<"desc" | "asc">("desc")
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640) // sm breakpoint
     onResize()
@@ -160,6 +165,20 @@ export default function SwapFreeControlPage() {
       }
     })()
   }, [])
+  
+  // fresh grad: derived exclusions view (filter by reason, sort by added_at)
+  const displayedExRows = (() => {
+    const filtered =
+      exReasonFilter === "ALL"
+        ? exRows
+        : exRows.filter((r) => r.reason_code === exReasonFilter)
+    const sorted = [...filtered].sort((a, b) => {
+      const ta = new Date(a.added_at).getTime()
+      const tb = new Date(b.added_at).getTime()
+      return exAddedAtSort === "desc" ? tb - ta : ta - tb
+    })
+    return sorted
+  })()
   
   return (
     <div className="px-3 py-4 sm:px-4 lg:px-6">
@@ -335,6 +354,34 @@ export default function SwapFreeControlPage() {
                 <Button className="w-full">Add</Button>
               </div>
             </div>
+            {/* Filters & sort for display */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3 mt-3">
+              <div className="sm:col-span-6">
+                <label className="mb-1 block text-sm font-medium">Filter by Reason</label>
+                <Select value={exReasonFilter} onValueChange={(v) => setExReasonFilter(v as ReasonKey)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="ALL" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">ALL</SelectItem>
+                    <SelectItem value="PERM_LOSS">PERM_LOSS</SelectItem>
+                    <SelectItem value="MANUAL">MANUAL</SelectItem>
+                    <SelectItem value="OTHER">OTHER</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="sm:col-span-6">
+                <label className="mb-1 block text-sm font-medium">Sort by Added At</label>
+                <Button
+                  variant="outline"
+                  className="w-full justify-between"
+                  onClick={() => setExAddedAtSort((p) => (p === "desc" ? "asc" : "desc"))}
+                >
+                  {exAddedAtSort === "desc" ? "Newest first" : "Oldest first"}
+                  {exAddedAtSort === "desc" ? <ArrowDown className="ml-1 h-4 w-4" /> : <ArrowUp className="ml-1 h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
             <Separator className="my-4" />
             {/* Table area with zebra stripes */}
             <div className="min-h-0 flex-1 overflow-auto">
@@ -368,7 +415,7 @@ export default function SwapFreeControlPage() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    exRows.map((r) => (
+                    displayedExRows.map((r) => (
                       <TableRow key={r.id} className="odd:bg-muted/50">
                         <TableCell>{r.client_id}</TableCell>
                         <TableCell>{r.reason_code}</TableCell>
