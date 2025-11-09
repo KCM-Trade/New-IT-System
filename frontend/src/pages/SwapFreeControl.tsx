@@ -18,6 +18,30 @@ export default function SwapFreeControlPage() {
   const [distRows, setDistRows] = useState<DistRow[]>([])
   const [distLoading, setDistLoading] = useState(false)
   const [distError, setDistError] = useState<string | null>(null)
+  // fresh grad: zipcode change logs state
+  type ChangeLogRow = {
+    client_id: number
+    zipcode_before: string
+    zipcode_after: string
+    change_reason: string
+    change_time: string
+  }
+  const [logRows, setLogRows] = useState<ChangeLogRow[]>([])
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [logsError, setLogsError] = useState<string | null>(null)
+  // fresh grad: exclusions list state
+  type ExclusionRow = {
+    id: number
+    client_id: number
+    reason_code: string
+    added_by: string
+    added_at: string
+    expires_at: string | null
+    is_active: boolean
+  }
+  const [exRows, setExRows] = useState<ExclusionRow[]>([])
+  const [exLoading, setExLoading] = useState(false)
+  const [exError, setExError] = useState<string | null>(null)
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640) // sm breakpoint
     onResize()
@@ -55,12 +79,94 @@ export default function SwapFreeControlPage() {
     })()
   }, [])
   
+  // fresh grad: helper to format Date -> "YYYY-MM-DD HH:MM:SS"
+  const formatDateTime = (d: Date, endOfDay: boolean) => {
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    if (endOfDay) return `${year}-${month}-${day} 23:59:59`
+    return `${year}-${month}-${day} 00:00:00`
+  }
+
+  // fresh grad: format ISO timestamptz to UTC+8 string "YYYY-MM-DD HH:mm:ss"
+  const formatIsoToUtc8 = (iso: string | null | undefined) => {
+    if (!iso) return ""
+    try {
+      // use fixed timezone Asia/Shanghai for UTC+8; sv-SE gives ISO-like format
+      return new Date(iso).toLocaleString("sv-SE", {
+        timeZone: "Asia/Shanghai",
+        hour12: false,
+      }).replace(",", "")
+    } catch {
+      return iso
+    }
+  }
+
+  // fresh grad: load zipcode change logs with optional time window, limit 100
+  const loadLogs = async (start?: string, end?: string) => {
+    setLogsLoading(true)
+    setLogsError(null)
+    try {
+      const params = new URLSearchParams()
+      params.set("page", "1")
+      params.set("page_size", "100")
+      if (start) params.set("start", start)
+      if (end) params.set("end", end)
+      const res = await fetch(`/api/v1/zipcode/changes?${params.toString()}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const payload = await res.json()
+      const data: ChangeLogRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+      setLogRows(data)
+    } catch (e: any) {
+      setLogRows([])
+      setLogsError(e?.message ?? "Failed to load change logs")
+    } finally {
+      setLogsLoading(false)
+    }
+  }
+
+  // fresh grad: on mount, load default logs (backend defaults to last 25h)
+  useEffect(() => {
+    loadLogs()
+  }, [])
+
+  // fresh grad: apply date range for logs
+  const onApplyLogs = () => {
+    if (range?.from && range?.to) {
+      const start = formatDateTime(range.from, false)
+      const end = formatDateTime(range.to, true)
+      loadLogs(start, end)
+    } else {
+      loadLogs()
+    }
+  }
+
+  // fresh grad: load exclusions (active only)
+  useEffect(() => {
+    ;(async () => {
+      setExLoading(true)
+      setExError(null)
+      try {
+        const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const payload = await res.json()
+        const data: ExclusionRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+        setExRows(data)
+      } catch (e: any) {
+        setExRows([])
+        setExError(e?.message ?? "Failed to load exclusions")
+      } finally {
+        setExLoading(false)
+      }
+    })()
+  }, [])
+  
   return (
     <div className="px-3 py-4 sm:px-4 lg:px-6">
       {/* Layout: 2x2 grid on desktop, stacked on mobile */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:gap-6">
         {/* Zipcode Distribution (borderless, blended with background) */}
-        <div className="h-[600px] rounded-lg bg-transparent shadow-none border-0">
+        <div className="h-[600px] rounded-lg bg-transparent shadow-none border-0 overflow-hidden">
           <div className="px-4 pt-4">
             <div className="text-xl font-semibold">Current Zipcode Distribution</div>
             <div className="text-sm text-muted-foreground">
@@ -123,14 +229,14 @@ export default function SwapFreeControlPage() {
         </div>
 
         {/* Zipcode Change Logs */}
-        <Card className="h-[600px] flex flex-col">
+        <Card className="h-[600px] flex flex-col overflow-hidden">
           <CardHeader>
             <CardTitle>Zipcode Change Logs</CardTitle>
             <CardDescription>
-              Browse change logs within selected date range
+              Only display 100 records of zipcode changes (for more details, plz contact Kieran)
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Controls (date range via Popover + Calendar; stack on mobile) */}
             <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3">
               <div className="sm:col-span-10">
@@ -154,7 +260,7 @@ export default function SwapFreeControlPage() {
                 </Popover>
               </div>
               <div className="sm:col-span-2">
-                <Button className="w-full">Apply</Button>
+                <Button className="w-full" onClick={onApplyLogs}>Apply</Button>
               </div>
             </div>
             <Separator className="my-4" />
@@ -171,28 +277,35 @@ export default function SwapFreeControlPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {/* Use odd:bg-muted/50 for zebra striping */}
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100001</TableCell>
-                    <TableCell>10</TableCell>
-                    <TableCell>90</TableCell>
-                    <TableCell>AUTO_VOLUME</TableCell>
-                    <TableCell>2025-01-08 05:52:01</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100002</TableCell>
-                    <TableCell>90</TableCell>
-                    <TableCell>10</TableCell>
-                    <TableCell>MANUAL_OVERRIDE</TableCell>
-                    <TableCell>2025-01-08 06:02:17</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100003</TableCell>
-                    <TableCell>20</TableCell>
-                    <TableCell>90</TableCell>
-                    <TableCell>AUTO_LOSS</TableCell>
-                    <TableCell>2025-01-08 06:10:45</TableCell>
-                  </TableRow>
+                  {logsLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        Loading...
+                      </TableCell>
+                    </TableRow>
+                  ) : logsError ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-destructive py-8">
+                        {logsError}
+                      </TableCell>
+                    </TableRow>
+                  ) : logRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        No data
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    logRows.map((r, idx) => (
+                      <TableRow key={`${r.client_id}-${r.change_time}-${idx}`} className="odd:bg-muted/50">
+                        <TableCell>{r.client_id}</TableCell>
+                        <TableCell>{r.zipcode_before}</TableCell>
+                        <TableCell>{r.zipcode_after}</TableCell>
+                        <TableCell>{r.change_reason}</TableCell>
+                        <TableCell>{formatIsoToUtc8(r.change_time)}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -200,14 +313,14 @@ export default function SwapFreeControlPage() {
         </Card>
 
         {/* Exclude Group */}
-        <Card className="h-[600px] flex flex-col">
+        <Card className="h-[600px] flex flex-col overflow-hidden">
           <CardHeader>
             <CardTitle>Exclude Group</CardTitle>
             <CardDescription>
-              Manage permanent/temporary exclusions that always keep zipcode=90
+              PERM_LOSS means cumulative net loss exceeds 5000 USD; clients remain swap-free (zipcode=90)
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Controls (Client ID, Reason, Add) - stack on mobile */}
             <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3">
               <div className="sm:col-span-4">
@@ -236,27 +349,35 @@ export default function SwapFreeControlPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100010</TableCell>
-                    <TableCell>PERM_LOSS</TableCell>
-                    <TableCell>system</TableCell>
-                    <TableCell>2025-01-07 10:05:00</TableCell>
-                    <TableCell>true</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100011</TableCell>
-                    <TableCell>MANUAL</TableCell>
-                    <TableCell>ops_user</TableCell>
-                    <TableCell>2025-01-07 11:12:31</TableCell>
-                    <TableCell>true</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100012</TableCell>
-                    <TableCell>OTHER</TableCell>
-                    <TableCell>system</TableCell>
-                    <TableCell>2025-01-08 08:40:22</TableCell>
-                    <TableCell>false</TableCell>
-                  </TableRow>
+                  {exLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        Loading...
+                      </TableCell>
+                    </TableRow>
+                  ) : exError ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-destructive py-8">
+                        {exError}
+                      </TableCell>
+                    </TableRow>
+                  ) : exRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        No data
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    exRows.map((r) => (
+                      <TableRow key={r.id} className="odd:bg-muted/50">
+                        <TableCell>{r.client_id}</TableCell>
+                        <TableCell>{r.reason_code}</TableCell>
+                        <TableCell>{r.added_by}</TableCell>
+                        <TableCell>{formatIsoToUtc8(r.added_at)}</TableCell>
+                        <TableCell>{String(r.is_active)}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -264,14 +385,14 @@ export default function SwapFreeControlPage() {
         </Card>
 
         {/* Client Change Frequency */}
-        <Card className="h-[600px] flex flex-col">
+        <Card className="h-[600px] flex flex-col overflow-hidden">
           <CardHeader>
             <CardTitle>Client Change Frequency</CardTitle>
             <CardDescription>
-              Overview of how often clients enter/exit swap-free eligibility
+              Overview of how often clients enter/exit swap-free eligibility · in development (demo)
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Table area with zebra stripes */}
             <div className="min-h-0 flex-1 overflow-auto">
               <Table>
