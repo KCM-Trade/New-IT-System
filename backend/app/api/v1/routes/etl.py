@@ -22,6 +22,7 @@ from app.services.etl_pg_service import (
     resolve_table_and_dataset,
 )
 from app.services.client_pnl_service import run_client_pnl_incremental_refresh
+from app.core.client_pnl_refresh_logger import log_refresh_event
 
 
 router = APIRouter(prefix="/etl", tags=["etl"])
@@ -127,6 +128,7 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
     - MT4Live2  -> mt4live2_incremental_refresh (Postgres MT5_ETL + MySQL mt4_live2)
     """
     server = (body.server or "").upper()
+    request_payload = body.dict()
     try:
         logger.info(f"Starting refresh for server: {server}")
         if server == "MT5":
@@ -144,6 +146,15 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
             logger.info(f"Refresh completed for {server}: processed_rows={r.get('processed_rows')}, duration={r.get('duration_seconds')}s")
 
         status = "success" if r.get("success") else "error"
+        log_refresh_event(
+            "pnl_user_summary_refresh",
+            {
+                "server": server,
+                "request": request_payload,
+                "status": status,
+                "service_result": r,
+            },
+        )
         return EtlRefreshResponse(
             status=status,
             message=r.get("message") or ("Refresh completed" if r.get("success") else "Refresh failed"),
@@ -154,11 +165,29 @@ def refresh_pnl_user_summary(body: EtlRefreshRequest) -> EtlRefreshResponse:
             new_trades_count=r.get("new_trades_count"),
             floating_only_count=r.get("floating_only_count"),
         )
-    except HTTPException:
+    except HTTPException as http_exc:
+        log_refresh_event(
+            "pnl_user_summary_refresh_error",
+            {
+                "server": server,
+                "request": request_payload,
+                "status_code": http_exc.status_code,
+                "error": http_exc.detail,
+            },
+        )
         raise
     except Exception as e:
         error_detail = f"Refresh failed for {server}: {str(e)}"
         logger.error(error_detail, exc_info=True)
+        log_refresh_event(
+            "pnl_user_summary_refresh_error",
+            {
+                "server": server,
+                "request": request_payload,
+                "error": error_detail,
+                "exception_type": type(e).__name__,
+            },
+        )
         raise HTTPException(status_code=500, detail=error_detail)
 
 
@@ -188,6 +217,13 @@ def refresh_client_pnl() -> ClientPnlRefreshResponse:
         status = "success" if r.get("success") else "error"
         steps_raw = r.get("steps") or []
         steps: List[ClientPnlRefreshStep] = [ClientPnlRefreshStep(**s) for s in steps_raw if isinstance(s, dict)]
+        log_refresh_event(
+            "client_pnl_refresh",
+            {
+                "status": status,
+                "raw_result": r,
+            },
+        )
         return ClientPnlRefreshResponse(
             status=status,
             message=r.get("message"),
@@ -198,5 +234,12 @@ def refresh_client_pnl() -> ClientPnlRefreshResponse:
         )
     except Exception as e:
         logger.error(f"client-pnl refresh failed: {e}", exc_info=True)
+        log_refresh_event(
+            "client_pnl_refresh_error",
+            {
+                "error": str(e),
+                "exception_type": type(e).__name__,
+            },
+        )
         raise HTTPException(status_code=500, detail=str(e))
 

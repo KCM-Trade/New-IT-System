@@ -11,6 +11,7 @@ from .routes.hourly_details import router as hourly_details_router
 from .routes.pnl_summary import router as pnl_summary_router
 from .routes.etl import router as etl_router
 from .routes.client_pnl import router as client_pnl_router
+from .routes.zipcode import router as zipcode_router
 
 
 api_v1_router = APIRouter()
@@ -25,5 +26,6 @@ api_v1_router.include_router(hourly_details_router, tags=["hourly-details"])
 api_v1_router.include_router(pnl_summary_router, tags=["pnl-summary"]) 
 api_v1_router.include_router(etl_router, tags=["etl"]) 
 api_v1_router.include_router(client_pnl_router, tags=["client-pnl"]) 
+api_v1_router.include_router(zipcode_router, tags=["zipcode"]) 
 
 

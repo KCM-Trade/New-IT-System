@@ -227,6 +227,8 @@ export default function ClientPnLMonitor() {
   const [filterBuilderOpen, setFilterBuilderOpen] = useState(false)
   const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(null)
   const FILTERS_STORAGE_KEY = 'client_pnl_filters'
+  // fresh grad note: limit zipcode details to keep banner readable
+  const ZIPCODE_DETAIL_LIMIT = 10
 
   // ClientPnL 可筛选字段定义（供筛选器使用）
   const CLIENT_FILTER_COLUMNS: ColumnMeta[] = useMemo(() => ([
@@ -487,7 +489,8 @@ export default function ClientPnLMonitor() {
       }
 
       if (zipcodeChanges > 0) {
-        const detailTexts = zipcodeDetails.map(d => (tx('clientPnl.refreshMessages.zipcodeChangeDetail', `clientid ${d.clientid} (before: ${d.before ?? ''}, after: ${d.after ?? ''})`)
+        const limitedZipcodeDetails = zipcodeDetails.slice(0, ZIPCODE_DETAIL_LIMIT)
+        const detailTexts = limitedZipcodeDetails.map(d => (tx('clientPnl.refreshMessages.zipcodeChangeDetail', `clientid ${d.clientid} (before: ${d.before ?? ''}, after: ${d.after ?? ''})`)
           .replace('{clientid}', String(d.clientid))
           .replace('{before}', String(d.before ?? ''))
           .replace('{after}', String(d.after ?? ''))))
@@ -497,6 +500,12 @@ export default function ClientPnLMonitor() {
             .replace('{count}', String(zipcodeChanges))
             .replace('{details}', detailsJoined)
         )
+        if (zipcodeDetails.length > limitedZipcodeDetails.length) {
+          const remainingCount = zipcodeDetails.length - limitedZipcodeDetails.length
+          const moreText = tz('clientPnl.refreshMessages.zipcodeChangesMore', '还有 {count} 条 Zipcode 变更未展示', '{count} more Zipcode changes not listed')
+            .replace('{count}', String(remainingCount))
+          parts.push(moreText)
+        }
       } else {
         parts.push(tx('clientPnl.refreshMessages.zipcodeNoChange', 'Zipcode变更 0'))
       }

@@ -13,6 +13,11 @@ import type { DateRange } from "react-day-picker"
 export default function SwapFreeControlPage() {
   // fresh grad: mobile detection to adjust calendar months & stacking
   const [isMobile, setIsMobile] = useState(false)
+  // fresh grad: zipcode distribution rows from backend API
+  type DistRow = { zipcode: string; client_count: number; client_ids?: number[] }
+  const [distRows, setDistRows] = useState<DistRow[]>([])
+  const [distLoading, setDistLoading] = useState(false)
+  const [distError, setDistError] = useState<string | null>(null)
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640) // sm breakpoint
     onResize()
@@ -28,11 +33,95 @@ export default function SwapFreeControlPage() {
     return `${range.from.toLocaleDateString("en-US", opts)} - ${range.to.toLocaleDateString("en-US", opts)}`
   })()
 
+  // fresh grad: fetch zipcode distribution on mount
+  useEffect(() => {
+    ;(async () => {
+      setDistLoading(true)
+      setDistError(null)
+      try {
+        // Backend is expected to provide this API; on failure we gracefully fallback to empty table
+        const res = await fetch("/api/v1/zipcode/distribution")
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const payload = await res.json()
+        const data: DistRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+        data.sort((a, b) => (b.client_count ?? 0) - (a.client_count ?? 0))
+        setDistRows(data)
+      } catch (e: any) {
+        setDistRows([])
+        setDistError(e?.message ?? "Failed to load distribution")
+      } finally {
+        setDistLoading(false)
+      }
+    })()
+  }, [])
+  
   return (
     <div className="px-3 py-4 sm:px-4 lg:px-6">
-      {/* Layout: three cards in a row on large screens; stack on narrow screens.
-         Mobile spacing reduced to maximize content area */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
+      {/* Layout: 2x2 grid on desktop, stacked on mobile */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:gap-6">
+        {/* Zipcode Distribution (borderless, blended with background) */}
+        <div className="h-[600px] rounded-lg bg-transparent shadow-none border-0">
+          <div className="px-4 pt-4">
+            <div className="text-xl font-semibold">Current Zipcode Distribution</div>
+            <div className="text-sm text-muted-foreground">
+              Count of enabled clients by zipcode
+            </div>
+          </div>
+          <div className="px-4 pt-2">
+            {/* Table area */}
+            <div className="min-h-0 mt-2 h-[520px] overflow-auto rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[160px]">Zipcode</TableHead>
+                    <TableHead className="w-[160px]">Client count</TableHead>
+                    <TableHead>
+                      {distRows.some((r) => Array.isArray(r.client_ids) && r.client_ids.length > 0)
+                        ? "Client IDs (<10)"
+                        : "Notes"
+                      }
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {distLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                        Loading...
+                      </TableCell>
+                    </TableRow>
+                  ) : distError ? (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center text-destructive py-8">
+                        {distError}
+                      </TableCell>
+                    </TableRow>
+                  ) : distRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                        No data
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    distRows.map((r) => {
+                      const ids = Array.isArray(r.client_ids) ? r.client_ids : []
+                      return (
+                        <TableRow key={r.zipcode} className="odd:bg-muted/50">
+                          <TableCell>{r.zipcode}</TableCell>
+                          <TableCell>{r.client_count}</TableCell>
+                          <TableCell className="text-sm">
+                            {ids.length > 0 ? ids.join(", ") : ""}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </div>
+
         {/* Zipcode Change Logs */}
         <Card className="h-[600px] flex flex-col">
           <CardHeader>
