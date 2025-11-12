@@ -84,13 +84,16 @@ export default function SwapFreeControlPage() {
     })()
   }, [])
   
-  // fresh grad: helper to format Date -> "YYYY-MM-DD HH:MM:SS"
+  // fresh grad: helper to format Date -> "YYYY-MM-DD HH:MM:SS" in UTC (backend uses UTC+0)
   const formatDateTime = (d: Date, endOfDay: boolean) => {
-    const year = d.getFullYear()
-    const month = String(d.getMonth() + 1).padStart(2, "0")
-    const day = String(d.getDate()).padStart(2, "0")
-    if (endOfDay) return `${year}-${month}-${day} 23:59:59`
-    return `${year}-${month}-${day} 00:00:00`
+    const copy = new Date(d)
+    if (endOfDay) {
+      copy.setHours(23, 59, 59, 999)
+    } else {
+      copy.setHours(0, 0, 0, 0)
+    }
+    const iso = copy.toISOString()
+    return iso.replace("T", " ").slice(0, 19)
   }
 
   // fresh grad: format ISO timestamptz to UTC+8 string "YYYY-MM-DD HH:mm:ss"
