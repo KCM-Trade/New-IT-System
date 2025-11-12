@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
@@ -35,6 +35,8 @@ export default function SwapFreeControlPage() {
     id: number
     client_id: number
     reason_code: string
+    // fresh grad: manual note from UI for MANUAL entries
+    note: string | null
     added_by: string
     added_at: string
     expires_at: string | null
@@ -45,8 +47,14 @@ export default function SwapFreeControlPage() {
   const [exError, setExError] = useState<string | null>(null)
   // fresh grad: exclusions filter/sort
   type ReasonKey = "ALL" | "PERM_LOSS" | "MANUAL" | "OTHER"
-  const [exReasonFilter, setExReasonFilter] = useState<ReasonKey>("ALL")
+  const [exReasonFilter, setExReasonFilter] = useState<ReasonKey>("MANUAL")
   const [exAddedAtSort, setExAddedAtSort] = useState<"desc" | "asc">("desc")
+  // fresh grad: manual add form state
+  const [exClientIdInput, setExClientIdInput] = useState("")
+  const [exNoteInput, setExNoteInput] = useState("")
+  const [exAddLoading, setExAddLoading] = useState(false)
+  const [exAddError, setExAddError] = useState<string | null>(null)
+  const [exAddSuccess, setExAddSuccess] = useState<string | null>(null)
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640) // sm breakpoint
     onResize()
@@ -150,24 +158,76 @@ export default function SwapFreeControlPage() {
   }
 
   // fresh grad: load exclusions (active only)
-  useEffect(() => {
-    ;(async () => {
-      setExLoading(true)
-      setExError(null)
-      try {
-        const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const payload = await res.json()
-        const data: ExclusionRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
-        setExRows(data)
-      } catch (e: any) {
-        setExRows([])
-        setExError(e?.message ?? "Failed to load exclusions")
-      } finally {
-        setExLoading(false)
-      }
-    })()
+  // fresh grad: fetch exclusions (active only) so we can reuse after manual add
+  const loadExclusions = useCallback(async () => {
+    setExLoading(true)
+    setExError(null)
+    try {
+      const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const payload = await res.json()
+      const data: ExclusionRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+      setExRows(data)
+    } catch (e: any) {
+      setExRows([])
+      setExError(e?.message ?? "Failed to load exclusions")
+    } finally {
+      setExLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    loadExclusions()
+  }, [loadExclusions])
+
+  // fresh grad: manual add handler (validates input then POST to backend)
+  const onAddExclusion = useCallback(async () => {
+    setExAddError(null)
+    setExAddSuccess(null)
+
+    const clientIdRaw = exClientIdInput.trim()
+    if (!clientIdRaw) {
+      setExAddError("Client ID is required")
+      return
+    }
+    const clientId = Number(clientIdRaw)
+    if (!Number.isInteger(clientId) || clientId <= 0) {
+      setExAddError("Client ID must be a positive integer")
+      return
+    }
+
+    const note = exNoteInput.trim()
+    if (!note) {
+      setExAddError("Reason is required")
+      return
+    }
+
+    setExAddLoading(true)
+    try {
+      const res = await fetch(`/api/v1/zipcode/exclusions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, note }),
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        const message =
+          typeof payload?.detail === "string"
+            ? payload.detail
+            : `HTTP ${res.status}`
+        setExAddError(message)
+        return
+      }
+      await loadExclusions()
+      setExClientIdInput("")
+      setExNoteInput("")
+      setExAddSuccess("Client added to exclusion list")
+    } catch (e: any) {
+      setExAddError(e?.message ?? "Failed to add exclusion")
+    } finally {
+      setExAddLoading(false)
+    }
+  }, [exClientIdInput, exNoteInput, loadExclusions])
   
   // fresh grad: derived exclusions view (filter by reason, sort by added_at)
   const displayedExRows = (() => {
@@ -347,23 +407,43 @@ export default function SwapFreeControlPage() {
             <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3">
               <div className="sm:col-span-4">
                 <label className="mb-1 block text-sm font-medium">Client ID</label>
-                <Input placeholder="e.g. 100001" />
+                <Input
+                  placeholder="e.g. 100001"
+                  value={exClientIdInput}
+                  onChange={(e) => setExClientIdInput(e.target.value)}
+                  disabled={exAddLoading}
+                  inputMode="numeric"
+                />
               </div>
               <div className="sm:col-span-6">
                 <label className="mb-1 block text-sm font-medium">Reason</label>
-                <Input placeholder="PERM_LOSS / MANUAL / OTHER" />
+                <Input
+                  placeholder="Add context for MANUAL exclusion"
+                  value={exNoteInput}
+                  onChange={(e) => setExNoteInput(e.target.value)}
+                  disabled={exAddLoading}
+                  maxLength={500}
+                />
               </div>
               <div className="sm:col-span-2">
-                <Button className="w-full">Add</Button>
+                <Button className="w-full" onClick={onAddExclusion} disabled={exAddLoading}>
+                  {exAddLoading ? "Adding..." : "Add"}
+                </Button>
               </div>
             </div>
+            {exAddError && (
+              <p className="mt-2 text-sm text-destructive">{exAddError}</p>
+            )}
+            {exAddSuccess && (
+              <p className="mt-2 text-sm text-emerald-600">{exAddSuccess}</p>
+            )}
             {/* Filters & sort for display */}
             <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3 mt-3">
               <div className="sm:col-span-6">
                 <label className="mb-1 block text-sm font-medium">Filter by Reason</label>
                 <Select value={exReasonFilter} onValueChange={(v) => setExReasonFilter(v as ReasonKey)}>
                   <SelectTrigger>
-                    <SelectValue placeholder="ALL" />
+                    <SelectValue placeholder="Select reason" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ALL">ALL</SelectItem>
@@ -392,8 +472,8 @@ export default function SwapFreeControlPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[120px]">Client ID</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead className="w-[120px]">Added By</TableHead>
+                    <TableHead className="w-[110px]">Reason</TableHead>
+                    <TableHead>Note</TableHead>
                     <TableHead className="w-[180px]">Added At</TableHead>
                     <TableHead className="w-[100px]">Active</TableHead>
                   </TableRow>
@@ -422,7 +502,7 @@ export default function SwapFreeControlPage() {
                       <TableRow key={r.id} className="odd:bg-muted/50">
                         <TableCell>{r.client_id}</TableCell>
                         <TableCell>{r.reason_code}</TableCell>
-                        <TableCell>{r.added_by}</TableCell>
+                        <TableCell>{r.note ?? ""}</TableCell>
                         <TableCell>{formatIsoToUtc8(r.added_at)}</TableCell>
                         <TableCell>{String(r.is_active)}</TableCell>
                       </TableRow>

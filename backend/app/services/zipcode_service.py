@@ -171,7 +171,7 @@ def get_zipcode_changes(
 def get_exclusions(is_active: bool | None = None) -> List[Dict[str, Any]]:
 	"""
 	List exclusions; optional is_active filter.
-	Returns [{ id, client_id, reason_code, added_by, added_at, expires_at, is_active }]
+	Returns [{ id, client_id, reason_code, note, added_by, added_at, expires_at, is_active }]
 	"""
 	dsn = _pg_dsn()
 	with psycopg2.connect(dsn) as conn:
@@ -179,7 +179,7 @@ def get_exclusions(is_active: bool | None = None) -> List[Dict[str, Any]]:
 			if is_active is None:
 				cur.execute(
 					"""
-					SELECT id, client_id, reason_code, added_by, added_at, expires_at, is_active
+					SELECT id, client_id, reason_code, note, added_by, added_at, expires_at, is_active
 					FROM public.swapfree_exclusions
 					ORDER BY is_active DESC, added_at DESC, id DESC
 					"""
@@ -188,7 +188,7 @@ def get_exclusions(is_active: bool | None = None) -> List[Dict[str, Any]]:
 			else:
 				cur.execute(
 					"""
-					SELECT id, client_id, reason_code, added_by, added_at, expires_at, is_active
+					SELECT id, client_id, reason_code, note, added_by, added_at, expires_at, is_active
 					FROM public.swapfree_exclusions
 					WHERE is_active = %s
 					ORDER BY added_at DESC, id DESC
@@ -197,6 +197,46 @@ def get_exclusions(is_active: bool | None = None) -> List[Dict[str, Any]]:
 				)
 				rows = cur.fetchall()
 			return [dict(r) for r in rows]
+
+
+def add_manual_exclusion(client_id: int, note: str, added_by: str = "WebUser") -> Dict[str, Any]:
+	"""
+	Insert a manual exclusion with reason_code MANUAL, capturing UI note for audit.
+	"""
+	dsn = _pg_dsn()
+	with psycopg2.connect(dsn) as conn:
+		with conn.cursor(cursor_factory=RealDictCursor) as cur:
+			# Step 1: deactivate active PERM_LOSS record if exists
+			cur.execute(
+				"""
+				UPDATE public.swapfree_exclusions
+				SET is_active = FALSE,
+					expires_at = NOW()
+				WHERE client_id = %s
+				  AND reason_code = 'PERM_LOSS'
+				  AND is_active = TRUE
+				""",
+				(client_id,),
+			)
+			# Step 2: upsert MANUAL record (activate + refresh note)
+			cur.execute(
+				"""
+				INSERT INTO public.swapfree_exclusions (client_id, reason_code, note, added_by, is_active)
+				VALUES (%s, 'MANUAL', %s, %s, TRUE)
+				ON CONFLICT (client_id) WHERE is_active
+				DO UPDATE
+				SET reason_code = 'MANUAL',
+					note = EXCLUDED.note,
+					added_by = EXCLUDED.added_by,
+					added_at = NOW(),
+					expires_at = NULL,
+					is_active = TRUE
+				RETURNING id, client_id, reason_code, note, added_by, added_at, expires_at, is_active
+				""",
+				(client_id, note, added_by),
+			)
+			row = cur.fetchone()
+			return dict(row)
 
 
 def get_change_frequency(window_days: int = 30, page: int = 1, page_size: int = 50) -> Dict[str, Any]:

@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
+from pydantic import BaseModel, Field
 
 from app.services.zipcode_service import (
 	get_zipcode_distribution,
 	get_zipcode_changes,
 	get_exclusions,
+	add_manual_exclusion,
 	get_change_frequency,
 )
 
 
 router = APIRouter(prefix="/zipcode", tags=["zipcode"])
+
+
+class ManualExclusionCreate(BaseModel):
+	client_id: int = Field(..., ge=1, description="Client identifier")
+	note: str = Field(..., min_length=1, max_length=500, description="Manual note for audit trail")
 
 
 @router.get("/distribution")
@@ -46,6 +53,18 @@ def zipcode_exclusions(
 		return {"ok": True, "rows": len(rows), "data": rows}
 	except Exception as e:
 		return {"ok": False, "rows": 0, "data": [], "error": str(e)}
+
+
+@router.post("/exclusions")
+def create_zipcode_exclusion(payload: ManualExclusionCreate):
+	note = payload.note.strip()
+	if not note:
+		raise HTTPException(status_code=400, detail="Reason must not be empty")
+	try:
+		row = add_manual_exclusion(client_id=payload.client_id, note=note, added_by="WebUser")
+		return {"ok": True, "data": row}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/change-frequency")
