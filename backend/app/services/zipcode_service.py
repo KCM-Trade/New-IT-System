@@ -57,113 +57,89 @@ def get_zipcode_distribution() -> List[Dict[str, Any]]:
 def get_zipcode_changes(
 	start: str | None = None,
 	end: str | None = None,
+	client_id: int | None = None,
 	page: int = 1,
 	page_size: int = 50,
 ) -> Dict[str, Any]:
 	"""
 	Paginated zipcode change logs within a time window (default: last 25 hours).
+	Optional client_id filter to search for specific client's changes.
+	If client_id is provided without time range, search all time (no time restriction).
 	Returns { rows, total, page, page_size, data: [...] }
 	"""
-	# Compute default window in UTC
-	now_utc = datetime.now(timezone.utc)
-	if end is None:
-		end_dt = now_utc
-	else:
-		# Let PG parse; use string param with ::timestamptz
-		end_dt = None
-	if start is None:
+	# Build WHERE conditions dynamically
+	where_parts = []
+	params = []
+	
+	# Time range conditions: only apply default 25h window if client_id is NOT provided
+	# If client_id is provided without time range, don't restrict by time
+	if start is not None or end is not None:
+		# User provided explicit time range
+		now_utc = datetime.now(timezone.utc)
+		if end is None:
+			end_dt = now_utc
+		else:
+			end_dt = None
+		if start is None:
+			start_dt = now_utc - timedelta(hours=25)
+		else:
+			start_dt = None
+		
+		if start_dt is not None and end_dt is not None:
+			where_parts.append("change_time BETWEEN %s AND %s")
+			params.extend([start_dt, end_dt])
+		elif start_dt is None and end_dt is None:
+			where_parts.append("change_time BETWEEN %s::timestamptz AND %s::timestamptz")
+			params.extend([start, end])
+		elif start_dt is None:
+			where_parts.append("change_time BETWEEN %s::timestamptz AND %s")
+			params.extend([start, end_dt])
+		else:
+			where_parts.append("change_time BETWEEN %s AND %s::timestamptz")
+			params.extend([start_dt, end])
+	elif client_id is None:
+		# No client_id and no time range: use default 25h window
+		now_utc = datetime.now(timezone.utc)
 		start_dt = now_utc - timedelta(hours=25)
-	else:
-		start_dt = None
+		end_dt = now_utc
+		where_parts.append("change_time BETWEEN %s AND %s")
+		params.extend([start_dt, end_dt])
+	# else: client_id provided but no time range - don't add time filter
+	
+	# Client ID filter
+	if client_id is not None:
+		where_parts.append("client_id = %s")
+		params.append(client_id)
+	
+	where_clause = " AND ".join(where_parts)
 
 	dsn = _pg_dsn()
 	with psycopg2.connect(dsn) as conn:
 		with conn.cursor() as cur:
 			# Count total
-			if start_dt is not None and end_dt is not None:
-				cur.execute(
-					"""
-					SELECT COUNT(*) 
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s AND %s
-					""",
-					(start_dt, end_dt),
-				)
-			elif start_dt is None and end_dt is None:
-				cur.execute(
-					"""
-					SELECT COUNT(*) 
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s::timestamptz AND %s::timestamptz
-					""",
-					(start, end),
-				)
-			elif start_dt is None:
-				cur.execute(
-					"""
-					SELECT COUNT(*) 
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s::timestamptz AND %s
-					""",
-					(start, end_dt),
-				)
-			else:
-				cur.execute(
-					"""
-					SELECT COUNT(*) 
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s AND %s::timestamptz
-					""",
-					(start_dt, end),
-				)
+			cur.execute(
+				f"""
+				SELECT COUNT(*) 
+				FROM public.swapfree_zipcode_changes
+				WHERE {where_clause}
+				""",
+				params,
+			)
 			total = int(cur.fetchone()[0])
 
 		with conn.cursor(cursor_factory=RealDictCursor) as cur:
 			offset = max(0, (page - 1) * page_size)
-			if start_dt is not None and end_dt is not None:
-				cur.execute(
-					"""
-					SELECT client_id, zipcode_before, zipcode_after, change_reason, change_time
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s AND %s
-					ORDER BY change_time DESC
-					LIMIT %s OFFSET %s
-					""",
-					(start_dt, end_dt, page_size, offset),
-				)
-			elif start_dt is None and end_dt is None:
-				cur.execute(
-					"""
-					SELECT client_id, zipcode_before, zipcode_after, change_reason, change_time
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s::timestamptz AND %s::timestamptz
-					ORDER BY change_time DESC
-					LIMIT %s OFFSET %s
-					""",
-					(start, end, page_size, offset),
-				)
-			elif start_dt is None:
-				cur.execute(
-					"""
-					SELECT client_id, zipcode_before, zipcode_after, change_reason, change_time
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s::timestamptz AND %s
-					ORDER BY change_time DESC
-					LIMIT %s OFFSET %s
-					""",
-					(start, end_dt, page_size, offset),
-				)
-			else:
-				cur.execute(
-					"""
-					SELECT client_id, zipcode_before, zipcode_after, change_reason, change_time
-					FROM public.swapfree_zipcode_changes
-					WHERE change_time BETWEEN %s AND %s::timestamptz
-					ORDER BY change_time DESC
-					LIMIT %s OFFSET %s
-					""",
-					(start_dt, end, page_size, offset),
-				)
+			# Fetch data with pagination
+			cur.execute(
+				f"""
+				SELECT client_id, zipcode_before, zipcode_after, change_reason, change_time
+				FROM public.swapfree_zipcode_changes
+				WHERE {where_clause}
+				ORDER BY change_time DESC
+				LIMIT %s OFFSET %s
+				""",
+				params + [page_size, offset],
+			)
 			data = [dict(r) for r in cur.fetchall()]
 			return {"rows": total, "page": page, "page_size": page_size, "data": data}
 

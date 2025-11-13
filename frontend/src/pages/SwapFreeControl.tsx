@@ -30,6 +30,11 @@ export default function SwapFreeControlPage() {
   const [logRows, setLogRows] = useState<ChangeLogRow[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsError, setLogsError] = useState<string | null>(null)
+  // fresh grad: client change frequency state (API aggregates last 30 days)
+  type FrequencyRow = { client_id: number; changes: number; last_change: string | null }
+  const [freqRows, setFreqRows] = useState<FrequencyRow[]>([])
+  const [freqLoading, setFreqLoading] = useState(false)
+  const [freqError, setFreqError] = useState<string | null>(null)
   // fresh grad: exclusions list state
   type ExclusionRow = {
     id: number
@@ -64,6 +69,8 @@ export default function SwapFreeControlPage() {
 
   // fresh grad: Zipcode logs date range (Popover + Calendar, similar to Profit.tsx)
   const [range, setRange] = useState<DateRange | undefined>(undefined)
+  // fresh grad: client id filter input for zipcode logs
+  const [logClientIdInput, setLogClientIdInput] = useState("")
   const rangeLabel = (() => {
     if (!range?.from || !range?.to) return "Select date range"
     const opts: Intl.DateTimeFormatOptions = { month: "short", day: "2-digit", year: "numeric" }
@@ -80,8 +87,7 @@ export default function SwapFreeControlPage() {
         const res = await fetch("/api/v1/zipcode/distribution")
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const payload = await res.json()
-        const data: DistRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
-        data.sort((a, b) => (b.client_count ?? 0) - (a.client_count ?? 0))
+        const data: DistRow[] = payload?.data ?? []
         setDistRows(data)
       } catch (e: any) {
         setDistRows([])
@@ -119,7 +125,8 @@ export default function SwapFreeControlPage() {
   }
 
   // fresh grad: load zipcode change logs with optional time window, limit 100
-  const loadLogs = async (start?: string, end?: string) => {
+  const loadLogs = async (options?: { start?: string; end?: string; clientId?: number }) => {
+    const { start, end, clientId } = options ?? {}
     setLogsLoading(true)
     setLogsError(null)
     try {
@@ -128,10 +135,11 @@ export default function SwapFreeControlPage() {
       params.set("page_size", "100")
       if (start) params.set("start", start)
       if (end) params.set("end", end)
+      if (clientId) params.set("client_id", String(clientId))
       const res = await fetch(`/api/v1/zipcode/changes?${params.toString()}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const payload = await res.json()
-      const data: ChangeLogRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+      const data: ChangeLogRow[] = payload?.data ?? []
       setLogRows(data)
     } catch (e: any) {
       setLogRows([])
@@ -146,18 +154,50 @@ export default function SwapFreeControlPage() {
     loadLogs()
   }, [])
 
-  // fresh grad: apply date range for logs
-  const onApplyLogs = () => {
+  // fresh grad: trigger zipcode logs fetch by client id only
+  const onSearchLogs = () => {
+    setLogsError(null)
+    const trimmed = logClientIdInput.trim()
+    if (!trimmed) {
+      setLogsError("Client ID is required")
+      return
+    }
+    const parsed = Number(trimmed)
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      setLogsError("Client ID must be a positive integer")
+      return
+    }
+    loadLogs({ clientId: parsed })
+  }
+
+  // fresh grad: clear client id filter and restore logs based on date range (if set) or default
+  const onResetLogSearch = () => {
+    setLogClientIdInput("")
+    setLogsError(null)
+    // If date range is set, use it; otherwise use default (last 25h)
     if (range?.from && range?.to) {
       const start = formatDateTime(range.from, false)
       const end = formatDateTime(range.to, true)
-      loadLogs(start, end)
+      loadLogs({ start, end })
     } else {
       loadLogs()
     }
   }
 
-  // fresh grad: load exclusions (active only)
+  // fresh grad: apply date range independent from client id filter
+  const onApplyDateRange = () => {
+    setLogsError(null)
+    // Clear client ID when applying date range to keep them independent
+    setLogClientIdInput("")
+    if (!range?.from || !range?.to) {
+      loadLogs()
+      return
+    }
+    const start = formatDateTime(range.from, false)
+    const end = formatDateTime(range.to, true)
+    loadLogs({ start, end })
+  }
+
   // fresh grad: fetch exclusions (active only) so we can reuse after manual add
   const loadExclusions = useCallback(async () => {
     setExLoading(true)
@@ -166,7 +206,7 @@ export default function SwapFreeControlPage() {
       const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const payload = await res.json()
-      const data: ExclusionRow[] = Array.isArray(payload) ? payload : (payload?.data ?? [])
+      const data: ExclusionRow[] = payload?.data ?? []
       setExRows(data)
     } catch (e: any) {
       setExRows([])
@@ -242,20 +282,45 @@ export default function SwapFreeControlPage() {
     })
     return sorted
   })()
+
+  // fresh grad: soft grey gradient突出日志卡片层次，兼容亮/暗模式
+  const logsGradient =
+    "bg-gradient-to-t from-zinc-200/70 via-zinc-100/30 to-transparent dark:from-zinc-900/70 dark:via-zinc-800/40 dark:to-transparent"
+
+  // fresh grad: load client change frequency (last 30 days, only >=2 changes)
+  const loadFrequency = useCallback(async () => {
+    setFreqLoading(true)
+    setFreqError(null)
+    try {
+      const res = await fetch(`/api/v1/zipcode/change-frequency?window_days=30&page=1&page_size=200`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const payload = await res.json()
+      const data: FrequencyRow[] = Array.isArray(payload?.data) ? payload.data : []
+      const filtered = data.filter((row) => Number(row.changes) >= 2)
+      setFreqRows(filtered)
+    } catch (e: any) {
+      setFreqRows([])
+      setFreqError(e?.message ?? "Failed to load change frequency")
+    } finally {
+      setFreqLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadFrequency()
+  }, [loadFrequency])
   
   return (
     <div className="px-3 py-4 sm:px-4 lg:px-6">
       {/* Layout: 2x2 grid on desktop, stacked on mobile */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:gap-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-8 lg:gap-6">
         {/* Zipcode Distribution (borderless, blended with background) */}
-        <div className="h-[600px] rounded-lg bg-transparent shadow-none border-0 overflow-hidden">
-          <div className="px-4 pt-4">
-            <div className="text-xl font-semibold">Current Zipcode Distribution</div>
-            <div className="text-sm text-muted-foreground">
-              Count of enabled clients by zipcode
-            </div>
-          </div>
-          <div className="px-4 pt-2">
+        <div className="h-[600px] rounded-lg border border-border/60 bg-card shadow-sm overflow-hidden lg:col-span-2">
+          <CardHeader className="px-4 pt-4 pb-2">
+            <CardTitle>Current Zipcode Distribution</CardTitle>
+            <CardDescription>Count of enabled clients by zipcode</CardDescription>
+          </CardHeader>
+          <div className="px-4 pb-4">
             {/* Table area */}
             <div className="min-h-0 mt-2 h-[520px] overflow-auto rounded-md">
               <Table>
@@ -311,38 +376,65 @@ export default function SwapFreeControlPage() {
         </div>
 
         {/* Zipcode Change Logs */}
-        <Card className="h-[600px] flex flex-col overflow-hidden">
-          <CardHeader>
+        <Card className="relative z-0 h-[600px] flex flex-col overflow-hidden lg:col-span-3 border border-border/60 bg-transparent shadow-sm">
+          {/* fresh grad: grey gradient从底部渐隐，强调日志列表 */}
+          <div className={`pointer-events-none absolute inset-0 z-0 ${logsGradient}`} aria-hidden="true" />
+          <CardHeader className="relative z-10">
             <CardTitle>Zipcode Change Logs</CardTitle>
             <CardDescription>
               Only display 100 records of zipcode changes (for more details, plz contact Kieran)
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Controls (date range via Popover + Calendar; stack on mobile) */}
-            <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3">
-              <div className="sm:col-span-10">
-                <label className="mb-1 block text-sm font-medium">Date range</label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start gap-2 font-normal">
-                      <CalendarIcon className="h-4 w-4" />
-                      <span className="truncate">{rangeLabel}</span>
+          <CardContent className="relative z-10 flex-1 flex flex-col min-h-0 overflow-hidden">
+            {/* Controls: responsive layout - stack on small screens, side-by-side on larger screens */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+              {/* Client ID Search Section */}
+              <div className="lg:col-span-6">
+                <label className="mb-1 block text-sm font-medium">Client ID</label>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    placeholder="e.g. 100001"
+                    value={logClientIdInput}
+                    onChange={(e) => setLogClientIdInput(e.target.value)}
+                    disabled={logsLoading}
+                    inputMode="numeric"
+                    className="flex-1 min-w-0"
+                  />
+                  <div className="flex gap-2 shrink-0">
+                    <Button size="sm" onClick={onSearchLogs} disabled={logsLoading} className="whitespace-nowrap">
+                      Search
                     </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="range"
-                      selected={range}
-                      onSelect={setRange}
-                      numberOfMonths={isMobile ? 1 : 2}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                    <Button size="sm" variant="outline" onClick={onResetLogSearch} disabled={logsLoading} className="whitespace-nowrap">
+                      Reset
+                    </Button>
+                  </div>
+                </div>
               </div>
-              <div className="sm:col-span-2">
-                <Button className="w-full" onClick={onApplyLogs}>Apply</Button>
+              {/* Date Range Section */}
+              <div className="lg:col-span-6">
+                <label className="mb-1 block text-sm font-medium">Date range</label>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="flex-1 justify-start gap-2 font-normal min-w-0">
+                        <CalendarIcon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{rangeLabel}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="range"
+                        selected={range}
+                        onSelect={setRange}
+                        numberOfMonths={isMobile ? 1 : 2}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <Button size="sm" onClick={onApplyDateRange} disabled={logsLoading} className="whitespace-nowrap shrink-0">
+                    Apply
+                  </Button>
+                </div>
               </div>
             </div>
             <Separator className="my-4" />
@@ -395,15 +487,15 @@ export default function SwapFreeControlPage() {
         </Card>
 
         {/* Exclude Group */}
-        <Card className="h-[600px] flex flex-col overflow-hidden">
+        <Card className="h-[600px] flex flex-col overflow-hidden lg:col-span-3">
           <CardHeader>
             <CardTitle>Exclude Group</CardTitle>
             <CardDescription>
-              PERM_LOSS means cumulative net loss exceeds 5000 USD; clients remain swap-free (zipcode=90)
+              PERM_LOSS means cumulative net loss exceeds 5000 USD; clients remain swap-free (zipcode=90). MANUAL entries are added from this page and require both client ID and note.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Controls (Client ID, Reason, Add) - stack on mobile */}
+            {/* Controls (Client ID, Note, Add) - stack on mobile */}
             <div className="grid grid-cols-1 sm:grid-cols-12 items-end gap-3">
               <div className="sm:col-span-4">
                 <label className="mb-1 block text-sm font-medium">Client ID</label>
@@ -416,7 +508,7 @@ export default function SwapFreeControlPage() {
                 />
               </div>
               <div className="sm:col-span-6">
-                <label className="mb-1 block text-sm font-medium">Reason</label>
+                <label className="mb-1 block text-sm font-medium">Note</label>
                 <Input
                   placeholder="Add context for MANUAL exclusion"
                   value={exNoteInput}
@@ -442,7 +534,7 @@ export default function SwapFreeControlPage() {
               <div className="sm:col-span-6">
                 <label className="mb-1 block text-sm font-medium">Filter by Reason</label>
                 <Select value={exReasonFilter} onValueChange={(v) => setExReasonFilter(v as ReasonKey)}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select reason" />
                   </SelectTrigger>
                   <SelectContent>
@@ -515,11 +607,11 @@ export default function SwapFreeControlPage() {
         </Card>
 
         {/* Client Change Frequency */}
-        <Card className="h-[600px] flex flex-col overflow-hidden">
+        <Card className="h-[600px] flex flex-col overflow-hidden lg:col-span-8">
           <CardHeader>
             <CardTitle>Client Change Frequency</CardTitle>
             <CardDescription>
-              Overview of how often clients enter/exit swap-free eligibility · in development (demo)
+              Clients with 2+ swap-free zipcode changes in the last 30 days
             </CardDescription>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -535,24 +627,34 @@ export default function SwapFreeControlPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100021</TableCell>
-                    <TableCell>5</TableCell>
-                    <TableCell>Last 30 days</TableCell>
-                    <TableCell>2025-01-08 07:02:10</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100022</TableCell>
-                    <TableCell>2</TableCell>
-                    <TableCell>Last 30 days</TableCell>
-                    <TableCell>2025-01-07 16:23:44</TableCell>
-                  </TableRow>
-                  <TableRow className="odd:bg-muted/50">
-                    <TableCell>100023</TableCell>
-                    <TableCell>0</TableCell>
-                    <TableCell>Last 30 days</TableCell>
-                    <TableCell>-</TableCell>
-                  </TableRow>
+                  {freqLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                        Loading...
+                      </TableCell>
+                    </TableRow>
+                  ) : freqError ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-destructive py-8">
+                        {freqError}
+                      </TableCell>
+                    </TableRow>
+                  ) : freqRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                        No clients with 2+ changes in last 30 days
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    freqRows.map((row) => (
+                      <TableRow key={row.client_id} className="odd:bg-muted/50">
+                        <TableCell>{row.client_id}</TableCell>
+                        <TableCell>{row.changes}</TableCell>
+                        <TableCell>Last 30 days</TableCell>
+                        <TableCell>{row.last_change ? formatIsoToUtc8(row.last_change) : "-"}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>

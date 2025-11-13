@@ -34,11 +34,12 @@ def zipcode_distribution():
 def zipcode_changes(
 	start: str | None = Query(default=None, description="Start time, e.g. '2025-01-01 00:00:00' (timestamptz)"),
 	end: str | None = Query(default=None, description="End time, e.g. '2025-01-31 23:59:59' (timestamptz)"),
+	client_id: int | None = Query(default=None, ge=1, description="Filter by client ID"),
 	page: int = Query(default=1, ge=1),
 	page_size: int = Query(default=50, ge=1, le=1000),
 ):
 	try:
-		result = get_zipcode_changes(start=start, end=end, page=page, page_size=page_size)
+		result = get_zipcode_changes(start=start, end=end, client_id=client_id, page=page, page_size=page_size)
 		return {"ok": True, **result}
 	except Exception as e:
 		return {"ok": False, "rows": 0, "page": page, "page_size": page_size, "data": [], "error": str(e)}
