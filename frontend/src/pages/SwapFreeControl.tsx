@@ -446,26 +446,25 @@ export default function SwapFreeControlPage() {
                     <TableHead className="w-[120px]">Client ID</TableHead>
                     <TableHead>Zipcode Before</TableHead>
                     <TableHead>Zipcode After</TableHead>
-                    <TableHead>Reason</TableHead>
                     <TableHead className="w-[180px]">Change Time</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {logsLoading ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                         Loading...
                       </TableCell>
                     </TableRow>
                   ) : logsError ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-destructive py-8">
+                      <TableCell colSpan={4} className="text-center text-destructive py-8">
                         {logsError}
                       </TableCell>
                     </TableRow>
                   ) : logRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                         No data
                       </TableCell>
                     </TableRow>
@@ -475,7 +474,6 @@ export default function SwapFreeControlPage() {
                         <TableCell>{r.client_id}</TableCell>
                         <TableCell>{r.zipcode_before}</TableCell>
                         <TableCell>{r.zipcode_after}</TableCell>
-                        <TableCell>{r.change_reason}</TableCell>
                         <TableCell>{formatIsoToUtc8(r.change_time)}</TableCell>
                       </TableRow>
                     ))
