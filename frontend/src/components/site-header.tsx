@@ -10,6 +10,7 @@ import { useI18n } from "@/components/i18n-provider"
 // Route to translation key mapping
 const routeToKeyMap: Record<string, string> = {
   "/template": "pages.template",
+  "/equity-monitor": "pages.equityMonitor",
   "/gold": "pages.goldQuote",
   "/basis": "pages.basisAnalysis",
   "/downloads": "pages.downloads",

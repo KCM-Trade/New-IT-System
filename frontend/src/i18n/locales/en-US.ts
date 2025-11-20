@@ -22,6 +22,7 @@ export const enUS = {
   nav: {
     customerPnLMonitorV2: "AccountID PnL Monitor",
     clientPnLMonitor: "ClientID PnL Monitor",
+    equityMonitor: "Equity - Monitor",
     clientTrading: "Client Trading Analysis",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "Basis Analysis",
@@ -42,6 +43,7 @@ export const enUS = {
   // Page titles
   pages: {
     template: "Template",
+    equityMonitor: "Equity - Monitor",
     goldQuote: "Gold Quote",
     basisAnalysis: "Basis Analysis",
     downloads: "Downloads",

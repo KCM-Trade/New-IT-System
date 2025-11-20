@@ -9,6 +9,7 @@ const BasisPage = lazy(() => import("@/pages/Basis"))
 const GoldQuotePage = lazy(() => import("@/pages/GoldQuote"))
 const DownloadsPage = lazy(() => import("@/pages/Downloads"))
 const WarehousePage = lazy(() => import("@/pages/Warehouse"))
+const EquityMonitorPage = lazy(() => import("@/pages/EquityMonitor"))
 const PositionPage = lazy(() => import("@/pages/Position"))
 const WarehouseProductsPage = lazy(() => import("@/pages/WarehouseProducts"))
 const WarehouseOthersPage = lazy(() => import("@/pages/WarehouseOthers"))
@@ -47,6 +48,7 @@ function App() {
             >
               <Route index element={<CustomerPnLMonitorV2Page />} />
               <Route path="template" element={<DashboardTemplatePage />} />
+              <Route path="equity-monitor" element={<EquityMonitorPage />} />
               <Route path="gold" element={<GoldQuotePage />} />
               <Route path="basis" element={<BasisPage />} />
               <Route path="downloads" element={<DownloadsPage />} />

@@ -39,6 +39,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       avatar: "/avatars/shadcn.jpg",
     },
     navMain: [
+      // fresh grad: Equity - Monitor is placed above AccountID PnL Monitor in the trading accounts section.
+      { title: t("nav.equityMonitor"), url: "/equity-monitor", icon: IconChartBar },
       { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2", icon: IconChartCandle },
       { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor", icon: IconUsers },
       { title: t("nav.swapFreeControl"), url: "/swap-free-control", icon: IconSettings },
