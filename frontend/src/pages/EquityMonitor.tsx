@@ -1,8 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { Calendar as CalendarIcon } from "lucide-react"
-import type { DateRange } from "react-day-picker"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis } from "recharts"
 
 import { useTheme } from "@/components/theme-provider"
@@ -10,8 +8,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 
 // fresh grad: this page is a static equity risk dashboard mock.
@@ -49,12 +45,6 @@ export default function EquityMonitorPage() {
   // filter states are local only – connect them to API query when backend is ready.
   const [server, setServer] = React.useState<string>("mt5-live")
   const [accountId, setAccountId] = React.useState<string>("")
-  const [dateRange, setDateRange] = React.useState<DateRange | undefined>(() => {
-    const to = new Date()
-    const from = new Date()
-    from.setDate(from.getDate() - 30)
-    return { from, to }
-  })
 
   // fresh grad: in the future, you can use these filters to fetch data with useEffect().
 
@@ -110,11 +100,10 @@ export default function EquityMonitorPage() {
     [chartPalette],
   )
 
-  const rangeLabel = React.useMemo(() => {
-    if (!dateRange?.from || !dateRange.to) return "Select date range"
-    const opts: Intl.DateTimeFormatOptions = { month: "short", day: "2-digit", year: "numeric" }
-    return `${dateRange.from.toLocaleDateString("en-US", opts)} - ${dateRange.to.toLocaleDateString("en-US", opts)}`
-  }, [dateRange])
+  const handleQuery = React.useCallback(() => {
+    // fresh grad: hook backend fetch here so filters only trigger when clicking Query.
+    console.log("Trigger API with filters:", { server, accountId })
+  }, [server, accountId])
 
   return (
     <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
@@ -124,54 +113,40 @@ export default function EquityMonitorPage() {
           <CardTitle className="text-base font-semibold">Equity Monitor – Filters</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-4 lg:gap-6">
-            {/* Server selector */}
-            <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
-              <span className="w-28 text-sm text-muted-foreground">Server</span>
-              <Select value={server} onValueChange={setServer}>
-                <SelectTrigger className="h-9 w-full sm:w-48">
-                  <SelectValue placeholder="Select server" />
-                </SelectTrigger>
-                <SelectContent>
-                  {/* fresh grad: options are static here – later you can load from backend config. */}
-                  <SelectItem value="mt5-live">MT5 Live</SelectItem>
-                  <SelectItem value="mt5-demo">MT5 Demo</SelectItem>
-                  <SelectItem value="mt4-live2">MT4 Live 2</SelectItem>
-                </SelectContent>
-              </Select>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+              {/* Server selector */}
+              <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
+                <span className="w-28 text-sm text-muted-foreground">Server</span>
+                <Select value={server} onValueChange={setServer}>
+                  <SelectTrigger className="h-9 w-full sm:w-48">
+                    <SelectValue placeholder="Select server" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {/* fresh grad: options are static here – later you can load from backend config. */}
+                    <SelectItem value="mt5-live">MT5 Live</SelectItem>
+                    <SelectItem value="mt5-demo">MT5 Demo</SelectItem>
+                    <SelectItem value="mt4-live2">MT4 Live 2</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Account Id input */}
+              <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
+                <span className="w-28 text-sm text-muted-foreground">Account ID</span>
+                <Input
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  placeholder="Enter account login"
+                  className="h-9 w-full sm:w-48"
+                />
+              </div>
             </div>
 
-            {/* Account Id input */}
-            <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
-              <span className="w-28 text-sm text-muted-foreground">Account ID</span>
-              <Input
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-                placeholder="Enter account login"
-                className="h-9 w-full sm:w-48"
-              />
-            </div>
-
-            {/* Time range selector */}
-            <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
-              <span className="w-28 text-sm text-muted-foreground">Time Range</span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="h-9 w-full justify-start gap-2 sm:w-64">
-                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                    <span className="truncate text-left text-sm font-normal">{rangeLabel}</span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="range"
-                    selected={dateRange}
-                    onSelect={setDateRange}
-                    numberOfMonths={2}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
+            <div className="flex w-full justify-start sm:w-auto sm:justify-end">
+              <Button className="h-9 w-full sm:w-auto" onClick={handleQuery}>
+                查询
+              </Button>
             </div>
           </div>
 
