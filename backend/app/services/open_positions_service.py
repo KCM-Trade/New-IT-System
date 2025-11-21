@@ -28,6 +28,7 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
         FROM {schema}.mt4_trades t
         WHERE t.CLOSE_TIME = '1970-01-01 00:00:00'
           AND t.cmd IN (0,1)
+          AND t.login NOT LIKE '7%%'
           AND NOT EXISTS (
             SELECT 1
             FROM {schema}.mt4_users u
