@@ -1443,7 +1443,12 @@ export default function CustomerPnLMonitorV2() {
       {/* filter & actions card: responsive layout per guide */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t("pnlMonitor.title")}</CardTitle>
+          <CardTitle
+            className="text-base"
+            style={{ color: isDarkMode ? '#E5E7EB' : '#4B5563' }}
+          >
+            {t("pnlMonitor.title")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1737,7 +1742,17 @@ export default function CustomerPnLMonitorV2() {
         {/* ag-grid requires an explicit height on the container */}
         <div
           ref={gridContainerRef}
-          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} h-[600px] w-full min-h-[400px] relative`}
+          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} pnlv2-theme h-[600px] w-full min-h-[400px] relative`}
+          style={{
+            ['--ag-header-background-color' as any]: isDarkMode ? '#F5F5F5' : '#101828',
+            ['--ag-header-foreground-color' as any]: isDarkMode ? '#05060A' : '#FFFFFF',
+            ['--ag-header-column-separator-color' as any]: isDarkMode ? '#05060A' : '#FFFFFF',
+            ['--ag-header-column-separator-width' as any]: '1px',
+            ['--ag-background-color' as any]: 'hsl(var(--card))',
+            ['--ag-foreground-color' as any]: 'hsl(var(--foreground))',
+            ['--ag-row-border-color' as any]: 'hsl(var(--border))',
+            ['--ag-odd-row-background-color' as any]: isDarkMode ? 'rgba(255,223,128,0.20)' : '#FFF7E0'
+          }}
         >
           <AgGridReact
             rowData={rows}
@@ -1766,12 +1781,18 @@ export default function CustomerPnLMonitorV2() {
               // fresh grad note: ensure rowIndex 0 is treated as even; guard for non-number
               const idx = typeof params.node.rowIndex === 'number' ? params.node.rowIndex : -1
               if (idx % 2 === 0) {
-                return { backgroundColor: 'var(--ag-background-color)' }
+                return { backgroundColor: isDarkMode ? 'rgba(255,223,128,0.12)' : '#FFFCF2' }
               }
-              return { backgroundColor: 'var(--ag-odd-row-background-color)' }
+              return { backgroundColor: isDarkMode ? 'rgba(255,223,128,0.20)' : '#FFF7E0' }
             }}
           />
         </div>
+        <style>{`
+          .pnlv2-theme .ag-header {
+            border: 1px solid ${isDarkMode ? '#05060A' : '#FFFFFF'};
+            border-bottom-width: 1px;
+          }
+        `}</style>
       </div>
 
       {/* 分页控件 */}
