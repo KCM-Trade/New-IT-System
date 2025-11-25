@@ -11,4 +11,12 @@ from .trading_analysis import (
     TradingAnalysisResponse,
 )
 
+from .ib_data import (
+    IBAnalyticsRequest,
+    IBAnalyticsRow,
+    IBAnalyticsResponse,
+    IBAnalyticsMetrics,
+    LastQueryResponse,
+)
+
 
