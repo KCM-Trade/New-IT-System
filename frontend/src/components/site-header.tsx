@@ -17,6 +17,7 @@ const routeToKeyMap: Record<string, string> = {
   "/warehouse/agent-global": "pages.warehouseAgentGlobal",
   "/warehouse": "pages.warehouse",
   "/warehouse/products": "pages.warehouseProducts",
+  "/warehouse/ib-data": "pages.ibData",
   "/warehouse/others": "pages.warehouseOthers",
   "/positions": "pages.position",
   "/position": "pages.position",

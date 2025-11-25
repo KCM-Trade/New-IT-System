@@ -13,6 +13,7 @@ const EquityMonitorPage = lazy(() => import("@/pages/EquityMonitor"))
 const PositionPage = lazy(() => import("@/pages/Position"))
 const WarehouseProductsPage = lazy(() => import("@/pages/WarehouseProducts"))
 const WarehouseOthersPage = lazy(() => import("@/pages/WarehouseOthers"))
+const IBDataPage = lazy(() => import("@/pages/IBData"))
 const LoginIPsPage = lazy(() => import("@/pages/LoginIPs"))
 const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
@@ -54,6 +55,7 @@ function App() {
               <Route path="downloads" element={<DownloadsPage />} />
               <Route path="warehouse" element={<WarehousePage />} />
               <Route path="warehouse/products" element={<WarehouseProductsPage />} />
+              <Route path="warehouse/ib-data" element={<IBDataPage />} />
               <Route path="warehouse/others" element={<WarehouseOthersPage />} />
               <Route path="warehouse/agent-global" element={<AgentGlobalPage />} />
               <Route path="position" element={<PositionPage />} />
