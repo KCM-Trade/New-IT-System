@@ -42,6 +42,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           { title: t("nav.clientTrading"), url: "/client-trading" },
           { title: t("nav.loginIPs"), url: "/login-ips" },
           { title: t("nav.ibidLots"), url: "/ibid-lots" },
+          { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
         ],
       },
       {
@@ -50,7 +51,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         children: [
           { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2" },
           { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor" },
-          { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
           { title: t("nav.ibData"), url: "/warehouse/ib-data" },
           { title: t("nav.position"), url: "/position" },
         ],
