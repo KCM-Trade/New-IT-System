@@ -39,6 +39,10 @@ export const enUS = {
     customerPnLMonitor: "Customer P&L Monitor",
     others: "Others",
     getHelp: "Get Help",
+    cnCsDepartment: "CN CS Department",
+    globalCsDepartment: "Global CS Department",
+    riskControlDepartment: "Risk Control",
+    otherSection: "Other",
   },
   
   // Page titles

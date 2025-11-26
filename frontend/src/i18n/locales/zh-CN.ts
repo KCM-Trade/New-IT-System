@@ -39,6 +39,10 @@ export const zhCN = {
     customerPnLMonitor: "客户盈亏监控",
     others: "其他",
     getHelp: "获取帮助",
+    cnCsDepartment: "CN CS Department",
+    globalCsDepartment: "Global CS Department",
+    riskControlDepartment: "Risk Control",
+    otherSection: "Other",
   },
   
   // Page titles

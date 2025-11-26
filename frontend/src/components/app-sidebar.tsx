@@ -1,12 +1,8 @@
 import * as React from "react"
 import {
-  IconCamera,
   IconChartBar,
-  IconChartCandle,
   IconDashboard,
   IconDatabase,
-  IconFileAi,
-  IconFileDescription,
   IconFileWord,
   IconHelp,
   IconListDetails,
@@ -38,82 +34,44 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       email: "m@example.com",
       avatar: "/avatars/shadcn.jpg",
     },
-    navMain: [
-      // fresh grad: Equity - Monitor is placed above AccountID PnL Monitor in the trading accounts section.
-      { title: t("nav.equityMonitor"), url: "/equity-monitor", icon: IconChartBar },
-      { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2", icon: IconChartCandle },
-      { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor", icon: IconUsers },
-      { title: t("nav.swapFreeControl"), url: "/swap-free-control", icon: IconSettings },
-      { title: t("nav.clientTrading"), url: "/client-trading", icon: IconReport },
-      { title: t("nav.basisAnalysis"), url: "/basis", icon: IconDashboard },
-      { title: t("nav.downloads"), url: "/downloads", icon: IconListDetails },
+    navSections: [
       {
-        title: t("nav.warehouse"),
+        title: t("nav.cnCsDepartment"),
+        icon: IconUsers,
+        children: [
+          { title: t("nav.clientTrading"), url: "/client-trading" },
+          { title: t("nav.loginIPs"), url: "/login-ips" },
+        ],
+      },
+      {
+        title: t("nav.globalCsDepartment"),
         icon: IconChartBar,
         children: [
+          { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2" },
+          { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor" },
           { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
           { title: t("nav.ibData"), url: "/warehouse/ib-data" },
           { title: t("nav.position"), url: "/position" },
-          { title: t("nav.warehouseOthers"), url: "/warehouse/others" },
         ],
       },
-      { title: t("nav.loginIPs"), url: "/login-ips", icon: IconUsers },
-      { title: t("nav.profitAnalysis"), url: "/profit", icon: IconReport },
       {
-        title: t("nav.others"),
-        icon: IconSettings,
+        title: t("nav.riskControlDepartment"),
+        icon: IconDashboard,
         children: [
+          { title: t("nav.equityMonitor"), url: "/equity-monitor" },
+          { title: t("nav.swapFreeControl"), url: "/swap-free-control" },
+          { title: t("nav.basisAnalysis"), url: "/basis" },
+          { title: t("nav.profitAnalysis"), url: "/profit" },
+        ],
+      },
+      {
+        title: t("nav.otherSection"),
+        icon: IconListDetails,
+        children: [
+          { title: t("nav.downloads"), url: "/downloads" },
           { title: t("nav.template"), url: "/template" },
           { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
           { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
-        ],
-      },
-    ],
-    navClouds: [
-      {
-        title: "Capture",
-        icon: IconCamera,
-        isActive: true,
-        url: "#",
-        items: [
-          {
-            title: "Active Proposals",
-            url: "#",
-          },
-          {
-            title: "Archived",
-            url: "#",
-          },
-        ],
-      },
-      {
-        title: "Proposal",
-        icon: IconFileDescription,
-        url: "#",
-        items: [
-          {
-            title: "Active Proposals",
-            url: "#",
-          },
-          {
-            title: "Archived",
-            url: "#",
-          },
-        ],
-      },
-      {
-        title: "Prompts",
-        icon: IconFileAi,
-        url: "#",
-        items: [
-          {
-            title: "Active Proposals",
-            url: "#",
-          },
-          {
-            title: "Archived",
-            url: "#",
-          },
         ],
       },
     ],
@@ -142,7 +100,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
+        <NavMain items={data.navSections} />
         <NavDocuments items={data.documents} />
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>
