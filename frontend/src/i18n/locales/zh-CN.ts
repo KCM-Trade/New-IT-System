@@ -43,6 +43,7 @@ export const zhCN = {
     globalCsDepartment: "Global CS Department",
     riskControlDepartment: "Risk Control",
     otherSection: "Other",
+    ibidLots: "IBID 手数查询",
   },
   
   // Page titles
@@ -67,6 +68,13 @@ export const zhCN = {
     settings: "设置",
     search: "搜索",
     configuration: "配置",
+    ibidLots: "IBID 手数查询",
+  },
+  
+  ibidLotsPage: {
+    description: "该功能仅支持公司内网或VPN访问，请提前确认网络环境。",
+    note: "点击下方按钮会在新标签中打开 IBID 手数查询系统。",
+    button: "打开查询系统",
   },
   
   // Configuration

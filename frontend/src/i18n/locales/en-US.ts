@@ -43,6 +43,7 @@ export const enUS = {
     globalCsDepartment: "Global CS Department",
     riskControlDepartment: "Risk Control",
     otherSection: "Other",
+    ibidLots: "IBID Lots Lookup",
   },
   
   // Page titles
@@ -67,6 +68,13 @@ export const enUS = {
     settings: "Settings",
     search: "Search",
     configuration: "Configuration",
+    ibidLots: "IBID Lots Lookup",
+  },
+  
+  ibidLotsPage: {
+    description: "This tool is only reachable from the corporate network or VPN.",
+    note: "Use the button below to open the IBID lots lookup in a new tab.",
+    button: "Open Lookup",
   },
   
   // Configuration

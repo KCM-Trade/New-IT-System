@@ -18,6 +18,7 @@ const LoginIPsPage = lazy(() => import("@/pages/LoginIPs"))
 const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
 const ClientTradingAnalyticsPage = lazy(() => import("@/pages/ClientTradingAnalytics"))
+const IbidLotsPage = lazy(() => import("@/pages/IbidLots"))
 const SwapFreeControlPage = lazy(() => import("@/pages/SwapFreeControl"))
 const CustomerPnLMonitorPage = lazy(() => import("@/pages/CustomerPnLMonitor"))
 const CustomerPnLMonitorV2Page = lazy(() => import("@/pages/CustomerPnLMonitorV2"))
@@ -62,6 +63,7 @@ function App() {
               <Route path="login-ips" element={<LoginIPsPage />} />
               <Route path="profit" element={<ProfitPage />} />
               <Route path="client-trading" element={<ClientTradingAnalyticsPage />} />
+              <Route path="ibid-lots" element={<IbidLotsPage />} />
               <Route path="swap-free-control" element={<SwapFreeControlPage />} />
               <Route path="customer-pnl-monitor" element={<CustomerPnLMonitorPage />} />
               <Route path="customer-pnl-monitor-v2" element={<CustomerPnLMonitorV2Page />} />

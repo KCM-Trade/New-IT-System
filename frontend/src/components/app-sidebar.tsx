@@ -41,6 +41,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         children: [
           { title: t("nav.clientTrading"), url: "/client-trading" },
           { title: t("nav.loginIPs"), url: "/login-ips" },
+          { title: t("nav.ibidLots"), url: "/ibid-lots" },
         ],
       },
       {

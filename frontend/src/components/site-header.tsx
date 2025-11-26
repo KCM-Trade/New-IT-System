@@ -24,6 +24,7 @@ const routeToKeyMap: Record<string, string> = {
   "/login-ips": "pages.loginIPs",
   "/profit": "pages.profitAnalysis",
   "/client-trading": "pages.clientTrading",
+  "/ibid-lots": "pages.ibidLots",
   "/swap-free-control": "pages.swapFreeControl",
   "/customer-pnl-monitor": "pages.customerPnLMonitor",
   "/customer-pnl-monitor-v2": "pages.customerPnLMonitorV2",
