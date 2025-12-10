@@ -86,8 +86,8 @@ interface ClientAccountDetail {
 function formatCurrency(value: number) {
   const sign = value >= 0 ? "" : "-"
   const abs = Math.abs(value)
-  // Show up to 4 decimals, trim trailing zeros (e.g., 0.0000 -> 0, 134.4300 -> 134.43)
-  return `${sign}$${abs.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}`
+  // Round to integer, no decimals (updated per request)
+  return `${sign}$${Math.round(abs).toLocaleString()}`
 }
 
 function toNumber(v: unknown, fallback = 0): number {
@@ -1276,7 +1276,7 @@ export default function ClientPnLMonitor() {
 
             {/* 移动端：刷新单独一行，按钮占满整行 */}
             <div className="sm:hidden">
-              <Button onClick={handleClientRefresh} className="h-9 w-full" disabled={isRefreshing}>
+              <Button onClick={handleClientRefresh} className="h-9 w-full" disabled={true}>
                 {isRefreshing ? (t('pnlMonitor.refreshing') || '刷新中…') : (t('pnlMonitor.refresh') || '刷新')}
               </Button>
             </div>
@@ -1396,7 +1396,7 @@ export default function ClientPnLMonitor() {
                   </Button>
                 </div>
                 {/* 增量刷新 */}
-                <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={isRefreshing}>
+                <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={true}>
                   {isRefreshing ? (t('pnlMonitor.refreshing') || '刷新中…') : (t('pnlMonitor.refresh') || '刷新')}
                 </Button>
                 {/* 筛选按钮：放在列显示切换左边 */}

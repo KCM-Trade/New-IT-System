@@ -117,7 +117,8 @@ function formatCurrency(value: number, productConfig?: ProductConfig) {
   const currency = productConfig?.currency || 'USD'
   const symbol = currency === 'USD' ? '$' : currency
   
-  return `${sign}${symbol}${abs.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  // Updated to round to integer per request (no decimals)
+  return `${sign}${symbol}${Math.round(abs).toLocaleString()}`
 }
 
 function toNumber(v: unknown, fallback = 0): number {
@@ -1505,7 +1506,7 @@ export default function CustomerPnLMonitorV2() {
 
             {/* actions */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-              <Button onClick={handleManualRefresh} disabled={isRefreshing || (server !== 'MT5' && server !== 'MT4Live2')} className="h-9 w-full sm:w-auto">
+              <Button onClick={handleManualRefresh} disabled={true} className="h-9 w-full sm:w-auto">
                 {isRefreshing ? t("pnlMonitor.refreshing") : t("pnlMonitor.refresh")}
               </Button>
             </div>
