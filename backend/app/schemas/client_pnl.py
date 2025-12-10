@@ -32,6 +32,8 @@ class ClientPnLSummaryItem(BaseModel):
     # 平仓盈亏
     total_closed_profit_usd: float = 0.0
     total_commission_usd: float = 0.0
+    total_ib_commission_income_usd: float = 0.0
+    total_net_profit_with_ib_usd: float = 0.0
     
     # 资金流动
     total_deposit_usd: float = 0.0
@@ -97,6 +99,7 @@ class ClientAccountItem(BaseModel):
     # 账户交易统计
     closed_profit_usd: float = 0.0
     commission_usd: float = 0.0
+    ib_commission_income_usd: float = 0.0
     deposit_usd: float = 0.0
     withdrawal_usd: float = 0.0
     volume_lots: float = 0.0

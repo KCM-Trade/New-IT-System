@@ -56,6 +56,8 @@ def get_client_pnl_summary_paginated(
         "total_equity_usd",
         "total_closed_profit_usd",
         "total_commission_usd",
+        "total_ib_commission_income_usd",
+        "total_net_profit_with_ib_usd",
         "total_deposit_usd",
         "total_withdrawal_usd",
         "net_deposit_usd",
@@ -101,6 +103,8 @@ def get_client_pnl_summary_paginated(
             "total_equity_usd": "total_equity_usd",
             "total_closed_profit_usd": "total_closed_profit_usd",
             "total_commission_usd": "total_commission_usd",
+            "total_ib_commission_income_usd": "total_ib_commission_income_usd",
+            "total_net_profit_with_ib_usd": "total_net_profit_with_ib_usd",
             "total_deposit_usd": "total_deposit_usd",
             "total_withdrawal_usd": "total_withdrawal_usd",
             "net_deposit_usd": "net_deposit_usd",
@@ -204,6 +208,8 @@ def get_client_pnl_summary_paginated(
         "  COALESCE(total_equity_usd, 0)::numeric AS total_equity_usd, "
         "  COALESCE(total_closed_profit_usd, 0)::numeric AS total_closed_profit_usd, "
         "  COALESCE(total_commission_usd, 0)::numeric AS total_commission_usd, "
+        "  COALESCE(total_ib_commission_income_usd, 0)::numeric AS total_ib_commission_income_usd, "
+        "  COALESCE(total_net_profit_with_ib_usd, 0)::numeric AS total_net_profit_with_ib_usd, "
         "  COALESCE(total_deposit_usd, 0)::numeric AS total_deposit_usd, "
         "  COALESCE(total_withdrawal_usd, 0)::numeric AS total_withdrawal_usd, "
         "  (COALESCE(total_deposit_usd, 0) - COALESCE(total_withdrawal_usd, 0))::numeric AS net_deposit_usd, "
@@ -289,6 +295,7 @@ def get_client_accounts(client_id: int) -> List[dict]:
                     equity_usd,
                     closed_profit_usd,
                     commission_usd,
+                    ib_commission_income_usd,
                     deposit_usd,
                     withdrawal_usd,
                     volume_lots,

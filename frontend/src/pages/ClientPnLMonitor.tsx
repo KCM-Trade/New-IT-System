@@ -39,6 +39,8 @@ interface ClientPnLSummaryRow {
   // 平仓盈亏
   total_closed_profit_usd: number | string
   total_commission_usd: number | string
+  total_ib_commission_income_usd: number | string
+  total_net_profit_with_ib_usd: number | string
   
   // 资金流动
   total_deposit_usd: number | string
@@ -76,6 +78,8 @@ interface ClientAccountDetail {
   equity_usd: number | string
   closed_profit_usd: number | string
   commission_usd: number | string
+  ib_commission_income_usd: number | string
+  net_profit_with_ib_usd?: number | string
   deposit_usd: number | string
   withdrawal_usd: number | string
   volume_lots: number | string
@@ -193,7 +197,8 @@ export default function ClientPnLMonitor() {
     total_floating_pnl_usd: true,
     total_equity_usd: false,
     total_closed_profit_usd: true,
-    total_commission_usd: false,
+    total_ib_commission_income_usd: false,
+    total_net_profit_with_ib_usd: true,
     total_deposit_usd: false,
     total_withdrawal_usd: false,
     net_deposit_usd: true,
@@ -240,7 +245,8 @@ export default function ClientPnLMonitor() {
     { id: 'total_floating_pnl_usd', label: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'), type: 'number', filterable: true },
     { id: 'total_equity_usd', label: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'), type: 'number', filterable: true },
     { id: 'total_closed_profit_usd', label: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'), type: 'number', filterable: true },
-    { id: 'total_commission_usd', label: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'), type: 'number', filterable: true },
+    { id: 'total_ib_commission_income_usd', label: tz('clientPnl.columns.totalCommissionUsd', 'IB佣金 (USD)', 'IB Commission (USD)'), type: 'number', filterable: true },
+    { id: 'total_net_profit_with_ib_usd', label: tz('clientPnl.columns.totalNetProfitWithIbUsd', '净盈亏(含佣金) (USD)', 'Net PnL (w/ Comm) (USD)'), type: 'number', filterable: true },
     { id: 'total_deposit_usd', label: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'), type: 'number', filterable: true },
     { id: 'total_withdrawal_usd', label: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'), type: 'number', filterable: true },
     { id: 'net_deposit_usd', label: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'), type: 'number', filterable: true },
@@ -989,8 +995,8 @@ export default function ClientPnLMonitor() {
       hide: !columnVisibility.total_closed_profit_usd,
     },
     {
-      field: "total_commission_usd",
-      headerName: tz("clientPnl.columns.totalCommissionUsd", "总佣金 (USD)", "Total Commission (USD)"),
+      field: "total_ib_commission_income_usd",
+      headerName: tz("clientPnl.columns.totalCommissionUsd", "IB佣金 (USD)", "IB Commission (USD)"),
       width: 140,
       minWidth: 120,
       maxWidth: 200,
@@ -998,12 +1004,49 @@ export default function ClientPnLMonitor() {
       filter: true,
       sortValueGetter: detailSortValueGetter,
       cellRenderer: (params: any) => {
-        const value = toNumber(params.value)
+        const rowType = params.data?._rowType
+        const value = rowType === 'detail' 
+          ? toNumber(params.data.ib_commission_income_usd) 
+          : toNumber(params.value)
         return (
-          <span className="text-right text-sm font-semibold">{formatCurrency(value)}</span>
+          <span className="text-right text-sm font-semibold text-blue-600 dark:text-blue-400">{formatCurrency(value)}</span>
         )
       },
-      hide: !columnVisibility.total_commission_usd,
+      hide: !columnVisibility.total_ib_commission_income_usd,
+    },
+    {
+      field: "total_net_profit_with_ib_usd",
+      headerName: tz("clientPnl.columns.totalNetProfitWithIbUsd", "净盈亏(含佣金) (USD)", "Net PnL (w/ Comm) (USD)"),
+      width: 150,
+      minWidth: 120,
+      maxWidth: 200,
+      sortable: true,
+      filter: true,
+      sortValueGetter: detailSortValueGetter,
+      cellStyle: (params: any) => {
+        const rowType = params.data?._rowType
+        return rowType === 'detail' ? undefined : { backgroundColor: 'rgba(255,165,0,0.08)' } // 橙色半透明底色区分
+      },
+      cellRenderer: (params: any) => {
+        const rowType = params.data?._rowType
+        let value = 0
+        if (rowType === 'detail') {
+          // 明细行需前端动态计算
+          const closed = toNumber(params.data.closed_profit_usd)
+          const ib = toNumber(params.data.ib_commission_income_usd)
+          value = closed + ib
+        } else {
+          // 主行直接取后端返回
+          value = toNumber(params.value)
+        }
+        
+        return (
+          <span className={`text-right ${rowType === 'detail' ? 'text-sm font-semibold' : ''} ${value < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatCurrency(value)}
+          </span>
+        )
+      },
+      hide: !columnVisibility.total_net_profit_with_ib_usd,
     },
     {
       field: "total_deposit_usd",
@@ -1315,7 +1358,8 @@ export default function ClientPnLMonitor() {
                       total_floating_pnl_usd: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'),
                       total_equity_usd: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'),
                       total_closed_profit_usd: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'),
-                      total_commission_usd: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'),
+                      total_ib_commission_income_usd: tz('clientPnl.columns.totalCommissionUsd', 'IB佣金 (USD)', 'IB Commission (USD)'),
+                      total_net_profit_with_ib_usd: tz('clientPnl.columns.totalNetProfitWithIbUsd', '净盈亏(含佣金) (USD)', 'Net PnL (w/ Comm) (USD)'),
                       total_deposit_usd: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'),
                       total_withdrawal_usd: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'),
                       net_deposit_usd: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'),
@@ -1433,7 +1477,8 @@ export default function ClientPnLMonitor() {
                       total_floating_pnl_usd: tz('clientPnl.columns.totalFloatingUsd', '总浮动盈亏 (USD)', 'Total Floating PnL (USD)'),
                       total_equity_usd: tz('clientPnl.columns.totalEquityUsd', '总净值 (USD)', 'Total Equity (USD)'),
                       total_closed_profit_usd: tz('clientPnl.columns.totalClosedProfitUsd', '总平仓盈亏 (USD)', 'Total Closed Profit (USD)'),
-                      total_commission_usd: tz('clientPnl.columns.totalCommissionUsd', '总佣金 (USD)', 'Total Commission (USD)'),
+                      total_ib_commission_income_usd: tz('clientPnl.columns.totalCommissionUsd', 'IB佣金 (USD)', 'IB Commission (USD)'),
+                      total_net_profit_with_ib_usd: tz('clientPnl.columns.totalNetProfitWithIbUsd', '净盈亏(含佣金) (USD)', 'Net PnL (w/ Comm) (USD)'),
                       total_deposit_usd: tz('clientPnl.columns.totalDepositUsd', '总入金 (USD)', 'Total Deposit (USD)'),
                       total_withdrawal_usd: tz('clientPnl.columns.totalWithdrawalUsd', '总出金 (USD)', 'Total Withdrawal (USD)'),
                       net_deposit_usd: tz('clientPnl.columns.netDepositUsd', '净入金 (USD)', 'Net Deposit (USD)'),
