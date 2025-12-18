@@ -197,7 +197,7 @@ export default function ClientPnLMonitor() {
     total_floating_pnl_usd: true,
     total_equity_usd: false,
     total_closed_profit_usd: true,
-    total_ib_commission_income_usd: false,
+    total_ib_commission_income_usd: true,
     total_net_profit_with_ib_usd: true,
     total_deposit_usd: false,
     total_withdrawal_usd: false,
