@@ -165,6 +165,21 @@ def get_client_pnl_summary_paginated(
                 op = str(rule.get("op"))
                 val = rule.get("value")
                 val2 = rule.get("value2")
+
+                # 特殊处理：account_last_updated（查询 pnl_client_accounts）
+                if field == "account_last_updated" and op in ("after", "gt", ">"):
+                    sub_clauses.append(
+                        """
+                        EXISTS (
+                            SELECT 1 FROM public.pnl_client_accounts a 
+                            WHERE a.client_id = public.pnl_client_summary.client_id 
+                              AND a.last_updated > %s::timestamp
+                        )
+                        """
+                    )
+                    sub_params.append(val)
+                    continue
+
                 col = field_map.get(field)
                 if not col:
                     continue

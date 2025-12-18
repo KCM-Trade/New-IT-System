@@ -235,6 +235,10 @@ export default function ClientPnLMonitor() {
   // fresh grad note: limit zipcode details to keep banner readable
   const ZIPCODE_DETAIL_LIMIT = 10
 
+  // Quick Time Range Filter state
+  // fresh grad note: new state for quick time range filtering of account updates
+  const [timeRange, setTimeRange] = useState<string>("all")
+
   // ClientPnL 可筛选字段定义（供筛选器使用）
   const CLIENT_FILTER_COLUMNS: ColumnMeta[] = useMemo(() => ([
     { id: 'client_id', label: tz('clientPnl.columns.clientId', '客户ID', 'Client ID'), type: 'text', filterable: true },
@@ -597,6 +601,51 @@ export default function ClientPnLMonitor() {
   const handleClearSearch = useCallback(() => {
     setSearchInput("")
     setSearchValue("")
+    setPageIndex(0)
+  }, [])
+
+  // Quick Time Range Handler
+  const handleTimeRangeChange = useCallback((value: string) => {
+    setTimeRange(value)
+    
+    // Calculate target date based on range
+    let targetDate: Date | null = null
+    const now = new Date()
+    
+    if (value === '1w') {
+      targetDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    } else if (value === '2w') {
+      targetDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+    } else if (value === '1m') {
+      targetDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    } else if (value === '3m') {
+      targetDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+    }
+    
+    // Update filters
+    setAppliedFilters(prev => {
+      // Remove existing account_last_updated rule if any
+      const existingRules = prev?.rules.filter(r => r.field !== 'account_last_updated') || []
+      
+      if (!targetDate) {
+        // "all" selected -> just return remaining rules (or null if empty)
+        if (existingRules.length === 0) return null
+        return { join: prev?.join || 'AND', rules: existingRules }
+      }
+      
+      // Add new rule
+      const newRule = {
+        field: 'account_last_updated',
+        op: 'after',
+        value: targetDate.toISOString()
+      }
+      
+      return {
+        join: prev?.join || 'AND',
+        rules: [...existingRules, newRule]
+      }
+    })
+    
     setPageIndex(0)
   }, [])
   
@@ -1317,6 +1366,22 @@ export default function ClientPnLMonitor() {
               </div>
             </div>
 
+            {/* Time Range Selector (Mobile: separate row) */}
+            <div className="sm:hidden w-full">
+              <Select value={timeRange} onValueChange={handleTimeRangeChange}>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder={t('pnlMonitor.timeRange', '账户活跃时间')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('pnlMonitor.timeRangeAll', '全部时间', 'All Time')}</SelectItem>
+                  <SelectItem value="1w">{t('pnlMonitor.timeRange1w', '过去 1 周', 'Past 1 Week')}</SelectItem>
+                  <SelectItem value="2w">{t('pnlMonitor.timeRange2w', '过去 2 周', 'Past 2 Weeks')}</SelectItem>
+                  <SelectItem value="1m">{t('pnlMonitor.timeRange1m', '过去 1 个月', 'Past 1 Month')}</SelectItem>
+                  <SelectItem value="3m">{t('pnlMonitor.timeRange3m', '过去 3 个月', 'Past 3 Months')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* 移动端：刷新单独一行，按钮占满整行 */}
             <div className="sm:hidden">
               <Button onClick={handleClientRefresh} className="h-9 w-full" disabled={true}>
@@ -1411,6 +1476,22 @@ export default function ClientPnLMonitor() {
               
               {/* 右侧：搜索 + 筛选 + 列显示切换按钮 */}
               <div className="flex items-center gap-2">
+                {/* Time Range Selector (Desktop) */}
+                <div className="w-48">
+                  <Select value={timeRange} onValueChange={handleTimeRangeChange}>
+                    <SelectTrigger className="h-9 w-full">
+                      <SelectValue placeholder={t('pnlMonitor.timeRange', '账户活跃时间')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{t('pnlMonitor.timeRangeAll', '全部时间', 'All Time')}</SelectItem>
+                      <SelectItem value="1w">{t('pnlMonitor.timeRange1w', '过去 1 周', 'Past 1 Week')}</SelectItem>
+                      <SelectItem value="2w">{t('pnlMonitor.timeRange2w', '过去 2 周', 'Past 2 Weeks')}</SelectItem>
+                      <SelectItem value="1m">{t('pnlMonitor.timeRange1m', '过去 1 个月', 'Past 1 Month')}</SelectItem>
+                      <SelectItem value="3m">{t('pnlMonitor.timeRange3m', '过去 3 个月', 'Past 3 Months')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* 搜索框 */}
                 <div className="flex items-center gap-1">
                   <Input
@@ -1439,6 +1520,7 @@ export default function ClientPnLMonitor() {
                     <Search className="h-4 w-4" />
                   </Button>
                 </div>
+
                 {/* 增量刷新 */}
                 <Button onClick={handleClientRefresh} className="h-9 gap-2 whitespace-nowrap" disabled={true}>
                   {isRefreshing ? (t('pnlMonitor.refreshing') || '刷新中…') : (t('pnlMonitor.refresh') || '刷新')}

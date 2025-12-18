@@ -127,6 +127,12 @@ export const zhCN = {
     showColumns: "显示列",
     clearAll: "清空所有",
     filterConditions: "筛选条件 ({join}):",
+    timeRange: "账户活跃时间",
+    timeRangeAll: "全部时间",
+    timeRange1w: "过去 1 周",
+    timeRange2w: "过去 2 周",
+    timeRange1m: "过去 1 个月",
+    timeRange3m: "过去 3 个月",
     // Column headers
     columns: {
       login: "账户ID",

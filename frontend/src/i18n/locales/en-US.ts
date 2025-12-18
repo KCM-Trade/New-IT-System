@@ -127,6 +127,12 @@ export const enUS = {
     showColumns: "Show Columns",
     clearAll: "Clear All",
     filterConditions: "Filter Conditions ({join}):",
+    timeRange: "Account Activity",
+    timeRangeAll: "All Time",
+    timeRange1w: "Past 1 Week",
+    timeRange2w: "Past 2 Weeks",
+    timeRange1m: "Past 1 Month",
+    timeRange3m: "Past 3 Months",
     // Column headers
     columns: {
       login: "Account ID",
