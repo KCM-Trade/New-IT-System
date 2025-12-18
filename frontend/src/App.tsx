@@ -48,7 +48,7 @@ function App() {
                 </PrivateRoute>
               }
             >
-              <Route index element={<CustomerPnLMonitorV2Page />} />
+              <Route index element={<BasisPage />} />
               <Route path="template" element={<DashboardTemplatePage />} />
               <Route path="equity-monitor" element={<EquityMonitorPage />} />
               <Route path="gold" element={<GoldQuotePage />} />

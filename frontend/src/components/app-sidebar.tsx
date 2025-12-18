@@ -49,7 +49,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         title: t("nav.globalCsDepartment"),
         icon: IconChartBar,
         children: [
-          { title: t("nav.customerPnLMonitorV2"), url: "/customer-pnl-monitor-v2" },
           { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor" },
           { title: t("nav.ibData"), url: "/warehouse/ib-data" },
           { title: t("nav.position"), url: "/position" },
