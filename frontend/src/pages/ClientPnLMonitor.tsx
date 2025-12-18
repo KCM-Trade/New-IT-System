@@ -1628,12 +1628,13 @@ export default function ClientPnLMonitor() {
             rowData={flatRows}
             columnDefs={columnDefs}
             gridOptions={{ theme: 'legacy' }}
-            headerHeight={40}
             defaultColDef={{
               sortable: true,
               filter: true,
               resizable: true,
               minWidth: 100,
+              wrapHeaderText: true,
+              autoHeaderHeight: true,
             }}
             getRowId={(params) => {
               const d = params.data as any
