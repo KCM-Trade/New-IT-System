@@ -180,6 +180,7 @@ class ClickHouseService:
             print(f"ClickHouse Query Error: {e}")
             import traceback
             traceback.print_exc()
-            return {"data": [], "statistics": {}}
+            # 抛出异常供上层处理，不再吞掉错误
+            raise e
 
 clickhouse_service = ClickHouseService()

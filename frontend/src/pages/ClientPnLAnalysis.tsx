@@ -144,6 +144,24 @@ export default function ClientPnLAnalysis() {
       }
 
       const response = await fetch(`/api/v1/client-pnl-analysis/query?${params}`)
+      
+      if (!response.ok) {
+        // Handle HTTP errors
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.detail || `Server error: ${response.status}`
+        
+        // Check for specific 503 Service Unavailable (likely ClickHouse waking up)
+        if (response.status === 503) {
+           alert("⚠️ 数据库服务正在唤醒中，请耐心等待 30-60 秒后再次点击查询。\n\nDatabase is waking up, please retry in 30-60 seconds.")
+        } else {
+           console.error('Query failed:', errorMessage)
+           alert(`查询失败 (Query Failed): ${errorMessage}`)
+        }
+        setRows([])
+        setStats(null)
+        return
+      }
+
       const result = await response.json()
       
       if (result.ok) {
@@ -395,9 +413,14 @@ export default function ClientPnLAnalysis() {
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
       {/* Demo Warning Banner */}
-      <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex items-center gap-2">
-        <span className="font-semibold">⚠️ 快速预览版 (Preview)</span>
-        <span>— 当前数据截止至 2025-12-13。</span>
+      <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold">预览版 (Preview)</span>
+          <span>— 当前数据截止至 2025-12-13。</span>
+        </div>
+        <div className="ml-0 sm:ml-7 text-xs opacity-90">
+          当前 ClickHouse database 服务器处于 Dev 模式（30min 自动休眠）。首次加载时间可能略长（需唤醒），后续刷新时间恢复正常。
+        </div>
       </div>
 
       <Card>

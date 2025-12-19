@@ -7,7 +7,7 @@ from app.services.clickhouse_service import clickhouse_service
 router = APIRouter(prefix="/client-pnl-analysis")
 
 @router.get("/query", response_model=Dict[str, Any])
-async def query_client_pnl_analysis(
+def query_client_pnl_analysis(
     start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
     search: Optional[str] = Query(None, description="Search by Client ID or Name"),
@@ -37,10 +37,14 @@ async def query_client_pnl_analysis(
         }
     except Exception as e:
         print(f"❌ [ERROR] API Error: {str(e)}")
-        # In production, log the error properly
-        return {
-            "ok": False,
-            "error": str(e),
-            "data": []
-        }
+        # Check if it's likely a connection/waking up issue
+        err_msg = str(e)
+        if "timeout" in err_msg.lower() or "connection" in err_msg.lower() or "502" in err_msg:
+            # Return specific code for connection issues
+            raise HTTPException(
+                status_code=503, 
+                detail="ClickHouse database might be waking up (Paused). Please try again in 30-60 seconds."
+            )
+        
+        raise HTTPException(status_code=500, detail=f"Query failed: {err_msg}")
 
