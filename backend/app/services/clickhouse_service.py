@@ -70,30 +70,36 @@ class ClickHouseService:
                 ib_costs AS (
                     SELECT 
                         ticketSid, 
-                        sum(calculatedCommission) AS total_ib_cost
+                        sum(commission) AS total_ib_cost
                     FROM fxbackoffice_ib_processed_tickets
                     WHERE close_time >= %(start_date)s 
                       AND close_time <= %(end_date)s
                     GROUP BY ticketSid
                 )
             SELECT
-                t.LOGIN AS Account,
+                t.LOGIN AS account,
                 m.userId AS client_id,     
-                any(m.NAME) AS client_name, 
+                any(m.NAME) AS client_name,
+                any(m.GROUP) AS group,
+                any(m.ZIPCODE) AS zipcode,
+                any(m.CURRENCY) AS currency,
+                any(m.sid) AS sid,
                 'MT4' AS server,            
                 
                 countIf(t.CMD IN (0, 1)) AS total_trades,
-                sumIf(t.lots, t.CMD IN (0, 1)) AS total_volume_lots,
                 
-                sumIf(t.PROFIT + t.SWAPS + t.COMMISSION, t.CMD IN (0, 1)) AS total_profit_usd,
+                sumIf(t.lots, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS total_volume_lots,
                 
-                sumIf(t.SWAPS, t.CMD IN (0, 1)) AS total_swap_usd,
+                sumIf(t.PROFIT, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS trade_profit_usd,
                 
-                COALESCE(sum(ib.total_ib_cost), 0) AS total_commission_usd,
+                sumIf(t.SWAPS, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS swap_usd,
+                sumIf(t.COMMISSION, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS commission_usd,
                 
-                (sumIf(t.PROFIT + t.SWAPS + t.COMMISSION, t.CMD IN (0, 1)) * -1) - COALESCE(sum(ib.total_ib_cost), 0) AS broker_net_revenue,
+                COALESCE(sum(ib.total_ib_cost), 0) AS ib_commission_usd,
+                
+                ((sumIf(t.PROFIT + t.SWAPS + t.COMMISSION, t.CMD IN (0, 1)) * -1) / if(any(m.CURRENCY) = 'CEN', 100, 1)) - COALESCE(sum(ib.total_ib_cost), 0) AS broker_net_revenue,
 
-                sumIf(t.PROFIT, t.CMD = 6) AS period_net_deposit
+                sumIf(t.PROFIT, t.CMD = 6) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS period_net_deposit
 
             FROM fxbackoffice_mt4_trades AS t
             INNER JOIN fxbackoffice_mt4_users AS m ON t.LOGIN = m.LOGIN
@@ -114,14 +120,17 @@ class ClickHouseService:
             }
 
             if search:
-                sql += " AND (toString(m.userId) LIKE %(search)s OR toString(t.LOGIN) LIKE %(search)s OR m.NAME LIKE %(search)s)"
-                parameters['search'] = f"%{search}%"
+                # 性能优化：仅支持 ClientID 或 AccountID 搜索 (前缀匹配)
+                # 移除 Name 搜索，移除前导 % 以利用 ClickHouse 索引优化
+                clean_search = search.strip()
+                if clean_search:
+                    sql += " AND (toString(m.userId) LIKE %(search)s OR toString(t.LOGIN) LIKE %(search)s)"
+                    parameters['search'] = f"{clean_search}%"
 
             sql += """
             GROUP BY t.LOGIN, m.userId
             HAVING total_volume_lots > 0 OR period_net_deposit != 0
-            ORDER BY total_commission_usd DESC
-            LIMIT 1000
+            ORDER BY ib_commission_usd DESC
             """
 
             # 使用 client.query 获取包含 summary 的结果
@@ -155,7 +164,6 @@ class ClickHouseService:
             # 使用 Pandas 处理数据清洗 (fillna 等)
             df = pd.DataFrame(data)
             df = df.fillna(0)
-            df['client_name'] = df['client_name'].astype(str) + " (" + df['Account'].astype(str) + ")"
             
             processed_data = df.to_dict('records')
 

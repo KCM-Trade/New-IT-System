@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react"
+import { useState, useCallback, useMemo, useRef, useEffect } from "react"
 import { useTheme } from "@/components/theme-provider"
 import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
@@ -21,12 +21,18 @@ import { DateRange } from "react-day-picker"
 interface ClientPnLAnalysisRow {
   client_id: number | string
   client_name?: string
+  account?: string | number
+  group?: string
+  zipcode?: string
+  currency?: string
+  sid?: number
   server?: string
   total_trades: number
-  total_profit_usd: number
+  trade_profit_usd: number
   total_volume_lots: number
-  total_commission_usd: number
-  total_swap_usd: number
+  ib_commission_usd: number
+  commission_usd: number
+  swap_usd: number
 }
 
 function formatCurrency(value: number) {
@@ -83,6 +89,11 @@ export default function ClientPnLAnalysis() {
 
   // Grid State
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
+  
+  // Pagination State
+  const [pageSize, setPageSize] = useState(50)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(0)
 
   // Calculate Dates based on Range
   const getDateRange = useCallback((range: string) => {
@@ -164,29 +175,87 @@ export default function ClientPnLAnalysis() {
     } catch { return false }
   }, [theme])
 
+  const getServerName = useCallback((sid: number | undefined) => {
+    switch (sid) {
+      case 1: return "MT4"
+      case 5: return "MT5"
+      case 6: return "MT4Live2"
+      default: return sid ? `Server ${sid}` : "Unknown"
+    }
+  }, [])
+
   // Column Definitions
   const columnDefs = useMemo<ColDef[]>(() => [
     {
       field: "client_id",
       headerName: tz("clientPnl.columns.clientId", "Client ID", "Client ID"),
-      width: 120,
+      width: 100,
       sortable: true,
       filter: true,
       cellRenderer: (params: any) => (
-        <span className="font-medium">{params.value}</span>
+        <span className="font-medium text-muted-foreground">{params.value}</span>
       )
     },
     {
       field: "client_name",
       headerName: tz("clientPnl.columns.clientName", "客户名称", "Client Name"),
-      width: 200,
+      width: 180,
       sortable: true,
       filter: true,
     },
     {
+      field: "group",
+      headerName: "Group",
+      width: 120,
+      sortable: true,
+      filter: true,
+    },
+    {
+      field: "zipcode",
+      headerName: "Zipcode",
+      width: 100,
+      sortable: true,
+      filter: true,
+    },
+    {
+      field: "account",
+      headerName: tz("clientPnl.columns.account", "账号", "Account"),
+      width: 100,
+      sortable: true,
+      filter: true,
+    },
+    {
+      field: "currency",
+      headerName: tz("clientPnl.columns.currency", "币种", "Currency"),
+      width: 90,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const cur = String(params.value || '').toUpperCase()
+        let badge = 'bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200'
+        if (cur === 'CEN') badge = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+        else if (cur === 'USD') badge = 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300'
+        else if (cur === 'USDT') badge = 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
+        
+        return (
+          <span className={`text-sm font-semibold font-mono`}>
+            <span className={`inline-block rounded px-1.5 py-0.5 ${badge}`}>{cur || '-'}</span>
+          </span>
+        )
+      }
+    },
+    {
+      field: "sid",
+      headerName: tz("clientPnl.columns.server", "服务器", "Server"),
+      width: 140,
+      sortable: true,
+      filter: true,
+      valueFormatter: (params: any) => getServerName(params.value)
+    },
+    {
       field: "total_trades",
       headerName: tz("clientPnl.columns.totalTrades", "总交易数", "Total Trades"),
-      width: 120,
+      width: 110,
       sortable: true,
       filter: true,
       type: 'numericColumn'
@@ -194,16 +263,16 @@ export default function ClientPnLAnalysis() {
     {
       field: "total_volume_lots",
       headerName: tz("clientPnl.columns.totalVolume", "总手数", "Total Volume"),
-      width: 140,
+      width: 120,
       sortable: true,
       filter: true,
       type: 'numericColumn',
       valueFormatter: (params: any) => toNumber(params.value).toFixed(2)
     },
     {
-      field: "total_profit_usd",
-      headerName: tz("clientPnl.columns.totalProfit", "总盈亏 (USD)", "Total PnL (USD)"),
-      width: 160,
+      field: "trade_profit_usd",
+      headerName: tz("clientPnl.columns.tradeProfit", "交易盈亏 (USD)", "Trade Profit (USD)"),
+      width: 150,
       sortable: true,
       filter: true,
       type: 'numericColumn',
@@ -214,22 +283,40 @@ export default function ClientPnLAnalysis() {
       }
     },
     {
-      field: "total_commission_usd",
-      headerName: tz("clientPnl.columns.totalCommission", "佣金 (USD)", "Commission (USD)"),
-      width: 140,
+      field: "commission_usd",
+      headerName: tz("clientPnl.columns.commission", "佣金 (USD)", "Commission (USD)"),
+      width: 130,
       sortable: true,
       filter: true,
       type: 'numericColumn',
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
     },
     {
-      field: "total_swap_usd",
-      headerName: tz("clientPnl.columns.totalSwap", "库存费 (USD)", "Swap (USD)"),
-      width: 140,
+      field: "swap_usd",
+      headerName: tz("clientPnl.columns.swap", "Swap (USD)", "Swap (USD)"),
+      width: 130,
       sortable: true,
       filter: true,
       type: 'numericColumn',
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
+    },
+    {
+      field: "ib_commission_usd",
+      headerName: tz("clientPnl.columns.ibCommission", "IB 佣金 (USD)", "IB Commission (USD)"),
+      width: 150,
+      sortable: true,
+      filter: true,
+      type: 'numericColumn',
+      comparator: (valueA: any, valueB: any) => {
+        const a = toNumber(valueA)
+        const b = toNumber(valueB)
+        return a - b
+      },
+      cellRenderer: (params: any) => (
+        <span className="font-semibold text-blue-600 dark:text-blue-400">
+          {formatCurrency(toNumber(params.value))}
+        </span>
+      )
     },
   ], [tz])
 
@@ -238,6 +325,20 @@ export default function ClientPnLAnalysis() {
     const label = tz(`pnlMonitor.timeRange${range}`, labelZh, labelEn)
     return `${label} (${start_date} ~ ${end_date})`
   }, [getDateRange, tz])
+
+  const onPaginationChanged = useCallback(() => {
+    if (gridApi) {
+      setCurrentPage(gridApi.paginationGetCurrentPage() + 1)
+      setTotalPages(gridApi.paginationGetTotalPages())
+    }
+  }, [gridApi])
+
+  // Update total pages when data loaded
+  useEffect(() => {
+    if (gridApi) {
+        setTotalPages(gridApi.paginationGetTotalPages())
+    }
+  }, [rows, pageSize, gridApi])
 
   return (
     <div className="flex h-full w-full flex-col gap-2 p-1 sm:p-4">
@@ -315,7 +416,7 @@ export default function ClientPnLAnalysis() {
 
               <div className="flex items-center gap-1 flex-1 sm:flex-none">
                 <Input
-                  placeholder={tz('clientPnl.searchPlaceholder', '搜索 ClientID / Name', 'Search ClientID / Name')}
+                  placeholder={tz('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID', 'Search ClientID / AccountID')}
                   value={searchInput}
                   onChange={e => setSearchInput(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -359,7 +460,7 @@ export default function ClientPnLAnalysis() {
 
       <div className="flex-1 relative">
         <div
-          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} clientpnl-theme h-[600px] w-full min-h-[400px] relative`}
+          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} clientpnl-theme h-[750px] w-full min-h-[400px] relative`}
           style={{
             ['--primary' as any]: '243 75% 59%',
             ['--primary-foreground' as any]: '0 0% 100%',
@@ -403,13 +504,20 @@ export default function ClientPnLAnalysis() {
               }
               return { backgroundColor: 'hsl(var(--primary) / 0.06)', paddingLeft: 0, borderLeft: 'none' }
             }}
-            onGridReady={(params) => setGridApi(params.api)}
+            onGridReady={(params) => {
+              setGridApi(params.api)
+              params.api.paginationSetPageSize(pageSize)
+            }}
             animateRows={true}
             enableCellTextSelection={true}
             domLayout="normal"
             suppressScrollOnNewData={true}
             rowSelection="multiple"
             suppressRowClickSelection={true}
+            pagination={true}
+            paginationPageSize={pageSize}
+            suppressPaginationPanel={true}
+            onPaginationChanged={onPaginationChanged}
           />
         </div>
         <style>{`
@@ -419,6 +527,77 @@ export default function ClientPnLAnalysis() {
           }
         `}</style>
       </div>
+
+      {/* Pagination Controls */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:space-x-4">
+              <div className="text-sm text-muted-foreground">
+                {t("pnlMonitor.totalRecordsDisplay", { 
+                  start: (currentPage - 1) * pageSize + 1, 
+                  end: Math.min(currentPage * pageSize, rows.length), 
+                  total: rows.length 
+                })}
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-muted-foreground">{t('pnlMonitor.perPage', '每页')}</span>
+                <Select
+                  value={pageSize.toString()}
+                  onValueChange={(val) => {
+                    const newSize = Number(val)
+                    setPageSize(newSize)
+                    if (gridApi) {
+                      gridApi.paginationSetPageSize(newSize)
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[50, 100, 500].map(size => (
+                      <SelectItem key={size} value={size.toString()}>{size}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-sm text-muted-foreground">{t('pnlMonitor.records', '条记录')}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" 
+                onClick={() => gridApi?.paginationGoToFirstPage()} 
+                disabled={currentPage === 1}
+              >
+                {t('pnlMonitor.firstPage', '首页')}
+              </Button>
+              <Button variant="outline" size="sm" 
+                onClick={() => gridApi?.paginationGoToPreviousPage()} 
+                disabled={currentPage === 1}
+              >
+                {t('pnlMonitor.prevPage', '上一页')}
+              </Button>
+              <span className="text-sm text-muted-foreground mx-2">
+                {t('pnlMonitor.pageInfo', { current: currentPage, total: totalPages })}
+              </span>
+              <Button variant="outline" size="sm" 
+                onClick={() => gridApi?.paginationGoToNextPage()} 
+                disabled={currentPage === totalPages}
+              >
+                {t('pnlMonitor.nextPage', '下一页')}
+              </Button>
+              <Button variant="outline" size="sm" 
+                onClick={() => gridApi?.paginationGoToLastPage()} 
+                disabled={currentPage === totalPages}
+              >
+                {t('pnlMonitor.lastPage', '尾页')}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
