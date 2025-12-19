@@ -192,9 +192,22 @@ export default function ClientPnLAnalysis() {
       width: 100,
       sortable: true,
       filter: true,
-      cellRenderer: (params: any) => (
-        <span className="font-medium text-muted-foreground">{params.value}</span>
-      )
+      cellRenderer: (params: any) => {
+        const id = params.value
+        if (!id) return null
+        const link = `https://mt4.kohleglobal.com/crm/users/${id}`
+        return (
+          <a 
+            href={link} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+            onClick={e => e.stopPropagation()}
+          >
+            {id}
+          </a>
+        )
+      }
     },
     {
       field: "client_name",
@@ -223,6 +236,26 @@ export default function ClientPnLAnalysis() {
       width: 100,
       sortable: true,
       filter: true,
+      cellRenderer: (params: any) => {
+        const account = params.value
+        const sid = params.data?.sid
+        
+        if (!account) return null
+        if (!sid) return <span className="font-medium">{account}</span>
+        
+        const link = `https://mt4.kohleglobal.com/crm/accounts/${sid}-${account}`
+        return (
+          <a 
+            href={link} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+            onClick={e => e.stopPropagation()}
+          >
+            {account}
+          </a>
+        )
+      }
     },
     {
       field: "currency",
@@ -276,6 +309,43 @@ export default function ClientPnLAnalysis() {
       sortable: true,
       filter: true,
       type: 'numericColumn',
+      cellStyle: { backgroundColor: 'rgba(0,0,0,0.035)' },
+      cellRenderer: (params: any) => {
+        const val = toNumber(params.value)
+        const color = val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+        return <span className={`font-semibold ${color}`}>{formatCurrency(val)}</span>
+      }
+    },
+    {
+      field: "ib_commission_usd",
+      headerName: tz("clientPnl.columns.ibCommission", "IB 佣金 (USD)", "IB Commission (USD)"),
+      width: 150,
+      sortable: true,
+      filter: true,
+      type: 'numericColumn',
+      comparator: (valueA: any, valueB: any) => {
+        const a = toNumber(valueA)
+        const b = toNumber(valueB)
+        return a - b
+      },
+      cellRenderer: (params: any) => (
+        <span className="font-semibold text-blue-600 dark:text-blue-400">
+          {formatCurrency(toNumber(params.value))}
+        </span>
+      )
+    },
+    {
+      headerName: tz("clientPnl.columns.netPnLWithComm", "净盈亏(含佣金) (USD)", "Net PnL (w/ Comm) (USD)"),
+      width: 170,
+      sortable: true,
+      filter: true,
+      type: 'numericColumn',
+      valueGetter: (params: any) => {
+        const tradeProfit = toNumber(params.data?.trade_profit_usd)
+        const ibCommission = toNumber(params.data?.ib_commission_usd)
+        return tradeProfit + ibCommission
+      },
+      cellStyle: { backgroundColor: 'rgba(255,165,0,0.08)' },
       cellRenderer: (params: any) => {
         const val = toNumber(params.value)
         const color = val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
@@ -299,24 +369,6 @@ export default function ClientPnLAnalysis() {
       filter: true,
       type: 'numericColumn',
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
-    },
-    {
-      field: "ib_commission_usd",
-      headerName: tz("clientPnl.columns.ibCommission", "IB 佣金 (USD)", "IB Commission (USD)"),
-      width: 150,
-      sortable: true,
-      filter: true,
-      type: 'numericColumn',
-      comparator: (valueA: any, valueB: any) => {
-        const a = toNumber(valueA)
-        const b = toNumber(valueB)
-        return a - b
-      },
-      cellRenderer: (params: any) => (
-        <span className="font-semibold text-blue-600 dark:text-blue-400">
-          {formatCurrency(toNumber(params.value))}
-        </span>
-      )
     },
   ], [tz])
 
