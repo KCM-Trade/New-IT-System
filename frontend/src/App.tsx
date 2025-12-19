@@ -23,6 +23,7 @@ const SwapFreeControlPage = lazy(() => import("@/pages/SwapFreeControl"))
 const CustomerPnLMonitorPage = lazy(() => import("@/pages/CustomerPnLMonitor"))
 const CustomerPnLMonitorV2Page = lazy(() => import("@/pages/CustomerPnLMonitorV2"))
 const ClientPnLMonitorPage = lazy(() => import("@/pages/ClientPnLMonitor"))
+const ClientPnLAnalysisPage = lazy(() => import("@/pages/ClientPnLAnalysis"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
 const SettingsPage = lazy(() => import("@/pages/Settings"))
 const SearchPage = lazy(() => import("@/pages/Search"))
@@ -68,6 +69,7 @@ function App() {
               <Route path="customer-pnl-monitor" element={<CustomerPnLMonitorPage />} />
               <Route path="customer-pnl-monitor-v2" element={<CustomerPnLMonitorV2Page />} />
               <Route path="client-pnl-monitor" element={<ClientPnLMonitorPage />} />
+              <Route path="client-pnl-analysis" element={<ClientPnLAnalysisPage />} />
               {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />
               <Route path="search" element={<SearchPage />} />
