@@ -82,6 +82,11 @@ pip install clickhouse-connect
 5.  **表格展示**：
     *   **Shadcn 风格**：深色表头 (Light模式) / 浅色表头 (Dark模式)，极浅色斑马纹背景。
     *   **列信息**：Client ID, Name, Trades, Volume, PnL (红/绿), Commission, Swap。
+6.  **数据展示增强 (v2新增)**：
+    *   **服务器映射**：基于 `sid` 映射显示 (1->MT4, 5->MT5, 6->MT4Live2)。
+    *   **视觉区分**：币种使用不同颜色 Badge；交易盈亏（浅灰）与净盈亏（浅橙）添加背景色区分。
+    *   **CRM 跳转**：点击 Client ID 或 Account 可直接跳转至 CRM 详情页。
+    *   **分页控制**：移除后端 1000 条限制，改为前端全量分页（Page Size: 50/100/500），表格高度扩展至 750px。
 
 ## 6. 后端逻辑详解
 
@@ -89,11 +94,10 @@ pip install clickhouse-connect
 *   **连接管理**：使用 `clickhouse_connect`，强制开启 `secure=True` (TLS)。
 *   **查询执行**：使用 `client.query()` 替代 `query_df`，以获取 `result.summary` 中的性能元数据。
 *   **性能统计**：优先读取 `elapsed_ns` 并转换为秒 (float)，确保高精度显示；同时提取 `read_rows` 和 `read_bytes`。
-*   **SQL 逻辑**：
-    *   使用 `WITH` 子句预计算 IB 佣金。
-    *   关联 `mt4_trades`, `mt4_users`, `users` 表。
-    *   时间过滤：基于前端传入的 `start_date` 和 `end_date`。
-*   **数据清洗**：使用 Pandas 处理空值与名称格式化。
+*   **核心计算逻辑 (v2更新)**：
+    *   **CEN 账户标准化**：如果账户币种 (`CURRENCY`) 为 `CEN`，则以下字段在 SQL 层自动除以 100：`lots`, `profit`, `swaps`, `commission` (交易佣金), `net_deposit`。
+    *   **IB 佣金特例**：IB 佣金 (`total_ib_cost`) 取自 `ib_processed_tickets.commission` 字段，**不**执行 CEN 除以 100 操作（维持原值）。
+    *   **搜索策略**：为了提升大数据量下的性能，搜索功能已优化为仅针对 `Client ID` 和 `Account ID` 的**前缀匹配** (Prefix Match)，移除了 Name 的模糊搜索。
 
 ### API 层 (`client_pnl_analysis.py`)
 *   **接口**：`GET /query`
@@ -114,16 +118,26 @@ pip install clickhouse-connect
 ## 7. 数据库 SQL 逻辑摘要
 
 ```sql
-WITH ib_costs AS (...)
+WITH ib_costs AS (
+    SELECT ticketSid, sum(commission) AS total_ib_cost
+    FROM fxbackoffice_ib_processed_tickets
+    -- ...
+    GROUP BY ticketSid
+)
 SELECT
-    t.LOGIN AS Account,
+    t.LOGIN AS account,
     m.userId AS client_id,
     any(m.NAME) AS client_name,
-    countIf(t.CMD IN (0, 1)) AS total_trades,
-    sumIf(t.lots, t.CMD IN (0, 1)) AS total_volume_lots,
-    sumIf(t.PROFIT + t.SWAPS + t.COMMISSION, t.CMD IN (0, 1)) AS total_profit_usd,
-    sumIf(t.SWAPS, t.CMD IN (0, 1)) AS total_swap_usd,
-    COALESCE(sum(ib.total_ib_cost), 0) AS total_commission_usd
+    any(m.sid) AS sid, -- 用于前端映射服务器
+    any(m.CURRENCY) AS currency,
+    -- ... Group, Zipcode ...
+
+    -- CEN 账户除以 100 逻辑示例
+    sumIf(t.lots, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS total_volume_lots,
+    sumIf(t.PROFIT, t.CMD IN (0, 1)) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS trade_profit_usd,
+
+    -- IB 佣金不除以 100
+    COALESCE(sum(ib.total_ib_cost), 0) AS ib_commission_usd
 FROM fxbackoffice_mt4_trades AS t
 -- ... JOINS ...
 WHERE 
@@ -133,3 +147,31 @@ WHERE
 -- ... GROUP BY & ORDER BY ...
 ```
 
+## 8. V2 迭代更新日志与技术修正 (2025-12-19)
+
+### 后端变更
+1.  **SQL 重构**：
+    *   拆分 `total_profit_usd` 为 `trade_profit_usd` (纯交易盈亏) + `commission_usd` (交易佣金) + `swap_usd` (库存费)。
+    *   新增 `ib_commission_usd` (IB成本)，数据源从 `calculatedCommission` 更正为 `commission`。
+    *   新增字段：`sid` (Server ID), `currency`, `group`, `zipcode`, `account`。
+2.  **业务逻辑**：
+    *   实现 **CEN 账户标准化**：检测 `CURRENCY='CEN'` 时，除 IB 佣金外的金额/手数自动 `/100`。
+    *   实现 **净收入计算**：`Broker Net Revenue` = `(交易盈亏_adj * -1) - IB佣金_raw`。
+3.  **性能优化**：
+    *   移除 `LIMIT 1000` 限制，支持全量数据拉取。
+    *   搜索功能优化为 `LIKE '123%'` 前缀匹配，仅限 ID 搜索，移除低效的 Name 模糊匹配。
+
+### 前端变更
+1.  **交互升级**：
+    *   新增 **客户端分页** (Client-side Pagination)，支持 50/100/500 条/页切换。
+    *   新增 **CRM 跳转链接**：点击 Client ID 或 Account 可直接跳转 CRM 系统。
+2.  **UI/UX 优化**：
+    *   **列顺序调整**：Client -> Account -> Trading -> Financials。
+    *   **样式增强**：
+        *   交易盈亏列（浅灰底色）、净盈亏列（浅橙底色）。
+        *   币种列使用 Badge 区分 (CEN=红, USD=青, USDT=紫)。
+        *   IB 佣金列蓝色加粗。
+    *   **新列**：前端计算并展示 `Net PnL (w/ Comm)`。
+3.  **Bug 修复**：
+    *   修复 `ib_commission_usd` 列因数据类型导致的排序失效问题（添加 `comparator`）。
+    *   修复分页逻辑引入时的 `useEffect` 引用缺失问题。

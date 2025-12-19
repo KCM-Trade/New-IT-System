@@ -397,7 +397,7 @@ export default function ClientPnLAnalysis() {
       {/* Demo Warning Banner */}
       <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex items-center gap-2">
         <span className="font-semibold">⚠️ 快速预览版 (Preview)</span>
-        <span>— 当前演示数据截止至 2025-12-13。</span>
+        <span>— 当前数据截止至 2025-12-13。</span>
       </div>
 
       <Card>
