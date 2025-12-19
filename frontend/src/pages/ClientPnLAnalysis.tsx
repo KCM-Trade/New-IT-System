@@ -335,20 +335,16 @@ export default function ClientPnLAnalysis() {
       }
     },
     {
-      field: "ib_commission_usd",
+      colId: "ib_commission_usd",
+      valueGetter: (params: any) => toNumber(params.data?.ib_commission_usd),
       headerName: tz("clientPnl.columns.ibCommission", "IB 佣金 (USD)", "IB Commission (USD)"),
       width: 150,
       sortable: true,
-      filter: true,
+      filter: 'agNumberColumnFilter',
       type: 'numericColumn',
-      comparator: (valueA: any, valueB: any) => {
-        const a = toNumber(valueA)
-        const b = toNumber(valueB)
-        return a - b
-      },
       cellRenderer: (params: any) => (
         <span className="font-semibold text-blue-600 dark:text-blue-400">
-          {formatCurrency(toNumber(params.value))}
+          {formatCurrency(params.value)}
         </span>
       )
     },
@@ -356,7 +352,7 @@ export default function ClientPnLAnalysis() {
       headerName: tz("clientPnl.columns.netPnLWithComm", "净盈亏(含佣金) (USD)", "Net PnL (w/ Comm) (USD)"),
       width: 170,
       sortable: true,
-      filter: true,
+      filter: 'agNumberColumnFilter',
       type: 'numericColumn',
       valueGetter: (params: any) => {
         const tradeProfit = toNumber(params.data?.trade_profit_usd)
@@ -555,7 +551,7 @@ export default function ClientPnLAnalysis() {
             <div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
               <div className="text-center">
                 <Search className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>{tx('clientPnl.startPrompt', '请点击查询按钮开始分析')}</p>
+                <p>{tx('clientPnl.startPrompt', '')}</p>
               </div>
             </div>
           ) : null}
