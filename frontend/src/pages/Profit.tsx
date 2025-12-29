@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { Calendar as CalendarIcon, Loader2, ArrowUp, ArrowDown } from "lucide-react"
+import { Calendar as CalendarIcon, Loader2, ArrowUp, ArrowDown, Info } from "lucide-react"
 import { DateRange } from "react-day-picker"
 import {
   Table,
@@ -576,6 +576,17 @@ export default function ProfitPage() {
 
   return (
     <div className="space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
+      {/* Info Banner */}
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3">
+        <div className="flex items-start gap-2">
+          <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 text-sm text-blue-800 dark:text-blue-200">
+            <p className="font-semibold mb-1">刷新功能暂时禁用</p>
+            <p>当前可查看截止至 <strong>2025-12-29</strong> 的 XAUUSD 数据。如需恢复功能，请联系 <strong>Kieran</strong>。</p>
+          </div>
+        </div>
+      </div>
+
       {/* Toolbar */}
       <Card>
         <CardHeader>
@@ -682,8 +693,8 @@ export default function ProfitPage() {
           </div>
           {/* 刷新按钮（紧挨着时区） */}
           <div className="flex w-full items-center gap-3 sm:w-auto">
-            <Button onClick={onRefresh} disabled={loading} className="flex-1 sm:flex-none">
-              {loading ? "刷新中…" : "刷新"}
+            <Button onClick={onRefresh} disabled={true} className="flex-1 sm:flex-none">
+              刷新
             </Button>
             {lastRefreshed && (
               <span className="text-xs text-muted-foreground">上次刷新(UTC+3)：{lastRefreshed}</span>
@@ -764,7 +775,7 @@ export default function ProfitPage() {
       {/* 交易明细与分析 - 响应式布局 */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         {/* 左侧交易明细 - 桌面端占2/3，移动端全宽 */}
-        <div className="xl:col-span-2">
+        <div className="xl:col-span-2 relative">
           <Card className="h-fit">
             <CardHeader>
               <CardTitle className="text-lg font-semibold">
@@ -897,12 +908,20 @@ export default function ProfitPage() {
               )}
             </CardContent>
           </Card>
+          {/* 毛玻璃覆盖层 - 交易明细 */}
+          <div className="absolute inset-0 bg-white/40 dark:bg-gray-900/40 backdrop-blur-sm rounded-lg flex items-center justify-center z-10 pointer-events-none">
+            <div className="text-center px-4 py-8">
+              <p className="text-sm font-semibold text-muted-foreground">数据暂不可用</p>
+              <p className="text-xs text-muted-foreground mt-1">数值正在校验中</p>
+            </div>
+          </div>
         </div>
 
         {/* 右侧分析模块 - 桌面端占1/3，移动端全宽 */}
         <div className="space-y-4">
           {/* 1. 交易次数排序 */}
-          <Card>
+          <div className="relative">
+            <Card>
             <CardHeader>
               <CardTitle className="text-base font-semibold">交易次数排行</CardTitle>
               <CardDescription>按用户交易笔数排序</CardDescription>
@@ -926,10 +945,19 @@ export default function ProfitPage() {
                 </div>
               )}
             </CardContent>
-          </Card>
+            </Card>
+            {/* 毛玻璃覆盖层 - 交易次数排行 */}
+            <div className="absolute inset-0 bg-white/40 dark:bg-gray-900/40 backdrop-blur-sm rounded-lg flex items-center justify-center z-10 pointer-events-none">
+              <div className="text-center px-4 py-8">
+                <p className="text-sm font-semibold text-muted-foreground">数据暂不可用</p>
+                <p className="text-xs text-muted-foreground mt-1">数值正在校验中</p>
+              </div>
+            </div>
+          </div>
 
           {/* 2. 利润排序 */}
-          <Card>
+          <div className="relative">
+            <Card>
             <CardHeader>
               <CardTitle className="text-base font-semibold">用户利润排行</CardTitle>
               <CardDescription>包含买卖方向分析</CardDescription>
@@ -961,7 +989,15 @@ export default function ProfitPage() {
                 </div>
               )}
             </CardContent>
-          </Card>
+            </Card>
+            {/* 毛玻璃覆盖层 - 用户利润排行 */}
+            <div className="absolute inset-0 bg-white/40 dark:bg-gray-900/40 backdrop-blur-sm rounded-lg flex items-center justify-center z-10 pointer-events-none">
+              <div className="text-center px-4 py-8">
+                <p className="text-sm font-semibold text-muted-foreground">数据暂不可用</p>
+                <p className="text-xs text-muted-foreground mt-1">数值正在校验中</p>
+              </div>
+            </div>
+          </div>
 
           {/* 3. 时间-手数相关性分析 */}
           <Card>
