@@ -57,10 +57,12 @@ class ClickHouseService:
         Query ClickHouse for client PnL analysis within a date range.
         Returns a dict containing 'data' (list of records) and 'statistics' (query metadata).
         """
+        print(f"🔍 [ClickHouseService] Request: start={start_date}, end={end_date}, search={search}")
         try:
             client = self.get_client()
             
             # 格式化日期字符串
+            # 确保 end_date 包含当天的最后一秒 (由调用层传入 23:59:59)
             start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
             end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
             
@@ -102,6 +104,7 @@ class ClickHouseService:
                 sumIf(t.PROFIT, t.CMD = 6) / if(any(m.CURRENCY) = 'CEN', 100, 1) AS period_net_deposit
 
             FROM fxbackoffice_mt4_trades AS t
+            -- 使用 INNER JOIN 确保只显示关联到有效用户的交易
             INNER JOIN fxbackoffice_mt4_users AS m ON t.LOGIN = m.LOGIN
             LEFT JOIN fxbackoffice_users AS u ON m.userId = u.id
             LEFT JOIN ib_costs AS ib ON t.ticketSid = ib.ticketSid
@@ -121,7 +124,6 @@ class ClickHouseService:
 
             if search:
                 # 性能优化：仅支持 ClientID 或 AccountID 搜索 (前缀匹配)
-                # 移除 Name 搜索，移除前导 % 以利用 ClickHouse 索引优化
                 clean_search = search.strip()
                 if clean_search:
                     sql += " AND (toString(m.userId) LIKE %(search)s OR toString(t.LOGIN) LIKE %(search)s)"
@@ -129,10 +131,13 @@ class ClickHouseService:
 
             sql += """
             GROUP BY t.LOGIN, m.userId
+            -- 过滤掉既没有交易量也没有入金的记录
             HAVING total_volume_lots > 0 OR period_net_deposit != 0
             ORDER BY ib_commission_usd DESC
             """
 
+            print(f"📝 [ClickHouseService] Execute SQL Params: {parameters}")
+            
             # 使用 client.query 获取包含 summary 的结果
             result = client.query(sql, parameters=parameters)
             

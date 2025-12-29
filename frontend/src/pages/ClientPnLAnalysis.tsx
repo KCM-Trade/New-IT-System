@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react"
+import { useState, useCallback, useMemo, useEffect } from "react"
 import { useTheme } from "@/components/theme-provider"
 import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent } from "@/components/ui/card"
 import { Search, RefreshCw, X, Calendar as CalendarIcon } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
-import { ColDef, GridReadyEvent, GridApi } from 'ag-grid-community'
+import { ColDef, GridApi } from 'ag-grid-community'
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/calendar"
@@ -97,8 +97,8 @@ export default function ClientPnLAnalysis() {
 
   // Calculate Dates based on Range
   const getDateRange = useCallback((range: string) => {
-    // Demo 限制：强制截止日期为 2025-12-13
-    const MAX_DATE = new Date("2025-12-13")
+    // Demo 限制：强制截止日期为 2025-12-27
+    const MAX_DATE = new Date("2025-12-27")
     const end = new Date(MAX_DATE) // Clone it
     const start = new Date(MAX_DATE) // Clone it
     
@@ -412,10 +412,13 @@ export default function ClientPnLAnalysis() {
       <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="font-semibold">预览版 (Preview)</span>
-          <span>— 当前数据截止至 2025-12-13。</span>
+          <span>— 当前数据截止至 2025-12-27。</span>
         </div>
         <div className="ml-0 sm:ml-7 text-xs opacity-90">
           当前 ClickHouse database 服务器处于 Dev 模式（30min 自动休眠）。首次加载时间可能略长（需唤醒），后续刷新时间恢复正常。
+        </div>
+        <div className="ml-0 sm:ml-7 text-xs opacity-90">
+          服务器筛选时，需要通过服务器编号筛选：1: MT4, 5: MT5, 6: MT4Live2
         </div>
       </div>
 
@@ -461,7 +464,7 @@ export default function ClientPnLAnalysis() {
                       }
                     }}
                     numberOfMonths={2}
-                    disabled={(date) => date > new Date("2025-12-13")}
+                    disabled={(date) => date > new Date("2025-12-27")}
                   />
                 </PopoverContent>
               </Popover>
@@ -577,7 +580,11 @@ export default function ClientPnLAnalysis() {
             }}
             onGridReady={(params) => {
               setGridApi(params.api)
-              params.api.paginationSetPageSize(pageSize)
+              // @ts-ignore
+              if (params.api.paginationSetPageSize) {
+                 // @ts-ignore
+                 params.api.paginationSetPageSize(pageSize)
+              }
             }}
             animateRows={true}
             enableCellTextSelection={true}
@@ -613,14 +620,18 @@ export default function ClientPnLAnalysis() {
               </div>
               
               <div className="flex items-center space-x-2">
-                <span className="text-sm text-muted-foreground">{t('pnlMonitor.perPage', '每页')}</span>
+                <span className="text-sm text-muted-foreground">{tx('pnlMonitor.perPage', '每页')}</span>
                 <Select
                   value={pageSize.toString()}
                   onValueChange={(val) => {
                     const newSize = Number(val)
                     setPageSize(newSize)
                     if (gridApi) {
-                      gridApi.paginationSetPageSize(newSize)
+                      // @ts-ignore
+                      if (gridApi.paginationSetPageSize) {
+                          // @ts-ignore
+                          gridApi.paginationSetPageSize(newSize)
+                      }
                     }
                   }}
                 >
@@ -633,7 +644,7 @@ export default function ClientPnLAnalysis() {
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="text-sm text-muted-foreground">{t('pnlMonitor.records', '条记录')}</span>
+                <span className="text-sm text-muted-foreground">{tx('pnlMonitor.records', '条记录')}</span>
               </div>
             </div>
 
@@ -642,13 +653,13 @@ export default function ClientPnLAnalysis() {
                 onClick={() => gridApi?.paginationGoToFirstPage()} 
                 disabled={currentPage === 1}
               >
-                {t('pnlMonitor.firstPage', '首页')}
+                {tx('pnlMonitor.firstPage', '首页')}
               </Button>
               <Button variant="outline" size="sm" 
                 onClick={() => gridApi?.paginationGoToPreviousPage()} 
                 disabled={currentPage === 1}
               >
-                {t('pnlMonitor.prevPage', '上一页')}
+                {tx('pnlMonitor.prevPage', '上一页')}
               </Button>
               <span className="text-sm text-muted-foreground mx-2">
                 {t('pnlMonitor.pageInfo', { current: currentPage, total: totalPages })}
@@ -657,13 +668,13 @@ export default function ClientPnLAnalysis() {
                 onClick={() => gridApi?.paginationGoToNextPage()} 
                 disabled={currentPage === totalPages}
               >
-                {t('pnlMonitor.nextPage', '下一页')}
+                {tx('pnlMonitor.nextPage', '下一页')}
               </Button>
               <Button variant="outline" size="sm" 
                 onClick={() => gridApi?.paginationGoToLastPage()} 
                 disabled={currentPage === totalPages}
               >
-                {t('pnlMonitor.lastPage', '尾页')}
+                {tx('pnlMonitor.lastPage', '尾页')}
               </Button>
             </div>
           </div>
