@@ -26,6 +26,7 @@ interface ClientPnLAnalysisRow {
   zipcode?: string
   currency?: string
   sid?: number
+  partner_id?: number | string
   server?: string
   total_trades: number
   trade_profit_usd: number
@@ -46,6 +47,9 @@ function toNumber(v: unknown, fallback = 0): number {
   if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v)
   return fallback
 }
+
+
+const SETTINGS_KEY = 'CLIENT_PNL_SETTINGS_V1'
 
 export default function ClientPnLAnalysis() {
   const { theme } = useTheme()
@@ -79,13 +83,40 @@ export default function ClientPnLAnalysis() {
   }, [t, isZh])
 
   // State
+  // Load initial settings from localStorage
+  const [initialSettings] = useState(() => {
+    try {
+      const s = localStorage.getItem(SETTINGS_KEY)
+      if (!s) return null
+      const p = JSON.parse(s)
+      if (p.date) {
+        if (p.date.from) p.date.from = new Date(p.date.from)
+        if (p.date.to) p.date.to = new Date(p.date.to)
+      }
+      return p
+    } catch { return null }
+  })
+
   const [rows, setRows] = useState<ClientPnLAnalysisRow[]>([])
   const [loading, setLoading] = useState(false)
-  const [searchInput, setSearchInput] = useState("")
-  const [timeRange, setTimeRange] = useState<string>("1m") // Default to 1 month
+  const [searchInput, setSearchInput] = useState(initialSettings?.searchInput ?? "")
+  const [timeRange, setTimeRange] = useState<string>(initialSettings?.timeRange ?? "1m") // Default to 1 month
   const [hasSearched, setHasSearched] = useState(false)
-  const [date, setDate] = useState<DateRange | undefined>()
+  const [date, setDate] = useState<DateRange | undefined>(initialSettings?.date)
   const [stats, setStats] = useState<{ elapsed?: number; rows_read?: number; bytes_read?: number } | null>(null)
+
+  // Persist settings
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        timeRange,
+        searchInput,
+        date
+      }))
+    } catch (e) {
+      console.error("Failed to save settings", e)
+    }
+  }, [timeRange, searchInput, date])
 
   // Grid State
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
@@ -302,6 +333,29 @@ export default function ClientPnLAnalysis() {
       sortable: true,
       filter: true,
       valueFormatter: (params: any) => getServerName(params.value)
+    },
+    {
+      field: "partner_id",
+      headerName: tz("clientPnl.columns.directPartner", "直属上级IB", "Direct Parent IB"),
+      width: 120,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params: any) => {
+        const id = params.value
+        if (!id || id === 0 || id === "0") return <span className="text-muted-foreground">-</span>
+        const link = `https://mt4.kohleglobal.com/crm/users/${id}`
+        return (
+          <a 
+            href={link} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+            onClick={e => e.stopPropagation()}
+          >
+            {id}
+          </a>
+        )
+      }
     },
     {
       field: "total_trades",

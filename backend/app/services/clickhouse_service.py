@@ -86,6 +86,7 @@ class ClickHouseService:
                 any(m.ZIPCODE) AS zipcode,
                 any(m.CURRENCY) AS currency,
                 any(m.sid) AS sid,
+                any(u.partnerId) AS partner_id,
                 'MT4' AS server,            
                 
                 countIf(t.CMD IN (0, 1)) AS total_trades,
