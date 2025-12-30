@@ -8,6 +8,10 @@ export interface ColumnMeta {
   type: 'text' | 'number' | 'date' | 'percent' // data type
   filterable: boolean // whether this column can be filtered
   note?: string // optional tooltip or help text
+  // fresh grad note: optional enum options for value selection (e.g. server id -> name)
+  options?: Array<{ label: string; value: string | number }>
+  // fresh grad note: optional per-column operator whitelist to keep UI and execution logic aligned
+  operators?: FilterOperator[]
 }
 
 // Filter operators by type
@@ -59,26 +63,27 @@ export interface FilterGroup {
 // Operator labels for UI display
 export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   // Text
-  contains: '包含',
-  not_contains: '不包含',
-  equals: '等于',
-  not_equals: '不等于',
-  starts_with: '开头是',
-  ends_with: '结尾是',
-  blank: '为空',
-  not_blank: '不为空',
+  // NOTE: Per product request, operator labels are ALWAYS English (do not localize).
+  contains: 'contains',
+  not_contains: 'not contains',
+  equals: 'equals',
+  not_equals: 'not equals',
+  starts_with: 'starts with',
+  ends_with: 'ends with',
+  blank: 'is empty',
+  not_blank: 'is not empty',
   // Number
-  '=': '等于',
-  '!=': '不等于',
-  '>': '大于',
-  '>=': '大于等于',
-  '<': '小于',
-  '<=': '小于等于',
-  between: '区间',
+  '=': 'equals',
+  '!=': 'not equals',
+  '>': 'greater than',
+  '>=': 'greater or equal',
+  '<': 'less than',
+  '<=': 'less or equal',
+  between: 'between',
   // Date (same as number operators)
-  on: '等于',
-  before: '早于',
-  after: '晚于',
+  on: 'on',
+  before: 'before',
+  after: 'after',
 }
 
 // Get operators for a column type

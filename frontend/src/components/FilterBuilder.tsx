@@ -295,7 +295,14 @@ interface FilterRuleRowProps {
 function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, onRemove, availableColumns, getColMeta }: FilterRuleRowProps) {
   const filterableColumns = availableColumns
   const colMeta = getColMeta(rule.field)
-  const operators = colMeta ? getOperatorsForType(colMeta.type) : []
+  // fresh grad note: allow per-column operator whitelist to match product requirements
+  const operators = useMemo(() => {
+    if (!colMeta) return []
+    if (Array.isArray((colMeta as any).operators) && (colMeta as any).operators.length > 0) {
+      return (colMeta as any).operators as FilterOperator[]
+    }
+    return getOperatorsForType(colMeta.type)
+  }, [colMeta])
   const needsValue = operatorNeedsValue(rule.op)
   const needsTwoValues = operatorNeedsTwoValues(rule.op)
   const isIsEnabled = rule.field === 'is_enabled'
@@ -317,30 +324,9 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
     return isZh ? zhFallback : enFallback
   }, [t, isZh])
   const getOperatorLabel = useCallback((op: FilterOperator) => {
-    const map: Record<string, [string, string]> = {
-      contains: ['包含', 'contains'],
-      not_contains: ['不包含', 'not contains'],
-      equals: ['等于', 'equals'],
-      not_equals: ['不等于', 'not equals'],
-      starts_with: ['开头是', 'starts with'],
-      ends_with: ['结尾是', 'ends with'],
-      blank: ['为空', 'is empty'],
-      not_blank: ['不为空', 'is not empty'],
-      '=': ['等于', 'equals'],
-      '!=': ['不等于', 'not equals'],
-      '>': ['大于', 'greater than'],
-      '>=': ['大于等于', 'greater or equal'],
-      '<': ['小于', 'less than'],
-      '<=': ['小于等于', 'less or equal'],
-      between: ['区间', 'between'],
-      on: ['等于', 'equals'],
-      before: ['早于', 'before'],
-      after: ['晚于', 'after'],
-    }
-    const pair = map[op as string]
-    if (pair) return tz(`filter.op.${op}`, pair[0], pair[1])
+    // NOTE: Per product request, operator labels are ALWAYS English (do not localize).
     return (OPERATOR_LABELS as any)[op] || String(op)
-  }, [tz])
+  }, [])
 
   return (
     <div className="flex flex-col sm:flex-row gap-2 p-3 border rounded-lg bg-muted/30">
@@ -415,6 +401,7 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
               type={colMeta?.type || 'text'}
               value={rule.value}
               onChange={(v) => onValueChange(index, v, false)}
+              options={colMeta?.options}
             />
             {needsTwoValues && (
               <>
@@ -423,6 +410,7 @@ function FilterRuleRow({ rule, index, onFieldChange, onOpChange, onValueChange, 
                   type={colMeta?.type || 'text'}
                   value={rule.value2}
                   onChange={(v) => onValueChange(index, v, true)}
+                  options={colMeta?.options}
                 />
               </>
             )}
@@ -448,9 +436,10 @@ interface ValueInputProps {
   type: 'text' | 'number' | 'date' | 'percent'
   value: any
   onChange: (value: any) => void
+  options?: Array<{ label: string; value: string | number }>
 }
 
-function ValueInput({ type, value, onChange }: ValueInputProps) {
+function ValueInput({ type, value, onChange, options }: ValueInputProps) {
   // Date picker state
   const [dateOpen, setDateOpen] = useState(false)
   // i18n helpers
@@ -470,6 +459,37 @@ function ValueInput({ type, value, onChange }: ValueInputProps) {
     } catch {}
     return isZh ? zhFallback : enFallback
   }, [t, isZh])
+
+  // Enum options (Select) - used for cases like server id -> server name
+  if (Array.isArray(options) && options.length > 0) {
+    const current = value === undefined || value === null ? '' : String(value)
+    return (
+      <Select
+        value={current}
+        onValueChange={(v) => {
+          const matched = options.find(o => String(o.value) === String(v))
+          if (!matched) return
+          // fresh grad note: keep numeric values as numbers when possible
+          if (typeof matched.value === 'number') {
+            onChange(matched.value)
+          } else {
+            onChange(matched.value)
+          }
+        }}
+      >
+        <SelectTrigger className="h-9 w-full sm:w-[200px]">
+          <SelectValue placeholder={tz('filter.selectOption', '请选择', 'Select')} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={String(o.value)} value={String(o.value)}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )
+  }
 
   if (type === 'date') {
     return (

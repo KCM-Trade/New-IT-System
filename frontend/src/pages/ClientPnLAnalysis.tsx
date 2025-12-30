@@ -25,6 +25,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { DateRange } from "react-day-picker"
+import { FilterBuilder } from "@/components/FilterBuilder"
+import { ColumnMeta, FilterGroup, FilterOperator, OPERATOR_LABELS } from "@/types/filter"
 
 interface ClientPnLAnalysisRow {
   client_id: number | string
@@ -114,6 +116,9 @@ export default function ClientPnLAnalysis() {
   const [hasSearched, setHasSearched] = useState(!!initialSettings?.hasSearched)
   const [date, setDate] = useState<DateRange | undefined>(initialSettings?.date)
   const [stats, setStats] = useState<{ elapsed?: number; rows_read?: number; bytes_read?: number } | null>(null)
+  // Filter state (local filtering based on backend result set)
+  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false)
+  const [appliedFilters, setAppliedFilters] = useState<FilterGroup | null>(initialSettings?.filters ?? null)
 
   // Persist settings
   useEffect(() => {
@@ -122,12 +127,13 @@ export default function ClientPnLAnalysis() {
         timeRange,
         searchInput,
         date,
-        hasSearched
+        hasSearched,
+        filters: appliedFilters
       }))
     } catch (e) {
       console.error("Failed to save settings", e)
     }
-  }, [timeRange, searchInput, date, hasSearched])
+  }, [timeRange, searchInput, date, hasSearched, appliedFilters])
 
   // Grid State
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
@@ -254,6 +260,127 @@ export default function ClientPnLAnalysis() {
       default: return sid ? `Server ${sid}` : "Unknown"
     }
   }, [])
+
+  // Filter columns whitelist (for FilterBuilder)
+  // fresh grad note: keep this list aligned with both the table fields and local filter executor.
+  const filterColumns = useMemo(() => {
+    const textOps: FilterOperator[] = ['contains', 'equals', 'starts_with', 'ends_with']
+    const numberOps: FilterOperator[] = ['=', '!=', '>', '>=', '<', '<=', 'between']
+    return [
+      { id: "client_id", label: "Client ID", type: "text", filterable: true, operators: textOps },
+      { id: "account", label: "Account", type: "text", filterable: true, operators: textOps },
+      { id: "client_name", label: "Client Name", type: "text", filterable: true, operators: textOps },
+      { id: "group", label: "Group", type: "text", filterable: true, operators: textOps },
+      { id: "zipcode", label: "Zipcode", type: "text", filterable: true, operators: textOps },
+      { id: "currency", label: "Currency", type: "text", filterable: true, operators: textOps },
+      {
+        id: "sid",
+        label: tz("clientPnl.columns.server", "服务器", "Server"),
+        type: "number",
+        filterable: true,
+        // Show server names to users, but keep numeric value for filtering
+        options: [
+          { label: "MT4 (1)", value: 1 },
+          { label: "MT5 (5)", value: 5 },
+          { label: "MT4Live2 (6)", value: 6 },
+        ],
+        operators: ['='] as FilterOperator[],
+      },
+      { id: "partner_id", label: tz("clientPnl.columns.directPartner", "直属上级IB", "Direct Parent IB"), type: "text", filterable: true, operators: textOps },
+      { id: "ib_net_deposit", label: tz("clientPnl.columns.ibNetDeposit", "IB 净入金 (USD)", "IB Net Deposit (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "total_trades", label: tz("clientPnl.columns.totalTrades", "总交易数", "Total Trades"), type: "number", filterable: true, operators: numberOps },
+      { id: "total_volume_lots", label: tz("clientPnl.columns.totalVolume", "总手数", "Total Volume"), type: "number", filterable: true, operators: numberOps },
+      { id: "trade_profit_usd", label: tz("clientPnl.columns.tradeProfit", "交易盈亏 (USD)", "Trade Profit (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "ib_commission_usd", label: tz("clientPnl.columns.ibCommission", "IB 佣金 (USD)", "IB Commission (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "commission_usd", label: tz("clientPnl.columns.commission", "佣金 (USD)", "Commission (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "swap_usd", label: tz("clientPnl.columns.swap", "Swap (USD)", "Swap (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "net_pnl_with_comm_usd", label: tz("clientPnl.columns.netPnLWithComm", "净盈亏(含佣金) (USD)", "Net PnL (w/ Comm) (USD)"), type: "number", filterable: true, operators: numberOps },
+    ] as ColumnMeta[]
+  }, [tz])
+
+  const filterMetaById = useMemo(() => {
+    const m = new Map<string, ColumnMeta>()
+    ;(filterColumns || []).forEach((c) => m.set(String(c.id), c))
+    return m
+  }, [filterColumns])
+
+  // Computed getters for local filtering
+  const computedGetters = useMemo(() => {
+    return {
+      net_pnl_with_comm_usd: (row: ClientPnLAnalysisRow) =>
+        toNumber((row as any)?.trade_profit_usd) + toNumber((row as any)?.ib_commission_usd),
+    } as Record<string, (row: ClientPnLAnalysisRow) => any>
+  }, [])
+
+  const getValueForField = useCallback((row: ClientPnLAnalysisRow, field: string) => {
+    const getter = (computedGetters as any)[field]
+    if (typeof getter === 'function') return getter(row)
+    return (row as any)?.[field]
+  }, [computedGetters])
+
+  const matchText = useCallback((raw: any, op: FilterOperator, ruleValue: any) => {
+    const v = (raw === undefined || raw === null) ? '' : String(raw)
+    const q = (ruleValue === undefined || ruleValue === null) ? '' : String(ruleValue)
+    const vv = v.toLowerCase()
+    const qq = q.toLowerCase()
+    switch (op) {
+      case 'contains': return vv.includes(qq)
+      case 'equals': return vv === qq
+      case 'starts_with': return vv.startsWith(qq)
+      case 'ends_with': return vv.endsWith(qq)
+      default: return true
+    }
+  }, [])
+
+  const matchNumber = useCallback((raw: any, op: FilterOperator, ruleValue: any, ruleValue2: any) => {
+    const n = toNumber(raw, Number.NaN)
+    const a = toNumber(ruleValue, Number.NaN)
+    const b = toNumber(ruleValue2, Number.NaN)
+    if (!Number.isFinite(n)) return false
+    switch (op) {
+      case '=': return Number.isFinite(a) ? n === a : false
+      case '!=': return Number.isFinite(a) ? n !== a : false
+      case '>': return Number.isFinite(a) ? n > a : false
+      case '>=': return Number.isFinite(a) ? n >= a : false
+      case '<': return Number.isFinite(a) ? n < a : false
+      case '<=': return Number.isFinite(a) ? n <= a : false
+      case 'between': {
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return false
+        const min = Math.min(a, b)
+        const max = Math.max(a, b)
+        return n >= min && n <= max
+      }
+      default:
+        return true
+    }
+  }, [])
+
+  const applyLocalFilters = useCallback((inputRows: ClientPnLAnalysisRow[], fg: FilterGroup | null) => {
+    if (!fg || !Array.isArray(fg.rules) || fg.rules.length === 0) return inputRows
+    const rules = fg.rules.filter(r => r && typeof r.field === 'string' && r.field.trim().length > 0)
+    if (rules.length === 0) return inputRows
+    const join = fg.join === 'OR' ? 'OR' : 'AND'
+
+    return (inputRows || []).filter((row) => {
+      const evalRule = (r: any) => {
+        const meta = filterMetaById.get(String(r.field))
+        if (!meta) return true
+        const val = getValueForField(row, String(r.field))
+        if (meta.type === 'number' || meta.type === 'percent') {
+          return matchNumber(val, r.op as any, r.value, r.value2)
+        }
+        // Default: text
+        return matchText(val, r.op as any, r.value)
+      }
+
+      if (join === 'OR') return rules.some(evalRule)
+      return rules.every(evalRule)
+    })
+  }, [filterMetaById, getValueForField, matchNumber, matchText])
+
+  const viewRows = useMemo(() => {
+    return applyLocalFilters(rows, appliedFilters)
+  }, [rows, appliedFilters, applyLocalFilters])
 
   // Persist/Restore AG Grid Column State (order/width/visibility/etc).
   // Fresh grad note:
@@ -746,9 +873,18 @@ export default function ClientPnLAnalysis() {
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <Button variant="outline" disabled className="w-full sm:w-[140px] whitespace-nowrap gap-2">
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-[140px] whitespace-nowrap gap-2"
+                  onClick={() => setFilterBuilderOpen(true)}
+                >
                   <Filter className="h-4 w-4" />
                   {tz('clientPnl.filter', '筛选', 'Filter')}
+                  {appliedFilters && appliedFilters.rules.length > 0 ? (
+                    <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded bg-slate-100 dark:bg-slate-800 px-1.5 text-xs">
+                      {appliedFilters.rules.length}
+                    </span>
+                  ) : null}
                 </Button>
               </div>
             </div>
@@ -769,12 +905,65 @@ export default function ClientPnLAnalysis() {
                   </span>
                 </div>
               ) : (
-                hasSearched ? `${t('pnlMonitor.totalRecords', { count: rows.length })}` : tx('clientPnl.readyToSearch', '请选择时间范围并查询')
+                hasSearched ? `${t('pnlMonitor.totalRecords', { count: viewRows.length })}` : tx('clientPnl.readyToSearch', '请选择时间范围并查询')
               )}
             </div>
           </div>
         </CardContent>
       </Card>
+
+      {/* Applied filters summary (local filtering) */}
+      {appliedFilters && appliedFilters.rules.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 px-1 sm:px-0">
+          <span className="text-xs text-muted-foreground">
+            {tz('clientPnl.filterApplied', '已应用筛选', 'Filters applied')}: {appliedFilters.join}
+          </span>
+          {appliedFilters.rules.map((r, idx) => {
+            const meta = filterMetaById.get(String(r.field))
+            const label = meta?.label || String(r.field)
+            const opLabel = (OPERATOR_LABELS as any)[r.op] || String(r.op)
+            const valueText = (r.op === 'between')
+              ? `${r.value ?? ''} ~ ${r.value2 ?? ''}`
+              : `${r.value ?? ''}`
+            return (
+              <span
+                key={`${String(r.field)}-${idx}`}
+                className="inline-flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/20 px-2 py-1 text-xs"
+              >
+                <span className="text-muted-foreground">{label}</span>
+                <span>{opLabel}</span>
+                <span className="font-mono">{valueText}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 w-5 p-0"
+                  onClick={() => {
+                    setAppliedFilters(prev => {
+                      if (!prev) return null
+                      const nextRules = prev.rules.filter((_, i) => i !== idx)
+                      return nextRules.length > 0 ? { ...prev, rules: nextRules } : null
+                    })
+                    try { gridApi?.paginationGoToFirstPage?.() } catch {}
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </span>
+            )
+          })}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-red-600 dark:text-red-400"
+            onClick={() => {
+              setAppliedFilters(null)
+              try { gridApi?.paginationGoToFirstPage?.() } catch {}
+            }}
+          >
+            {tz('clientPnl.clearFilters', '清空筛选', 'Clear filters')}
+          </Button>
+        </div>
+      ) : null}
 
       {/* Banner below filters: data freshness reminder */}
       <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded px-4 py-2 text-rose-800 dark:text-rose-200 text-sm">
@@ -809,7 +998,7 @@ export default function ClientPnLAnalysis() {
           ) : null}
           
           <AgGridReact
-            rowData={rows}
+            rowData={viewRows}
             columnDefs={columnDefs}
             gridOptions={{ theme: 'legacy' }}
             defaultColDef={{
@@ -884,8 +1073,8 @@ export default function ClientPnLAnalysis() {
               <div className="text-sm text-muted-foreground">
                 {t("pnlMonitor.totalRecordsDisplay", { 
                   start: (currentPage - 1) * pageSize + 1, 
-                  end: Math.min(currentPage * pageSize, rows.length), 
-                  total: rows.length 
+                  end: Math.min(currentPage * pageSize, viewRows.length), 
+                  total: viewRows.length 
                 })}
               </div>
               
@@ -950,6 +1139,19 @@ export default function ClientPnLAnalysis() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Filter Builder (local filtering) */}
+      <FilterBuilder
+        open={filterBuilderOpen}
+        onOpenChange={setFilterBuilderOpen}
+        initialFilters={appliedFilters || undefined}
+        columns={filterColumns}
+        onApply={(fg) => {
+          // fresh grad note: apply filters locally to the current result set (no backend call)
+          setAppliedFilters(fg)
+          try { gridApi?.paginationGoToFirstPage?.() } catch {}
+        }}
+      />
     </div>
   )
 }
