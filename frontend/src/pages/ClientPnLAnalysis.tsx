@@ -5,7 +5,15 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { Search, RefreshCw, X, Calendar as CalendarIcon } from "lucide-react"
+import { Search, RefreshCw, X, Calendar as CalendarIcon, Settings2, Filter } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridApi } from 'ag-grid-community'
 import { format } from "date-fns"
@@ -51,6 +59,7 @@ function toNumber(v: unknown, fallback = 0): number {
 
 
 const SETTINGS_KEY = 'CLIENT_PNL_SETTINGS_V1'
+const GRID_STATE_STORAGE_KEY = 'CLIENT_PNL_ANALYSIS_GRID_STATE_V1'
 
 export default function ClientPnLAnalysis() {
   const { theme } = useTheme()
@@ -122,6 +131,9 @@ export default function ClientPnLAnalysis() {
 
   // Grid State
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
+  // Store a snapshot of AG Grid Column State to drive the column toggle UI.
+  // Fresh grad note: we do NOT keep a separate "columnVisibility" map to avoid two sources of truth.
+  const [columnState, setColumnState] = useState<any[]>([])
   
   // Pagination State
   const [pageSize, setPageSize] = useState(50)
@@ -242,6 +254,47 @@ export default function ClientPnLAnalysis() {
       default: return sid ? `Server ${sid}` : "Unknown"
     }
   }, [])
+
+  // Persist/Restore AG Grid Column State (order/width/visibility/etc).
+  // Fresh grad note:
+  // - We intentionally do NOT apply any state if localStorage is empty => default is "show all columns".
+  // - We throttle saves because column resize/move can fire many times.
+  const refreshColumnState = useCallback((api?: GridApi | null) => {
+    const a = api || gridApi
+    if (!a) return
+    try {
+      const state = (a as any).getColumnState?.()
+      if (Array.isArray(state)) setColumnState(state)
+    } catch {}
+  }, [gridApi])
+
+  const saveGridState = useCallback(() => {
+    if (!gridApi) return
+    try {
+      const state = (gridApi as any).getColumnState?.()
+      if (!Array.isArray(state)) return
+      localStorage.setItem(GRID_STATE_STORAGE_KEY, JSON.stringify(state))
+      setColumnState(state)
+    } catch {}
+  }, [gridApi])
+
+  const throttledSaveGridState = useMemo(() => {
+    let last = 0
+    let timer: any
+    return () => {
+      const now = Date.now()
+      const run = () => {
+        last = Date.now()
+        saveGridState()
+      }
+      if (now - last >= 300) {
+        run()
+      } else {
+        clearTimeout(timer)
+        timer = setTimeout(run, 300 - (now - last))
+      }
+    }
+  }, [saveGridState])
 
   // Column Definitions
   const columnDefs = useMemo<ColDef[]>(() => [
@@ -375,6 +428,12 @@ export default function ClientPnLAnalysis() {
       width: 140,
       sortable: true,
       filter: 'agNumberColumnFilter',
+      // NOTE:
+      // AG Grid sorting/filtering uses the underlying cell value (from `field`/`valueGetter`),
+      // NOT what you render in `cellRenderer`.
+      // Backend may return `ib_net_deposit` as string (e.g. "1000") or number, so we normalize it
+      // to a real number here to avoid lexicographic sorting like "100" < "20".
+      valueGetter: (params: any) => toNumber(params.data?.ib_net_deposit),
       // Highlight: IB Net Deposit (match Net PnL style but with red tint)
       cellStyle: { backgroundColor: 'rgba(255,0,0,0.08)' },
       cellRenderer: (params: any) => {
@@ -425,6 +484,9 @@ export default function ClientPnLAnalysis() {
       )
     },
     {
+      // Fresh grad note: computed columns should have a stable `colId`,
+      // otherwise column visibility persistence can break when columns change.
+      colId: "net_pnl_with_comm_usd",
       headerName: tz("clientPnl.columns.netPnLWithComm", "净盈亏(含佣金) (USD)", "Net PnL (w/ Comm) (USD)"),
       width: 170,
       sortable: true,
@@ -458,6 +520,29 @@ export default function ClientPnLAnalysis() {
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
     },
   ], [tz])
+
+  // Build a deterministic list of toggleable columns from columnDefs.
+  // Fresh grad note: for most columns, `colId` defaults to `field`. For computed columns, we set `colId` explicitly.
+  const toggleColumns = useMemo(() => {
+    return (columnDefs || [])
+      .map((c: any) => {
+        const colId = c?.colId || c?.field
+        const label = typeof c?.headerName === 'string' && c.headerName.trim().length > 0 ? c.headerName : String(colId || '')
+        return { colId: String(colId || ''), label }
+      })
+      .filter((x: any) => x.colId)
+  }, [columnDefs])
+
+  const columnVisibilityMap = useMemo(() => {
+    const m: Record<string, boolean> = {}
+    ;(columnState || []).forEach((s: any) => {
+      if (s && typeof s.colId === 'string') {
+        // hide === true => not visible
+        m[s.colId] = !s.hide
+      }
+    })
+    return m
+  }, [columnState])
 
   const getRangeLabel = useCallback((range: string, labelZh: string, labelEn: string) => {
     const { start_date, end_date } = getDateRange(range)
@@ -498,14 +583,17 @@ export default function ClientPnLAnalysis() {
       <Card>
         <CardContent className="py-3">
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-            <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* Filters row:
+                - Mobile: each control takes one full row (w-full)
+                - Desktop: date / range / search input are same width, action buttons are same width */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     id="date"
                     variant={"outline"}
                     className={cn(
-                      "w-[260px] justify-start text-left font-normal",
+                      "w-full sm:w-[260px] justify-start text-left font-normal",
                       !date && "text-muted-foreground"
                     )}
                   >
@@ -549,7 +637,7 @@ export default function ClientPnLAnalysis() {
                   setDate(undefined)
                 }}
               >
-                <SelectTrigger className="w-[260px]">
+                <SelectTrigger className="w-full sm:w-[260px]">
                   <SelectValue placeholder="Quick Range" />
                 </SelectTrigger>
                 <SelectContent>
@@ -561,13 +649,14 @@ export default function ClientPnLAnalysis() {
                 </SelectContent>
               </Select>
 
-              <div className="flex items-center gap-1 flex-1 sm:flex-none">
+              {/* Search input (same width as date/range) */}
+              <div className="flex items-center gap-1 w-full sm:w-[260px]">
                 <Input
                   placeholder={tz('clientPnl.searchPlaceholder', '搜索 ClientID / AccountID', 'Search ClientID / AccountID')}
                   value={searchInput}
                   onChange={e => setSearchInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  className="w-full sm:w-[260px]"
+                  className="w-full"
                 />
                 {searchInput && (
                   <Button variant="ghost" size="sm" onClick={() => setSearchInput("")} className="px-2">
@@ -576,10 +665,92 @@ export default function ClientPnLAnalysis() {
                 )}
               </div>
 
-              <Button onClick={handleSearch} disabled={loading} className="whitespace-nowrap min-w-[80px]">
-                {loading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
-                {tx('common.search', '查询')}
-              </Button>
+              {/* Action buttons:
+                  - Mobile: each takes one row (flex-col + w-full)
+                  - Desktop: buttons are same width and stay on the right of the search input */}
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                <Button onClick={handleSearch} disabled={loading} className="w-full sm:w-[140px] whitespace-nowrap min-w-[80px]">
+                  {loading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
+                  {tx('common.search', '查询')}
+                </Button>
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full sm:w-[140px] whitespace-nowrap gap-2">
+                      <Settings2 className="h-4 w-4" />
+                      {tz('clientPnl.columnToggle', '列显示', 'Columns')}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-72 max-h-[60vh] overflow-auto">
+                    <DropdownMenuLabel>{tz('clientPnl.showColumns', '显示列', 'Show Columns')}</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+
+                    {/* Quick actions */}
+                    <div className="px-2 pb-2 flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2"
+                        onClick={() => {
+                          if (!gridApi) return
+                          try {
+                            const ids = toggleColumns.map(c => c.colId)
+                            ;(gridApi as any).setColumnsVisible?.(ids, true)
+                            throttledSaveGridState()
+                            setTimeout(() => refreshColumnState(gridApi), 0)
+                          } catch {}
+                        }}
+                      >
+                        {tz('clientPnl.columnsShowAll', '全选', 'Show All')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2"
+                        onClick={() => {
+                          if (!gridApi) return
+                          try {
+                            localStorage.removeItem(GRID_STATE_STORAGE_KEY)
+                            ;(gridApi as any).resetColumnState?.()
+                            setTimeout(() => refreshColumnState(gridApi), 0)
+                          } catch {}
+                        }}
+                      >
+                        {tz('clientPnl.columnsReset', '重置', 'Reset')}
+                      </Button>
+                    </div>
+
+                    <DropdownMenuSeparator />
+
+                    {toggleColumns.map(({ colId, label }) => {
+                      const checked = columnVisibilityMap[colId] ?? true
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={colId}
+                          checked={checked}
+                          onSelect={(e) => { e.preventDefault() }}
+                          onCheckedChange={(value: boolean) => {
+                            if (!gridApi) return
+                            try {
+                              // Fresh grad note: update the Grid first, then persist the state.
+                              ;(gridApi as any).setColumnsVisible?.([colId], !!value)
+                              throttledSaveGridState()
+                              setTimeout(() => refreshColumnState(gridApi), 0)
+                            } catch {}
+                          }}
+                        >
+                          {label}
+                        </DropdownMenuCheckboxItem>
+                      )
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button variant="outline" disabled className="w-full sm:w-[140px] whitespace-nowrap gap-2">
+                  <Filter className="h-4 w-4" />
+                  {tz('clientPnl.filter', '筛选', 'Filter')}
+                </Button>
+              </div>
             </div>
 
             <div className="text-sm text-muted-foreground hidden sm:block">
@@ -658,11 +829,28 @@ export default function ClientPnLAnalysis() {
             }}
             onGridReady={(params) => {
               setGridApi(params.api)
-              // @ts-ignore
-              if (params.api.paginationSetPageSize) {
-                 // @ts-ignore
-                 params.api.paginationSetPageSize(pageSize)
-              }
+              // Fresh grad note: apply page size first so pagination UI matches our state.
+              try {
+                // @ts-ignore
+                if (params.api.paginationSetPageSize) {
+                  // @ts-ignore
+                  params.api.paginationSetPageSize(pageSize)
+                }
+              } catch {}
+
+              // Restore column state from localStorage (if any). If nothing saved, default is "show all".
+              try {
+                const raw = localStorage.getItem(GRID_STATE_STORAGE_KEY)
+                if (raw) {
+                  const saved = JSON.parse(raw)
+                  if (Array.isArray(saved) && saved.length > 0) {
+                    ;(params.api as any).applyColumnState?.({ state: saved, applyOrder: true })
+                  }
+                }
+              } catch {}
+
+              // Snapshot the current column state for the column toggle menu.
+              setTimeout(() => refreshColumnState(params.api), 0)
             }}
             animateRows={true}
             enableCellTextSelection={true}
@@ -674,6 +862,10 @@ export default function ClientPnLAnalysis() {
             paginationPageSize={pageSize}
             suppressPaginationPanel={true}
             onPaginationChanged={onPaginationChanged}
+            onColumnResized={(e: any) => { if (e?.finished) throttledSaveGridState() }}
+            onColumnMoved={() => throttledSaveGridState()}
+            onColumnVisible={() => throttledSaveGridState()}
+            onColumnPinned={() => throttledSaveGridState()}
           />
         </div>
         <style>{`
