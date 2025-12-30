@@ -83,6 +83,10 @@ class ClickHouseService:
                 m.userId AS client_id,     
                 any(m.NAME) AS client_name,
                 any(m.GROUP) AS group,
+                -- Fresh grad note:
+                -- `country` comes from fxbackoffice_users (CRM/BackOffice user profile).
+                -- We convert empty string to NULL to keep "missing country" truly empty.
+                any(NULLIF(u.country, '')) AS country,
                 any(m.ZIPCODE) AS zipcode,
                 any(m.CURRENCY) AS currency,
                 any(m.sid) AS sid,
@@ -171,7 +175,42 @@ class ClickHouseService:
 
             # 使用 Pandas 处理数据清洗 (fillna 等)
             df = pd.DataFrame(data)
-            df = df.fillna(0)
+            # IMPORTANT (fresh grad note):
+            # Do NOT do `df.fillna(0)` on the whole DataFrame.
+            # Reason: it will convert NULLs in TEXT columns into 0 (e.g. country/client_name/group),
+            # which pollutes UI display and breaks "empty should stay NULL" requirements.
+            #
+            # Instead, we maintain a NUMERIC column whitelist and only fill NULLs for those metrics.
+            # Maintenance rule:
+            # - If you add/remove numeric metrics in the SELECT list (sum/count/amount fields),
+            #   update this list accordingly.
+            # - Keep dimension / identity fields (ids, names, group, zipcode, currency, server, country)
+            #   OUT of this whitelist so they can remain NULL/empty naturally.
+            #
+            # Why a whitelist (instead of pandas dtype auto-detection)?
+            # - In real datasets, numeric columns may arrive as strings/Decimal/object due to driver quirks,
+            #   mixed types, or missing values. dtype-based detection can silently miss columns.
+            # - A whitelist is explicit, stable, and aligned with business semantics.
+            NUMERIC_FILLNA_ZERO_COLUMNS = [
+                # Counts / volumes
+                "total_trades",
+                "total_volume_lots",
+                # PnL / money metrics
+                "trade_profit_usd",
+                "swap_usd",
+                "commission_usd",
+                "ib_commission_usd",
+                "broker_net_revenue",
+                "period_net_deposit",
+                # Joined metric (may come as string/None depending on source)
+                "ib_net_deposit",
+            ]
+
+            # Normalize numeric columns and fill missing values with 0.
+            # We use `to_numeric(..., errors='coerce')` to safely handle strings like "123.45".
+            for col in NUMERIC_FILLNA_ZERO_COLUMNS:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             
             processed_data = df.to_dict('records')
 

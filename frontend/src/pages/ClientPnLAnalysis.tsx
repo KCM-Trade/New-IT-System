@@ -33,6 +33,7 @@ interface ClientPnLAnalysisRow {
   client_name?: string
   account?: string | number
   group?: string
+  country?: string | null
   zipcode?: string
   currency?: string
   sid?: number
@@ -271,6 +272,7 @@ export default function ClientPnLAnalysis() {
       { id: "account", label: "Account", type: "text", filterable: true, operators: textOps },
       { id: "client_name", label: "Client Name", type: "text", filterable: true, operators: textOps },
       { id: "group", label: "Group", type: "text", filterable: true, operators: textOps },
+      { id: "country", label: tz("clientPnl.columns.country", "国家", "Country"), type: "text", filterable: true, operators: textOps },
       { id: "zipcode", label: "Zipcode", type: "text", filterable: true, operators: textOps },
       { id: "currency", label: "Currency", type: "text", filterable: true, operators: textOps },
       {
@@ -461,6 +463,21 @@ export default function ClientPnLAnalysis() {
       width: 120,
       sortable: true,
       filter: true,
+    },
+    {
+      field: "country",
+      headerName: tz("clientPnl.columns.country", "国家", "Country"),
+      width: 110,
+      sortable: true,
+      filter: true,
+      // Fresh grad note: backend may return NULL/empty for missing country.
+      // We display '-' instead of '0' (and after backend fix, NULL stays NULL).
+      valueFormatter: (params: any) => {
+        const v = params.value
+        if (v === null || v === undefined) return "-"
+        const s = String(v).trim()
+        return s.length > 0 ? s : "-"
+      }
     },
     {
       field: "zipcode",
@@ -876,7 +893,10 @@ export default function ClientPnLAnalysis() {
                 <Button
                   variant="outline"
                   className="w-full sm:w-[140px] whitespace-nowrap gap-2"
-                  onClick={() => setFilterBuilderOpen(true)}
+                  // Fresh grad note: this opens a local FilterBuilder (no backend call),
+                  // filtering is applied on the current result set only.
+                  // onClick={() => setFilterBuilderOpen(true)}
+                  disabled
                 >
                   <Filter className="h-4 w-4" />
                   {tz('clientPnl.filter', '筛选', 'Filter')}
