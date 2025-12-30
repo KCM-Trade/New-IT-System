@@ -27,6 +27,7 @@ interface ClientPnLAnalysisRow {
   currency?: string
   sid?: number
   partner_id?: number | string
+  ib_net_deposit?: number
   server?: string
   total_trades: number
   trade_profit_usd: number
@@ -101,7 +102,7 @@ export default function ClientPnLAnalysis() {
   const [loading, setLoading] = useState(false)
   const [searchInput, setSearchInput] = useState(initialSettings?.searchInput ?? "")
   const [timeRange, setTimeRange] = useState<string>(initialSettings?.timeRange ?? "1m") // Default to 1 month
-  const [hasSearched, setHasSearched] = useState(false)
+  const [hasSearched, setHasSearched] = useState(!!initialSettings?.hasSearched)
   const [date, setDate] = useState<DateRange | undefined>(initialSettings?.date)
   const [stats, setStats] = useState<{ elapsed?: number; rows_read?: number; bytes_read?: number } | null>(null)
 
@@ -111,12 +112,13 @@ export default function ClientPnLAnalysis() {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         timeRange,
         searchInput,
-        date
+        date,
+        hasSearched
       }))
     } catch (e) {
       console.error("Failed to save settings", e)
     }
-  }, [timeRange, searchInput, date])
+  }, [timeRange, searchInput, date, hasSearched])
 
   // Grid State
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
@@ -211,6 +213,14 @@ export default function ClientPnLAnalysis() {
       setLoading(false)
     }
   }, [timeRange, date, searchInput, getDateRange])
+
+  // Auto search on mount if we have previous search state
+  useEffect(() => {
+    if (initialSettings?.hasSearched) {
+      handleSearch()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()
@@ -329,7 +339,7 @@ export default function ClientPnLAnalysis() {
     {
       field: "sid",
       headerName: tz("clientPnl.columns.server", "服务器", "Server"),
-      width: 140,
+      width: 100,
       sortable: true,
       filter: true,
       valueFormatter: (params: any) => getServerName(params.value)
@@ -358,12 +368,23 @@ export default function ClientPnLAnalysis() {
       }
     },
     {
+      field: "ib_net_deposit",
+      headerName: tz("clientPnl.columns.ibNetDeposit", "IB 净入金 (USD)", "IB Net Deposit (USD)"),
+      width: 140,
+      sortable: true,
+      filter: 'agNumberColumnFilter',
+      cellRenderer: (params: any) => {
+        const val = toNumber(params.value)
+        const color = val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+        return <span className={`font-semibold ${color}`}>{formatCurrency(val)}</span>
+      }
+    },
+    {
       field: "total_trades",
       headerName: tz("clientPnl.columns.totalTrades", "总交易数", "Total Trades"),
       width: 110,
       sortable: true,
       filter: true,
-      type: 'numericColumn'
     },
     {
       field: "total_volume_lots",
@@ -371,7 +392,6 @@ export default function ClientPnLAnalysis() {
       width: 120,
       sortable: true,
       filter: true,
-      type: 'numericColumn',
       valueFormatter: (params: any) => toNumber(params.value).toFixed(2)
     },
     {
@@ -380,7 +400,6 @@ export default function ClientPnLAnalysis() {
       width: 150,
       sortable: true,
       filter: true,
-      type: 'numericColumn',
       cellStyle: { backgroundColor: 'rgba(0,0,0,0.035)' },
       cellRenderer: (params: any) => {
         const val = toNumber(params.value)
@@ -395,7 +414,6 @@ export default function ClientPnLAnalysis() {
       width: 150,
       sortable: true,
       filter: 'agNumberColumnFilter',
-      type: 'numericColumn',
       cellRenderer: (params: any) => (
         <span className="font-semibold text-blue-600 dark:text-blue-400">
           {formatCurrency(params.value)}
@@ -407,7 +425,6 @@ export default function ClientPnLAnalysis() {
       width: 170,
       sortable: true,
       filter: 'agNumberColumnFilter',
-      type: 'numericColumn',
       valueGetter: (params: any) => {
         const tradeProfit = toNumber(params.data?.trade_profit_usd)
         const ibCommission = toNumber(params.data?.ib_commission_usd)
@@ -426,7 +443,6 @@ export default function ClientPnLAnalysis() {
       width: 130,
       sortable: true,
       filter: true,
-      type: 'numericColumn',
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
     },
     {
@@ -435,7 +451,6 @@ export default function ClientPnLAnalysis() {
       width: 130,
       sortable: true,
       filter: true,
-      type: 'numericColumn',
       valueFormatter: (params: any) => formatCurrency(toNumber(params.value))
     },
   ], [tz])

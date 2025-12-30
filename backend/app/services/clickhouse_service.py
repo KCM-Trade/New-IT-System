@@ -87,6 +87,7 @@ class ClickHouseService:
                 any(m.CURRENCY) AS currency,
                 any(m.sid) AS sid,
                 any(u.partnerId) AS partner_id,
+                any(ib_sum.net_deposit_usd) AS ib_net_deposit,
                 'MT4' AS server,            
                 
                 countIf(t.CMD IN (0, 1)) AS total_trades,
@@ -109,6 +110,7 @@ class ClickHouseService:
             INNER JOIN fxbackoffice_mt4_users AS m ON t.LOGIN = m.LOGIN
             LEFT JOIN fxbackoffice_users AS u ON m.userId = u.id
             LEFT JOIN ib_costs AS ib ON t.ticketSid = ib.ticketSid
+            LEFT JOIN ib_net_deposit_daily_summary AS ib_sum ON toString(u.partnerId) = toString(ib_sum.userId)
             WHERE 
                 t.CLOSE_TIME >= %(start_date)s 
                 AND t.CLOSE_TIME <= %(end_date)s
