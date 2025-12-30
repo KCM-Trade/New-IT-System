@@ -350,6 +350,8 @@ export default function ClientPnLAnalysis() {
       width: 120,
       sortable: true,
       filter: true,
+      // Highlight: Direct Parent IB (match Net PnL style but with red tint)
+      cellStyle: { backgroundColor: 'rgba(255,0,0,0.08)' },
       cellRenderer: (params: any) => {
         const id = params.value
         if (!id || id === 0 || id === "0") return <span className="text-muted-foreground">-</span>
@@ -373,6 +375,8 @@ export default function ClientPnLAnalysis() {
       width: 140,
       sortable: true,
       filter: 'agNumberColumnFilter',
+      // Highlight: IB Net Deposit (match Net PnL style but with red tint)
+      cellStyle: { backgroundColor: 'rgba(255,0,0,0.08)' },
       cellRenderer: (params: any) => {
         const val = toNumber(params.value)
         const color = val >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
@@ -600,6 +604,11 @@ export default function ClientPnLAnalysis() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Banner below filters: data freshness reminder */}
+      <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded px-4 py-2 text-rose-800 dark:text-rose-200 text-sm">
+        数据仅更新至 <span className="font-semibold">2025-12-27</span>，并非最新实时数据。
+      </div>
 
       <div className="flex-1 relative">
         <div
