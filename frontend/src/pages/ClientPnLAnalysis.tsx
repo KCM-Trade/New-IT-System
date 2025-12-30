@@ -265,7 +265,7 @@ export default function ClientPnLAnalysis() {
   // Filter columns whitelist (for FilterBuilder)
   // fresh grad note: keep this list aligned with both the table fields and local filter executor.
   const filterColumns = useMemo(() => {
-    const textOps: FilterOperator[] = ['contains', 'equals', 'starts_with', 'ends_with']
+    const textOps: FilterOperator[] = ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with']
     const numberOps: FilterOperator[] = ['=', '!=', '>', '>=', '<', '<=', 'between']
     return [
       { id: "client_id", label: "Client ID", type: "text", filterable: true, operators: textOps },
@@ -327,7 +327,9 @@ export default function ClientPnLAnalysis() {
     const qq = q.toLowerCase()
     switch (op) {
       case 'contains': return vv.includes(qq)
+      case 'not_contains': return !vv.includes(qq)
       case 'equals': return vv === qq
+      case 'not_equals': return vv !== qq
       case 'starts_with': return vv.startsWith(qq)
       case 'ends_with': return vv.endsWith(qq)
       default: return true
@@ -895,8 +897,8 @@ export default function ClientPnLAnalysis() {
                   className="w-full sm:w-[140px] whitespace-nowrap gap-2"
                   // Fresh grad note: this opens a local FilterBuilder (no backend call),
                   // filtering is applied on the current result set only.
-                  // onClick={() => setFilterBuilderOpen(true)}
-                  disabled
+                  onClick={() => setFilterBuilderOpen(true)}
+                  // disabled
                 >
                   <Filter className="h-4 w-4" />
                   {tz('clientPnl.filter', '筛选', 'Filter')}
