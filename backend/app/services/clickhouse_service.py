@@ -114,7 +114,14 @@ class ClickHouseService:
             INNER JOIN fxbackoffice_mt4_users AS m ON t.LOGIN = m.LOGIN
             LEFT JOIN fxbackoffice_users AS u ON m.userId = u.id
             LEFT JOIN ib_costs AS ib ON t.ticketSid = ib.ticketSid
-            LEFT JOIN ib_net_deposit_daily_summary AS ib_sum ON toString(u.partnerId) = toString(ib_sum.userId)
+            -- 修改：使用新的 IB 旗下全量净入金汇总表 (sumMerge 还原聚合状态)
+            LEFT JOIN (
+                SELECT 
+                    ibId, 
+                    sumMerge(net_deposit) AS net_deposit_usd
+                FROM ib_downline_net_deposit_agg
+                GROUP BY ibId
+            ) AS ib_sum ON toString(u.partnerId) = toString(ib_sum.ibId)
             WHERE 
                 t.CLOSE_TIME >= %(start_date)s 
                 AND t.CLOSE_TIME <= %(end_date)s

@@ -289,7 +289,7 @@ export default function ClientPnLAnalysis() {
         operators: ['='] as FilterOperator[],
       },
       { id: "partner_id", label: tz("clientPnl.columns.directPartner", "直属上级IB", "Direct Parent IB"), type: "text", filterable: true, operators: textOps },
-      { id: "ib_net_deposit", label: tz("clientPnl.columns.ibNetDeposit", "IB 净入金 (USD)", "IB Net Deposit (USD)"), type: "number", filterable: true, operators: numberOps },
+      { id: "ib_net_deposit", label: tz("clientPnl.columns.ibNetDeposit", "IB 旗下总净入金 (USD)", "IB Team Net Deposit (USD)"), type: "number", filterable: true, operators: numberOps },
       { id: "total_trades", label: tz("clientPnl.columns.totalTrades", "总交易数", "Total Trades"), type: "number", filterable: true, operators: numberOps },
       { id: "total_volume_lots", label: tz("clientPnl.columns.totalVolume", "总手数", "Total Volume"), type: "number", filterable: true, operators: numberOps },
       { id: "trade_profit_usd", label: tz("clientPnl.columns.tradeProfit", "交易盈亏 (USD)", "Trade Profit (USD)"), type: "number", filterable: true, operators: numberOps },
@@ -554,7 +554,7 @@ export default function ClientPnLAnalysis() {
       cellRenderer: (params: any) => {
         const id = params.value
         if (!id || id === 0 || id === "0") return <span className="text-muted-foreground">-</span>
-        const link = `https://mt4.kohleglobal.com/crm/users/${id}`
+        const link = `https://mt4.kohleglobal.com/crm/users/${id}/ib`
         return (
           <a 
             href={link} 
@@ -570,7 +570,7 @@ export default function ClientPnLAnalysis() {
     },
     {
       field: "ib_net_deposit",
-      headerName: tz("clientPnl.columns.ibNetDeposit", "IB 净入金 (USD)", "IB Net Deposit (USD)"),
+      headerName: tz("clientPnl.columns.ibNetDeposit", "IB 旗下总净入金 (USD)", "IB Team Net Deposit (USD)"),
       width: 140,
       sortable: true,
       filter: 'agNumberColumnFilter',
