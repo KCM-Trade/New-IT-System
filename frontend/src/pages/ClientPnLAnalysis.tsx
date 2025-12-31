@@ -914,6 +914,12 @@ export default function ClientPnLAnalysis() {
             <div className="text-sm text-muted-foreground hidden sm:block">
               {stats ? (
                 <div className="flex items-center gap-3 text-xs bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700">
+                  {(stats as any).from_cache && (
+                    <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-bold px-1">
+                      <RefreshCw className="h-3.5 w-3.5 animate-pulse" />
+                      {tz('clientPnl.cached', '已缓存', 'Cached')}
+                    </span>
+                  )}
                   <span className="font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                      耗时： {stats.elapsed?.toFixed(3)}s
                   </span>

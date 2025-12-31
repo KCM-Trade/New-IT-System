@@ -19,6 +19,16 @@ services:
     environment:
       # 示例：在 .env 中配置真实值
       - PYTHONUNBUFFERED=1
+      - REDIS_HOST=new-it-redis
+      - REDIS_PORT=6379
     restart: unless-stopped
+    depends_on:
+      - redis
 
+
+  redis:
+    image: redis:7-alpine
+    container_name: new-it-redis
+    restart: unless-stopped
+    # 内部通讯无需暴露端口到宿主机，更安全
 

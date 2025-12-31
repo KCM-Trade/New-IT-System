@@ -1,6 +1,9 @@
 import os
 import pandas as pd
 import clickhouse_connect
+import redis
+import json
+import hashlib
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import dotenv
@@ -20,6 +23,14 @@ class ClickHouseService:
         
         self.database = os.getenv("CLICKHOUSE_DB", "Fxbo_Trades") 
         self.secure = True # 强制开启 TLS
+
+        # Redis 初始化 (New IT System 专属缓存)
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            db=0,
+            decode_responses=True # 自动将 bytes 转为字符串
+        )
 
         # [可选] 启动时尝试轻量连接测试 (打印日志但不阻断启动)
         try:
@@ -56,8 +67,28 @@ class ClickHouseService:
         """
         Query ClickHouse for client PnL analysis within a date range.
         Returns a dict containing 'data' (list of records) and 'statistics' (query metadata).
+        Includes Redis caching logic.
         """
         print(f"🔍 [ClickHouseService] Request: start={start_date}, end={end_date}, search={search}")
+        
+        # 1. 生成缓存 Key (基于日期和搜索词进行 MD5)
+        search_key = (search or "").strip()
+        cache_params = f"pnl_v1_{start_date.date()}_{end_date.date()}_{search_key}"
+        cache_key = f"app:pnl:cache:{hashlib.md5(cache_params.encode()).hexdigest()}"
+
+        # 2. 尝试从 Redis 获取缓存
+        try:
+            cached_data = self.redis_client.get(cache_key)
+            if cached_data:
+                print(f"🚀 [Redis] Cache Hit: {cache_key}")
+                res = json.loads(cached_data)
+                # 注入从缓存读取的标记
+                if "statistics" in res:
+                    res["statistics"]["from_cache"] = True
+                return res
+        except Exception as re:
+            print(f"⚠️ Redis Read Error: {re}")
+
         try:
             client = self.get_client()
             
@@ -221,14 +252,28 @@ class ClickHouseService:
             
             processed_data = df.to_dict('records')
 
-            return {
+            result_dict = {
                 "data": processed_data,
                 "statistics": {
                     "elapsed": elapsed_seconds,
                     "rows_read": result.summary.get('read_rows', 0),
-                    "bytes_read": result.summary.get('read_bytes', 0)
+                    "bytes_read": result.summary.get('read_bytes', 0),
+                    "from_cache": False
                 }
             }
+
+            # 3. 将结果存入 Redis 缓存 (设置 TTL 为 1800 秒 = 30 分钟)
+            try:
+                self.redis_client.setex(
+                    cache_key,
+                    1800,
+                    json.dumps(result_dict)
+                )
+                print(f"✅ [Redis] Cache Saved: {cache_key}")
+            except Exception as se:
+                print(f"⚠️ Redis Save Error: {se}")
+
+            return result_dict
             
         except Exception as e:
             print(f"ClickHouse Query Error: {e}")
