@@ -19,6 +19,7 @@ class Settings:
     DB_NAME: str | None
     DB_PORT: int
     DB_CHARSET: str
+    FXBACK_DB_NAME: str | None
 
     # MySQL for ETL (source)
     MYSQL_HOST: str | None
@@ -49,6 +50,7 @@ class Settings:
         self.DB_NAME = os.environ.get("DB_NAME")
         self.DB_PORT = int(os.environ.get("DB_PORT", "3306"))
         self.DB_CHARSET = os.environ.get("DB_CHARSET", "utf8mb4")
+        self.FXBACK_DB_NAME = os.environ.get("FXBACK_DB_NAME")
 
         # MySQL (ETL 源库)
         self.MYSQL_HOST = os.environ.get("MYSQL_HOST")

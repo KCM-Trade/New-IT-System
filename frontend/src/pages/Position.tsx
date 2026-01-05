@@ -109,11 +109,13 @@ export default function PositionPage() {
   const [sorting, setSorting] = React.useState<SortingState>([
     { id: "profit_total", desc: false },
   ])
-  // Data source capsule toggle: 'mt4_live' | 'mt4_live2'
-  const [source, setSource] = React.useState<"mt4_live" | "mt4_live2">(() => {
+  // Data source capsule toggle: 'mt4_live' | 'mt4_live2' | 'mt5'
+  const [source, setSource] = React.useState<"mt4_live" | "mt4_live2" | "mt5">(() => {
     try {
-      const s = sessionStorage.getItem("position_source") as "mt4_live" | "mt4_live2" | null
-      return s === "mt4_live2" ? "mt4_live2" : "mt4_live"
+      const s = sessionStorage.getItem("position_source") as "mt4_live" | "mt4_live2" | "mt5" | null
+      if (s === "mt4_live2") return "mt4_live2"
+      if (s === "mt5") return "mt5"
+      return "mt4_live"
     } catch {
       return "mt4_live"
     }
@@ -192,7 +194,7 @@ export default function PositionPage() {
         ],
       },
       {
-        header: "Profit",
+        header: "Total Profit (Profit+Swap+Comm)",
         columns: [
           {
             accessorKey: "profit_buy",
@@ -261,8 +263,8 @@ export default function PositionPage() {
             <ToggleGroup
               type="single"
               value={source}
-              onValueChange={(v: string) => v && setSource(v as "mt4_live" | "mt4_live2")}
-              className="inline-flex w-full sm:w-[240px] items-center rounded-full bg-muted p-1"
+              onValueChange={(v: string) => v && setSource(v as "mt4_live" | "mt4_live2" | "mt5")}
+              className="inline-flex w-full sm:w-[320px] items-center rounded-full bg-muted p-1"
             >
               <ToggleGroupItem
                 value="mt4_live"
@@ -277,6 +279,13 @@ export default function PositionPage() {
                            data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
               >
                 mt4_live2
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="mt5"
+                className="flex-1 rounded-full first:rounded-l-full last:rounded-r-full px-3 py-1 text-center text-sm text-muted-foreground
+                           data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+              >
+                mt5
               </ToggleGroupItem>
             </ToggleGroup>
             <Button className="h-9 w-full sm:w-[120px] gap-2" onClick={onRefresh} disabled={loading}>
