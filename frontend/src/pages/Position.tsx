@@ -5,8 +5,9 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { ArrowUpDown, ArrowDownRight, ArrowUpRight, DollarSign, TrendingUp } from "lucide-react"
+import { ArrowUpDown, ArrowDownRight, ArrowUpRight, DollarSign, TrendingUp, Search } from "lucide-react"
 import { ColumnDef, SortingState, flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 type OpenPositionsItem = {
   symbol: string
@@ -18,6 +19,23 @@ type OpenPositionsItem = {
 }
 
 type OpenPositionsResp = { ok: boolean; items: OpenPositionsItem[]; error: string | null }
+
+type SymbolSummaryRow = {
+  source: string
+  symbol: string
+  volume_buy: number
+  volume_sell: number
+  profit_buy: number
+  profit_sell: number
+  profit_total: number
+}
+
+type SymbolSummaryResp = {
+  ok: boolean
+  items: SymbolSummaryRow[]
+  total: SymbolSummaryRow | null
+  error: string | null
+}
 
 function format2(n: number): string {
   return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -121,12 +139,34 @@ export default function PositionPage() {
     }
   })
 
+  // Cross-server summary state
+  const [summarySymbol, setSummarySymbol] = React.useState("XAUUSD")
+  const [summaryData, setSummaryData] = React.useState<SymbolSummaryResp | null>(null)
+  const [summaryLoading, setSummaryLoading] = React.useState(false)
+  const [summaryError, setSummaryError] = React.useState<string | null>(null)
+
   async function fetchOpenPositions(signal?: AbortSignal) {
     const res = await fetch(`/api/v1/open-positions/today?source=${source}`, { method: "GET", headers: { accept: "application/json" }, signal })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const json = (await res.json()) as OpenPositionsResp
     if (!json.ok) throw new Error(json.error || "unknown error")
     return json.items
+  }
+
+  async function onFetchSummary() {
+    setSummaryError(null)
+    setSummaryLoading(true)
+    try {
+      const res = await fetch(`/api/v1/open-positions/symbol-summary?symbol=${summarySymbol}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = (await res.json()) as SymbolSummaryResp
+      if (!json.ok) throw new Error(json.error || "unknown error")
+      setSummaryData(json)
+    } catch (e: any) {
+      setSummaryError(e?.message || "查询汇总失败")
+    } finally {
+      setSummaryLoading(false)
+    }
   }
 
   async function onRefresh() {
@@ -246,6 +286,125 @@ export default function PositionPage() {
 
   return (
     <div className="relative space-y-4 px-1 pb-6 sm:px-4 lg:px-6">
+      {/* 跨服务器品种汇总查询 */}
+      <Card className="mt-4 border-primary/20 bg-primary/5">
+        <CardContent className="pt-6">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-muted-foreground">
+                选择产品 (跨服汇总)
+              </label>
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <Select value={summarySymbol} onValueChange={setSummarySymbol}>
+                  <SelectTrigger className="w-full sm:w-[220px] h-10">
+                    <SelectValue placeholder="选择产品" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="XAUUSD">XAUUSD</SelectItem>
+                    <SelectItem value="XAUUSD (Related)">XAUUSD相关 (模糊匹配)</SelectItem>
+                    <SelectItem value="OTHERS" disabled>其他 (联系Kieran添加)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button 
+                  onClick={onFetchSummary} 
+                  disabled={summaryLoading}
+                  className="w-full sm:w-[200px] h-10 gap-2 shadow-sm"
+                >
+                  {summaryLoading ? <ArrowUpDown className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  查询跨服汇总
+                </Button>
+                {summaryError && <span className="text-sm text-red-600">{summaryError}</span>}
+              </div>
+            </div>
+
+            {summaryData && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                {/* 汇总统计卡片 */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <StatCard 
+                    title={`${summarySymbol} 总买入量`} 
+                    value={formatVolume(summaryData.total?.volume_buy || 0)} 
+                    positive={(summaryData.total?.volume_buy || 0) >= 0} 
+                    icon={TrendingUp} 
+                    variant="neutral" 
+                  />
+                  <StatCard 
+                    title={`${summarySymbol} 总卖出量`} 
+                    value={formatVolume(summaryData.total?.volume_sell || 0)} 
+                    positive={(summaryData.total?.volume_sell || 0) >= 0} 
+                    icon={TrendingUp} 
+                    variant="neutral" 
+                  />
+                  <StatCard 
+                    title={`${summarySymbol} 总买入盈亏`} 
+                    value={format2(summaryData.total?.profit_buy || 0)} 
+                    positive={(summaryData.total?.profit_buy || 0) >= 0} 
+                    variant="profit" 
+                  />
+                  <StatCard 
+                    title={`${summarySymbol} 总卖出盈亏`} 
+                    value={format2(summaryData.total?.profit_sell || 0)} 
+                    positive={(summaryData.total?.profit_sell || 0) >= 0} 
+                    variant="profit" 
+                  />
+                  <StatCard 
+                    title={`${summarySymbol} 总净盈亏`} 
+                    value={format2(summaryData.total?.profit_total || 0)} 
+                    positive={(summaryData.total?.profit_total || 0) >= 0} 
+                    variant="profit" 
+                  />
+                </div>
+
+                {/* 各服务器对比表 */}
+                <div className="overflow-hidden rounded-md border shadow-sm">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/50">
+                        <TableHead>服务器</TableHead>
+                        <TableHead>包含产品</TableHead>
+                        <TableHead className="text-right">Volume Buy</TableHead>
+                        <TableHead className="text-right">Volume Sell</TableHead>
+                        <TableHead className="text-right">Profit Buy</TableHead>
+                        <TableHead className="text-right">Profit Sell</TableHead>
+                        <TableHead className="text-right">Total Profit</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {summaryData.items.map((row) => (
+                        <TableRow key={row.source}>
+                          <TableCell className="font-medium">{row.source}</TableCell>
+                          <TableCell className="max-w-[200px] truncate" title={row.symbol}>
+                            {row.symbol || "-"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{formatVolume(row.volume_buy)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatVolume(row.volume_sell)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(row.profit_buy)}`}>{format2(row.profit_buy)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(row.profit_sell)}`}>{format2(row.profit_sell)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(row.profit_total)}`}>{format2(row.profit_total)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {summaryData.total && (
+                        <TableRow className="bg-muted/30 font-bold border-t-2">
+                          <TableCell>TOTAL</TableCell>
+                          <TableCell>All Related</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatVolume(summaryData.total.volume_buy)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatVolume(summaryData.total.volume_sell)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(summaryData.total.profit_buy)}`}>{format2(summaryData.total.profit_buy)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(summaryData.total.profit_sell)}`}>{format2(summaryData.total.profit_sell)}</TableCell>
+                          <TableCell className={`text-right tabular-nums ${profitClass(summaryData.total.profit_total)}`}>{format2(summaryData.total.profit_total)}</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="h-px bg-border my-2" />
+
       {/* 顶部统计卡片（5个） */}
       <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard title="Volume Buy" value={formatVolume(totals.volume_buy)} positive={totals.volume_buy >= 0} icon={TrendingUp} variant="neutral" />

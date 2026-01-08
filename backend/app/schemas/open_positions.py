@@ -26,4 +26,21 @@ class OpenPositionsResponse(BaseModel):
     error: str | None = None
 
 
+class SymbolSummaryRow(BaseModel):
+    source: str
+    symbol: str
+    volume_buy: float
+    volume_sell: float
+    profit_buy: float
+    profit_sell: float
+    profit_total: float
+
+
+class SymbolSummaryResponse(BaseModel):
+    ok: bool
+    items: list[SymbolSummaryRow]
+    total: SymbolSummaryRow | None = None
+    error: str | None = None
+
+
 

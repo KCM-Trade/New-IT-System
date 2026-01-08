@@ -3,8 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from ....core.config import Settings, get_settings
-from ....schemas.open_positions import OpenPositionsResponse
-from ....services.open_positions_service import get_open_positions_today
+from ....schemas.open_positions import OpenPositionsResponse, SymbolSummaryResponse
+from ....services.open_positions_service import (
+    get_open_positions_today,
+    get_symbol_cross_server_summary,
+)
 
 
 router = APIRouter(prefix="/open-positions")
@@ -16,6 +19,14 @@ def get_open_positions(
     source: str = "mt4_live",
 ):
     return get_open_positions_today(settings, source=source)
+
+
+@router.get("/symbol-summary", response_model=SymbolSummaryResponse)
+def get_symbol_summary(
+    symbol: str,
+    settings: Settings = Depends(get_settings),
+):
+    return get_symbol_cross_server_summary(settings, symbol=symbol)
 
 
 
