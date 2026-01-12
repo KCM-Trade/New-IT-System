@@ -18,8 +18,6 @@ import {
   ResponsiveContainer,
 } from "recharts"
 import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
 import { Calendar as CalendarIcon, Loader2, ArrowUp, ArrowDown, Info } from "lucide-react"
 import { DateRange } from "react-day-picker"
 import {
@@ -111,12 +109,11 @@ function useAnimatedNumber(target: number, durationMs = 600) {
 export default function ProfitPage() {
   const [rows, setRows] = useState<ProfitRow[]>([])
   const [loading, setLoading] = useState(true)
-  // fresh grad: date range via single Popover + range Calendar
+  // fresh grad: date range fixed to one week before 2025-12-29
   const [range, setRange] = useState<DateRange | undefined>(() => {
-    // fresh grad: default to the last 7 days on first load
-    const to = new Date()
-    const from = new Date()
-    from.setDate(from.getDate() - 7)
+    // fresh grad: fixed date range: 2025-12-22 to 2025-12-29
+    const to = new Date(2025, 11, 29) // month is 0-indexed, so 11 = December
+    const from = new Date(2025, 11, 22)
     return { from, to }
   })
   const [agg, setAgg] = useState<AggKey>("timeline")
@@ -455,15 +452,16 @@ export default function ProfitPage() {
       return null
     }
   }
-  useEffect(() => {
-    ;(async () => {
-      const ref = await loadLastRefresh()
-      if (ref && !range) {
-        setRangeFromRefreshed(ref)
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // fresh grad: removed auto-loading last refresh date since date range is now fixed
+  // useEffect(() => {
+  //   ;(async () => {
+  //     const ref = await loadLastRefresh()
+  //     if (ref && !range) {
+  //       setRangeFromRefreshed(ref)
+  //     }
+  //   })()
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [])
 
   // fresh grad: click to refresh backend aggregation then reload NDJSON
   const onRefresh = async () => {
@@ -593,26 +591,13 @@ export default function ProfitPage() {
           <CardTitle className="text-2xl font-bold">筛选与视图（XAUUSD）</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
-          {/* 时间范围（单按钮 + Range 日历） */}
+          {/* 时间范围（固定为 2025-12-22 至 2025-12-29） */}
           <div className="flex w-full items-center gap-2 sm:w-auto">
             <span className="w-20 flex-shrink-0 text-sm text-muted-foreground whitespace-nowrap">时间范围：</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="justify-start gap-2 font-normal flex-1 sm:flex-none sm:w-auto">
-                  <CalendarIcon className="h-4 w-4" />
-                  <span>{rangeLabel}</span>
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="range"
-                  selected={range}
-                  onSelect={(v) => setRange(v)}
-                  numberOfMonths={isMobile ? 1 : 2}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
+            <Button variant="outline" disabled className="justify-start gap-2 font-normal flex-1 sm:flex-none sm:w-auto cursor-not-allowed">
+              <CalendarIcon className="h-4 w-4" />
+              <span>{rangeLabel}</span>
+            </Button>
           </div>
           {/* 聚合类型（与聚合维度采用一致风格与宽度） */}
           <div className="flex w-full items-center gap-2 sm:w-auto">

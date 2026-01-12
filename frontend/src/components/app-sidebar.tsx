@@ -58,8 +58,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         title: t("nav.riskControlDepartment"),
         icon: IconDashboard,
         children: [
-          { title: "Demo 盈亏监控 (Preview)", url: "/client-pnl-analysis" },
-          { title: t("nav.equityMonitor"), url: "/equity-monitor" },
+          { title: "盈亏监控 (Preview)", url: "/client-pnl-analysis" },
           { title: t("nav.swapFreeControl"), url: "/swap-free-control" },
           { title: t("nav.basisAnalysis"), url: "/basis" },
           { title: t("nav.profitAnalysis"), url: "/profit" },
@@ -73,6 +72,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           { title: t("nav.template"), url: "/template" },
           { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
           { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
+          { title: t("nav.equityMonitor"), url: "/equity-monitor" },
         ],
       },
     ],
