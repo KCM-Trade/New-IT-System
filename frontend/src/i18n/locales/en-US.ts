@@ -22,6 +22,7 @@ export const enUS = {
   nav: {
     customerPnLMonitorV2: "AccountID PnL Monitor",
     clientPnLMonitor: "ClientID PnL Monitor",
+    ibReport: "IB Report",
     equityMonitor: "Equity - Monitor",
     clientTrading: "Client Trading Analysis",
     swapFreeControl: "Swap Free Control",
@@ -62,6 +63,7 @@ export const enUS = {
     loginIPs: "Login IP Monitoring",
     profitAnalysis: "Profit Analysis",
     clientTrading: "Client Trading Analysis",
+    ibReport: "IB Report",
     swapFreeControl: "Swap Free Control",
     customerPnLMonitor: "Customer P&L Monitor",
     customerPnLMonitorV2: "Customer P&L Monitor (V2)",
