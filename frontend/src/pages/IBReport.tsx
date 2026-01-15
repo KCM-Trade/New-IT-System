@@ -3,7 +3,7 @@ import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { Search, BarChart3, Calendar as CalendarIcon, Filter, Settings2 } from "lucide-react"
+import { Search, BarChart3, Calendar as CalendarIcon, Filter, Settings2, Star, ExternalLink, Clock, Square, CheckSquare } from "lucide-react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, GridApi, ICellRendererParams } from 'ag-grid-community'
 import { format } from "date-fns"
@@ -24,9 +24,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
 
 // --- Constants ---
 const GRID_STATE_STORAGE_KEY = 'IB_REPORT_GRID_STATE_V1'
+const FAV_GROUPS_STORAGE_KEY = 'IB_REPORT_FAV_GROUPS_V1'
 
 // --- Types ---
 
@@ -45,13 +55,25 @@ interface IBReportRow {
   net_deposit: IBValue
   volume: IBValue
   adjustments: IBValue
-  // Extended columns
   commission: IBValue
   ib_commission: IBValue
   swap: IBValue
   profit: IBValue
   new_clients: IBValue
   new_agents: IBValue
+}
+
+interface GroupMetadata {
+  tag_id: string
+  tag_name: string
+  user_count: number
+}
+
+interface GroupsApiResponse {
+  group_list: GroupMetadata[]
+  last_update_time: string
+  previous_update_time: string | null
+  total_groups: number
 }
 
 // --- Components ---
@@ -63,6 +85,7 @@ const DoubleValueRenderer = (params: ICellRendererParams) => {
   const value = params.value as IBValue
   if (!value) return null
 
+  const isPinned = params.node.rowPinned === 'top'
   const isPositive = (val: number) => val > 0
   const isNegative = (val: number) => val < 0
 
@@ -73,13 +96,38 @@ const DoubleValueRenderer = (params: ICellRendererParams) => {
   }
 
   return (
-    <div className="flex flex-col leading-tight py-1">
-      <span className={cn("font-medium", getClassName(value.range_val))}>
+    <div className={cn("flex flex-col leading-tight py-1", isPinned && "scale-[1.02] origin-left")}>
+      <span className={cn(
+        isPinned ? "font-bold text-[14px]" : "font-medium", 
+        getClassName(value.range_val)
+      )}>
         {value.range_val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
-      <span className="text-[10px] text-muted-foreground opacity-70 border-t border-dashed mt-0.5">
+      <span className={cn(
+        "text-muted-foreground opacity-70 border-t border-dashed mt-0.5",
+        isPinned ? "text-[11px] font-semibold" : "text-[10px]"
+      )}>
         Month: {value.month_val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
+    </div>
+  )
+}
+
+/**
+ * Custom Cell Renderer for Time Range (splits into two lines with smaller font)
+ */
+const TimeRangeRenderer = (params: ICellRendererParams) => {
+  const val = params.value as string
+  if (!val) return null
+  
+  const parts = val.split(' ~ ')
+  if (parts.length < 2) return <span className="text-[11px] font-mono">{val}</span>
+  
+  return (
+    <div className="flex flex-col leading-[1.1] py-1.5 text-[10px] font-mono text-muted-foreground">
+      <span>{parts[0]}</span>
+      <span className="opacity-40 text-[9px] py-0.5 text-center">to</span>
+      <span>{parts[1]}</span>
     </div>
   )
 }
@@ -104,6 +152,77 @@ export default function IBReport() {
   const [rows, setRows] = useState<IBReportRow[]>([])
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const [columnState, setColumnState] = useState<any[]>([])
+
+  // --- 组别动态加载与收藏状态 ---
+  const [allGroups, setAllGroups] = useState<GroupMetadata[]>([])
+  const [favGroups, setFavGroups] = useState<string[]>(() => {
+    // 初始加载：从 localStorage 读取，如果没有则使用硬编码的初始组别
+    const saved = localStorage.getItem(FAV_GROUPS_STORAGE_KEY)
+    return saved ? JSON.parse(saved) : PREDEFINED_GROUPS
+  })
+  const [isGroupsDialogOpen, setIsGroupsDialogOpen] = useState(false)
+  const [groupsMetadata, setGroupsMetadata] = useState<{
+    last_update: string,
+    prev_update: string | null
+  } | null>(null)
+  const [groupSearchQuery, setGroupSearchQuery] = useState("")
+
+  // --- 获取所有组别数据 (后端 7 天缓存) ---
+  const fetchAllGroups = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/ib-report/groups')
+      if (!res.ok) throw new Error('Failed to fetch groups')
+      const data: GroupsApiResponse = await res.json()
+      setAllGroups(data.group_list)
+      setGroupsMetadata({
+        last_update: data.last_update_time,
+        prev_update: data.previous_update_time
+      })
+    } catch (err) {
+      console.error("Error fetching IB groups:", err)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchAllGroups()
+  }, [fetchAllGroups])
+
+  // 收藏状态持久化
+  useEffect(() => {
+    localStorage.setItem(FAV_GROUPS_STORAGE_KEY, JSON.stringify(favGroups))
+  }, [favGroups])
+
+  const toggleFavorite = (groupName: string) => {
+    setFavGroups(prev => {
+      const isFav = prev.some(g => g.toLowerCase() === groupName.toLowerCase())
+      if (isFav) {
+        return prev.filter(g => g.toLowerCase() !== groupName.toLowerCase())
+      } else {
+        return [...prev, groupName]
+      }
+    })
+  }
+
+  const isFavorite = (groupName: string) => {
+    return favGroups.some(g => g.toLowerCase() === groupName.toLowerCase())
+  }
+
+  const filteredGroupsForDialog = useMemo(() => {
+    return allGroups.filter(g => 
+      g.tag_name.toLowerCase().includes(groupSearchQuery.toLowerCase())
+    )
+  }, [allGroups, groupSearchQuery])
+
+  // --- Popover 展示组别：常用组别 + 当前已选但非常用的组别 ---
+  const popoverDisplayGroups = useMemo(() => {
+    const groups = [...favGroups]
+    selectedGroups.forEach(sg => {
+      if (!groups.some(g => g.toLowerCase() === sg.toLowerCase())) {
+        groups.push(sg)
+      }
+    })
+    return groups
+  }, [favGroups, selectedGroups])
 
   // --- Grid State Persistence ---
   const refreshColumnState = useCallback((api?: GridApi | null) => {
@@ -175,7 +294,6 @@ export default function IBReport() {
           row.volume = toIBValue(11, 12)
           row.adjustments = toIBValue(13, 14)
           
-          // Default extended columns to 0 for now
           const zeroVal = { range_val: 0, month_val: 0 }
           row.commission = zeroVal
           row.ib_commission = zeroVal
@@ -188,7 +306,9 @@ export default function IBReport() {
         })
 
       const filteredRows = selectedGroups.length > 0 
-        ? parsedRows.filter(r => selectedGroups.includes(r.group))
+        ? parsedRows.filter(r => 
+            selectedGroups.some(sg => sg.toLowerCase() === r.group.toLowerCase())
+          )
         : parsedRows
 
       setRows(filteredRows)
@@ -199,7 +319,6 @@ export default function IBReport() {
     }
   }, [selectedGroups])
 
-  // --- Auto search on mount ---
   useEffect(() => {
     handleSearch()
   }, [])
@@ -210,7 +329,7 @@ export default function IBReport() {
     sortable: true,
     resizable: true,
     filter: true,
-    minWidth: 120,
+    minWidth: 50,
   }), [])
 
   const ibValueComparator = (valA: IBValue, valB: IBValue) => {
@@ -220,9 +339,16 @@ export default function IBReport() {
   }
 
   const columnDefs = useMemo<ColDef[]>(() => [
-    { field: "group", headerName: "组别", pinned: "left", width: 100 },
-    { field: "user_name", headerName: "User Name", pinned: "left", width: 150 },
-    { field: "time_range", headerName: "时间段", width: 200 },
+    { field: "group", headerName: "组别", pinned: "left", width: 80, cellStyle: { backgroundColor: 'rgba(255, 215, 0, 0.12)' }, sortable: false, filter: false },
+    { field: "user_name", headerName: "User Name", pinned: "left", width: 150, cellStyle: { backgroundColor: 'rgba(255, 215, 0, 0.12)' }, sortable: false, filter: false },
+    { 
+      field: "time_range", 
+      headerName: "时间段", 
+      width: 100,
+      cellRenderer: TimeRangeRenderer,
+      sortable: false,
+      filter: false
+    },
     { 
       field: "deposit", 
       headerName: "入金 (USD)", 
@@ -263,9 +389,9 @@ export default function IBReport() {
       headerName: "交易调整", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn'
+      type: 'numericColumn',
+      hide: true
     },
-    // Extended columns (initially hidden)
     { 
       field: "commission", 
       headerName: "佣金 (Commission)", 
@@ -332,15 +458,14 @@ export default function IBReport() {
     return m
   }, [columnState])
 
-  // Totals Row
   const pinnedTopRowData = useMemo(() => {
     if (rows.length === 0) return []
     const sum = (field: keyof IBReportRow) => {
       return rows.reduce((acc, row) => {
         const val = row[field] as IBValue
         return {
-          range_val: acc.range_val + val.range_val,
-          month_val: acc.month_val + val.month_val
+          range_val: acc.range_val + (val?.range_val || 0),
+          month_val: acc.month_val + (val?.month_val || 0)
         }
       }, { range_val: 0, month_val: 0 })
     }
@@ -370,12 +495,10 @@ export default function IBReport() {
         <h1 className="text-2xl font-bold tracking-tight">IB 报表 (IB Report)</h1>
       </div>
 
-      {/* Filter Card */}
       <Card>
         <CardContent className="py-3">
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
-              {/* Date Range */}
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -409,10 +532,9 @@ export default function IBReport() {
                 </PopoverContent>
               </Popover>
 
-              {/* Groups Select */}
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full sm:w-[260px] justify-between h-10">
+                  <Button variant="outline" className="w-full sm:w-[260px] justify-between h-10 text-foreground">
                     <div className="flex items-center gap-2 overflow-hidden">
                       <Filter className="h-4 w-4 shrink-0" />
                       <span className="truncate">
@@ -421,32 +543,71 @@ export default function IBReport() {
                     </div>
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[300px] p-0" align="start">
-                  <div className="p-2 grid grid-cols-3 gap-1">
-                    {PREDEFINED_GROUPS.map(g => (
-                      <Button 
-                        key={g} 
-                        variant={selectedGroups.includes(g) ? "default" : "outline"}
-                        size="sm"
-                        className="text-xs px-1 h-7"
-                        onClick={() => {
-                          setSelectedGroups(prev => 
-                            prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]
-                          )
-                        }}
-                      >
-                        {g}
-                      </Button>
-                    ))}
+                <PopoverContent className="w-[320px] p-0" align="start">
+                  <div className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">快捷选择 (Favorites & Selected)</span>
+                      <Badge variant="secondary" className="text-[10px] h-4 px-1">Local</Badge>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5 max-h-[200px] overflow-y-auto pr-1">
+                      {popoverDisplayGroups.length > 0 ? (
+                        popoverDisplayGroups.map(g => {
+                          // Try to get the latest casing from DB for display
+                          const dbGroup = allGroups.find(ag => ag.tag_name.toLowerCase() === g.toLowerCase());
+                          const displayName = dbGroup ? dbGroup.tag_name : g;
+                          const isSelected = selectedGroups.some(sg => sg.toLowerCase() === g.toLowerCase());
+                          const isFav = favGroups.some(fg => fg.toLowerCase() === g.toLowerCase());
+                          
+                          return (
+                            <Button 
+                              key={g} 
+                              variant={isSelected ? "default" : "outline"}
+                              size="sm"
+                              className={cn(
+                                "text-xs px-1 h-8 truncate justify-center relative",
+                                isSelected && !isFav && "border-primary/50"
+                              )}
+                              onClick={() => {
+                                setSelectedGroups(prev => {
+                                  const exists = prev.some(sg => sg.toLowerCase() === g.toLowerCase())
+                                  if (exists) {
+                                    return prev.filter(sg => sg.toLowerCase() !== g.toLowerCase())
+                                  } else {
+                                    return [...prev, displayName]
+                                  }
+                                })
+                              }}
+                            >
+                              {isFav && <Star className="absolute -top-1 -right-1 h-2 w-2 fill-yellow-500 text-yellow-500" />}
+                              {displayName}
+                            </Button>
+                          );
+                        })
+                      ) : (
+                        <div className="col-span-3 py-4 text-center text-xs text-muted-foreground">
+                          暂无常用或选中组别
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="border-t p-2 flex justify-between bg-muted/50">
-                    <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => setSelectedGroups([])}>清空</Button>
-                    <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => setSelectedGroups([...PREDEFINED_GROUPS])}>全选</Button>
+                  <div className="border-t p-2 flex items-center justify-between bg-muted/30">
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => setSelectedGroups([])}>清空</Button>
+                      <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => setSelectedGroups([...favGroups])}>全选常用</Button>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="text-xs h-7 px-2 gap-1 border-primary/30 hover:border-primary"
+                      onClick={() => setIsGroupsDialogOpen(true)}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      查看所有组别
+                    </Button>
                   </div>
                 </PopoverContent>
               </Popover>
 
-              {/* Monthly Toggle */}
               <div className="flex items-center space-x-2 h-10">
                 <Checkbox 
                   id="monthly-data" 
@@ -457,7 +618,6 @@ export default function IBReport() {
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
               <Button onClick={handleSearch} disabled={loading} className="w-full sm:w-[140px]">
                 <Search className={cn("h-4 w-4 mr-2", loading && "animate-spin")} />
@@ -474,7 +634,6 @@ export default function IBReport() {
                 <DropdownMenuContent align="end" className="w-72 max-h-[60vh] overflow-auto">
                   <DropdownMenuLabel>显示列</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  
                   <div className="px-2 pb-2 flex items-center gap-2">
                     <Button
                       variant="ghost"
@@ -508,9 +667,7 @@ export default function IBReport() {
                       重置
                     </Button>
                   </div>
-
                   <DropdownMenuSeparator />
-
                   {toggleColumns.map(({ colId, label }) => {
                     const checked = columnVisibilityMap[colId] ?? true
                     return (
@@ -543,12 +700,18 @@ export default function IBReport() {
         </CardContent>
       </Card>
 
-      {/* Table Section - Removed Card to match ClientPnLAnalysis sandwich pattern */}
       <div className="flex-1 relative">
-        <div className={cn(
-          "w-full h-[750px]",
-          isDarkMode ? "ag-theme-quartz-dark" : "ag-theme-quartz"
-        )}>
+        <div
+          className={`${isDarkMode ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} ibreport-theme w-full h-[750px] relative`}
+          style={{
+            ['--primary' as any]: '243 75% 59%',
+            ['--ag-header-background-color' as any]: isDarkMode ? 'hsl(0 0% 100% / 1)' : 'hsl(0 0% 8% / 1)',
+            ['--ag-header-foreground-color' as any]: isDarkMode ? 'hsl(0 0% 0% / 1)' : 'hsl(0 0% 100% / 1)',
+            ['--ag-header-column-separator-color' as any]: isDarkMode ? 'hsl(0 0% 0% / 1)' : 'hsl(0 0% 100% / 1)',
+            ['--ag-header-column-separator-width' as any]: '1px',
+            ['--ag-icon-font-color' as any]: isDarkMode ? 'hsl(0 0% 0% / 1)' : 'hsl(0 0% 100% / 1)',
+          }}
+        >
           <AgGridReact
             rowData={rows}
             columnDefs={columnDefs}
@@ -558,9 +721,18 @@ export default function IBReport() {
             rowHeight={50}
             headerHeight={40}
             animateRows={true}
+            getRowStyle={(params: any) => {
+              if (params.node.rowPinned === 'top') {
+                return { backgroundColor: 'rgba(37, 99, 235, 0.15)', fontWeight: 'bold' }
+              }
+              const idx = typeof params.node.rowIndex === 'number' ? params.node.rowIndex : -1
+              if (idx % 2 === 0) {
+                return { backgroundColor: 'hsl(var(--primary) / 0.03)', fontWeight: 'normal' }
+              }
+              return { backgroundColor: 'hsl(var(--primary) / 0.06)', fontWeight: 'normal' }
+            }}
             onGridReady={params => {
               setGridApi(params.api)
-              // Restore column state from localStorage
               try {
                 const raw = localStorage.getItem(GRID_STATE_STORAGE_KEY)
                 if (raw) {
@@ -578,8 +750,137 @@ export default function IBReport() {
             onColumnPinned={() => throttledSaveGridState()}
           />
         </div>
+        <style>{`
+          .ibreport-theme .ag-header {
+            border: 1px solid ${isDarkMode ? '#000' : '#fff'};
+            border-bottom-width: 1px;
+          }
+        `}</style>
       </div>
 
+      {/* --- 所有组别详情弹窗 (Dialog) --- */}
+      <Dialog open={isGroupsDialogOpen} onOpenChange={setIsGroupsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-6 pb-2">
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              所有组别全览
+              <Badge variant="outline" className="font-normal">Total: {allGroups.length}</Badge>
+            </DialogTitle>
+            <DialogDescription className="flex flex-col gap-1 pt-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                {/* Fresh grad note: This timestamp represents when the background service last synced data from the MetaTrader server. */}
+                数据更新于: {groupsMetadata?.last_update || "加载中..."} 
+                {groupsMetadata?.prev_update && groupsMetadata.prev_update !== "N/A" && ` (上一次: ${groupsMetadata.prev_update})`}
+                <span className="ml-1 px-1.5 py-0.5 bg-muted rounded-sm font-mono text-[10px] opacity-80">MT Server Time</span>
+              </div>
+              <p className="text-sm">在这里您可以查看所有组别的用户量统计，并快速将其加入常用列表。</p>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="px-6 py-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="搜索组别名称..."
+                className="w-full bg-muted/50 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                value={groupSearchQuery}
+                onChange={(e) => setGroupSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-6 py-2">
+            {allGroups.length === 0 ? (
+              <div className="py-20 text-center space-y-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                <p className="text-sm text-muted-foreground">正在从服务器获取组别列表...</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader className="sticky top-0 bg-background z-10">
+                  <TableRow>
+                    <TableHead>组别名称 (Tag Name)</TableHead>
+                    <TableHead className="text-right">用户数量 (Users)</TableHead>
+                    <TableHead className="w-[100px] text-center">选中</TableHead>
+                  </TableRow>
+                </TableHeader>
+              <TableBody>
+                {filteredGroupsForDialog.map((g) => {
+                  const isSelected = selectedGroups.some(sg => sg.toLowerCase() === g.tag_name.toLowerCase());
+                  const isFav = isFavorite(g.tag_name);
+
+                  return (
+                    <TableRow key={g.tag_id} className={cn(isSelected && "bg-primary/5")}>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-6 w-6 p-0 hover:text-yellow-500 transition-colors",
+                              isFav ? "text-yellow-500" : "text-muted-foreground/30"
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFavorite(g.tag_name);
+                            }}
+                            title={isFav ? "从常用中移除" : "加入常用"}
+                          >
+                            <Star className={cn("h-3.5 w-3.5", isFav && "fill-current")} />
+                          </Button>
+                          {g.tag_name}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {g.user_count.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-8 w-8 p-0 hover:text-primary",
+                            isSelected && "text-primary"
+                          )}
+                          onClick={() => {
+                            setSelectedGroups(prev => {
+                              const exists = prev.some(sg => sg.toLowerCase() === g.tag_name.toLowerCase())
+                              if (exists) {
+                                return prev.filter(sg => sg.toLowerCase() !== g.tag_name.toLowerCase())
+                              } else {
+                                return [...prev, g.tag_name]
+                              }
+                            })
+                          }}
+                          title={isSelected ? "取消选中" : "选中加入报表"}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="h-5 w-5 fill-current" />
+                          ) : (
+                            <Square className="h-5 w-5" />
+                          )}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+              </Table>
+            )}
+            {allGroups.length > 0 && filteredGroupsForDialog.length === 0 && (
+              <div className="py-10 text-center text-muted-foreground">
+                未找到匹配的组别
+              </div>
+            )}
+          </div>
+
+          <div className="p-4 border-t bg-muted/20 flex justify-end">
+            <Button onClick={() => setIsGroupsDialogOpen(false)}>完成并关闭</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

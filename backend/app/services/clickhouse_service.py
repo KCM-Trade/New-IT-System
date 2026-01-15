@@ -4,51 +4,74 @@ import clickhouse_connect
 import redis
 import json
 import hashlib
+import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import dotenv
 
 dotenv.load_dotenv()
 
+# 初始化日志记录器 (用于生产环境标准化日志)
+logger = logging.getLogger(__name__)
+
 class ClickHouseService:
     def __init__(self):
-        # 优先读取环境变量
+        # 优先读取环境变量 (默认连接用于 PnL 分析等通用业务)
         self.host = os.getenv("CLICKHOUSE_HOST", "dwsz2tfd9y.ap-northeast-1.aws.clickhouse.cloud")
         self.port = int(os.getenv("CLICKHOUSE_PORT", "8443"))
         self.username = os.getenv("CLICKHOUSE_USER", "default")
         
-        # 处理密码
+        # 处理密码 (去除可能存在的首尾空格)
         raw_password = os.getenv("CLICKHOUSE_PASSWORD")
         self.password = raw_password.strip() if raw_password else None
         
         self.database = os.getenv("CLICKHOUSE_DB", "Fxbo_Trades") 
         self.secure = True # 强制开启 TLS
 
-        # Redis 初始化 (New IT System 专属缓存)
-        self.redis_client = redis.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", 6379)),
-            db=0,
-            decode_responses=True # 自动将 bytes 转为字符串
-        )
+        # --- 生产环境连接配置 (用于 IB 报表组别等敏感数据查询) ---
+        self.prod_host = os.getenv("CLICKHOUSE_prod_HOST")
+        self.prod_user = os.getenv("CLICKHOUSE_prod_USER")
+        self.prod_pass = os.getenv("CLICKHOUSE_prod_PASSWORD")
+        self.prod_db = "KCM_fxbackoffice"
 
-        # [可选] 启动时尝试轻量连接测试 (打印日志但不阻断启动)
+        # --- 内存缓存 (用于 IB 组别列表，有效期 7 天，减少 ClickHouse 压力) ---
+        self._group_cache = None
+        self._cache_expiry = None
+
+        # Redis 初始化 (用于业务数据缓存)
         try:
-            # 仅用于测试连接是否通畅，不复用此 client
-            with clickhouse_connect.get_client(
-                host=self.host,
-                port=self.port,
-                username=self.username,
-                password=self.password,
-                secure=self.secure,
-                database=self.database
-            ) as client:
-                client.command('SELECT 1')
-            print("✅ ClickHouse Connection Established Successfully.")
+            self.redis_client = redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", 6379)),
+                db=0,
+                decode_responses=True 
+            )
         except Exception as e:
-            print(f"⚠️ ClickHouse Connection Warning: {e}")
+            logger.error(f"Redis initialization failed: {e}")
+            self.redis_client = None
 
-    def get_client(self):
+        # [可选] 启动时尝试轻量连接测试
+        try:
+            with self.get_client() as client:
+                client.command('SELECT 1')
+            logger.info("✅ ClickHouse Default Connection Established.")
+        except Exception as e:
+            logger.warning(f"⚠️ ClickHouse Connection Warning: {e}")
+
+    def get_client(self, use_prod: bool = False):
+        """
+        获取 ClickHouse 客户端连接。
+        :param use_prod: 是否使用生产环境连接配置
+        """
+        if use_prod:
+            # 这里的 host/user/password 必须从生产环境变量读取
+            return clickhouse_connect.get_client(
+                host=self.prod_host,
+                username=self.prod_user,
+                password=self.prod_pass,
+                database=self.prod_db,
+                secure=True
+            )
         return clickhouse_connect.get_client(
             host=self.host,
             port=self.port,
@@ -57,6 +80,76 @@ class ClickHouseService:
             database=self.database,
             secure=self.secure
         )
+
+    def get_ib_groups(self) -> Dict[str, Any]:
+        """
+        获取所有 IB 组别及其对应的用户数量。
+        实现逻辑：
+        1. 优先从内存缓存中读取数据。
+        2. 如果缓存不存在或已超过 7 天，则从生产 ClickHouse 查询。
+        3. 采用批量聚合查询方式提高性能。
+        """
+        now = datetime.now()
+        
+        # 1. 检查缓存是否有效 (7 天有效期)
+        if self._group_cache and self._cache_expiry and now < self._cache_expiry:
+            logger.info("🚀 Returning IB groups from memory cache.")
+            return self._group_cache
+
+        try:
+            logger.info("🔍 Fetching IB groups from ClickHouse Prod...")
+            with self.get_client(use_prod=True) as client:
+                # 第一步：获取组别基础信息 (categoryId=6 为组别分类)
+                # 注意：ClickHouse 表名区分大小写，且在生产环境下建议显式写出表名
+                tags_sql = 'SELECT id AS tag_id, tag AS tag_name FROM "fxbackoffice_tags" WHERE categoryId = 6'
+                tags_result = client.query(tags_sql)
+                tags_df = pd.DataFrame(tags_result.result_set, columns=tags_result.column_names)
+
+                # 第二步：获取组别关联的用户数 (去重统计)
+                # 这种方式比对每个组别单独发 SQL 性能高出几个数量级
+                count_sql = 'SELECT tagId, count(DISTINCT userId) AS user_count FROM "fxbackoffice_user_tags" GROUP BY tagId'
+                counts_result = client.query(count_sql)
+                counts_df = pd.DataFrame(counts_result.result_set, columns=counts_result.column_names)
+
+                # 第三步：数据类型转换与合并 (确保 tag_id 匹配)
+                tags_df['tag_id'] = tags_df['tag_id'].astype(str)
+                counts_df['tagId'] = counts_df['tagId'].astype(str)
+
+                # 使用 pandas 进行左连接，确保即使组别下没有用户也能显示（用户数为 0）
+                merged_df = pd.merge(tags_df, counts_df, left_on='tag_id', right_on='tagId', how='left')
+                merged_df['user_count'] = merged_df['user_count'].fillna(0).astype(int)
+                
+                # 按照用户数降序排序，方便前端优先展示热门组别
+                merged_df = merged_df.sort_values(by='user_count', ascending=False)
+                
+                group_list = merged_df[['tag_id', 'tag_name', 'user_count']].to_dict('records')
+                
+                # 记录更新历史，方便前端展示
+                previous_time = self._group_cache["last_update_time"] if self._group_cache else "N/A"
+                
+                result = {
+                    "group_list": group_list,
+                    "last_update_time": now.strftime('%Y-%m-%d %H:%M:%S'),
+                    "previous_update_time": previous_time,
+                    "total_groups": len(group_list)
+                }
+
+                # 4. 更新内存缓存及其过期时间
+                self._group_cache = result
+                self._cache_expiry = now + timedelta(days=7)
+                
+                logger.info(f"✅ IB groups cache updated. Found {len(group_list)} groups.")
+                return result
+
+        except Exception as e:
+            # 记录详细的异常堆栈，方便小白根据日志定位
+            logger.error(f"❌ Error fetching IB groups from ClickHouse: {str(e)}", exc_info=True)
+            # 如果查询失败但之前有成功加载过的缓存，则降级返回旧缓存
+            if self._group_cache:
+                logger.warning("Using expired cache as fallback due to query error.")
+                return self._group_cache
+            # 否则向上抛出异常，由 API 层处理
+            raise e
 
     def get_pnl_analysis(
         self, 
