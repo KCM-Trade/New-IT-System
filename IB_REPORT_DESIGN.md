@@ -10,8 +10,7 @@ IB 报表主要用于展示各业务组别（Group）及其下属用户的资金
 ### 2.1 顶部筛选卡片 (Filter Card)
 - **简洁布局**: 移除冗余标签，参考 `ClientPnLAnalysis.tsx` 保持单行对齐。
 - **时间范围筛选 (Date Range)**: 宽度 260px，支持选择起始和结束日期。
-- **组别筛选 (Group Filter)**: 宽度 260px，多选下拉框。
-    - 预定义组别：`HZL`, `CCX`, `JSA`, `SZS`, `SZU`, `SHY`, `SHT037`, `SHT042`, `SHT049`, `SHS`, `SHP`, `CS/Company`, `SP01`。
+- **组别筛选 (Group Filter)**: 宽度 260px，支持从数据库动态加载的组别多选。
 - **展示当月数据开关 (Monthly Data Checkbox)**: 
     - 勾选后，表格在展示指定时间段数据的基础上，额外展示该时间段所属月份的全月数据。
 - **操作按钮组**:
@@ -36,49 +35,64 @@ IB 报表主要用于展示各业务组别（Group）及其下属用户的资金
     8. **平仓交易量 (Closed Volume lots)**
     9. **交易调整 (Trade Adjustments)**: 目前统一设置为 `0`（待团队确定）。
     - *待扩展列*: 佣金 (Commission)、IB 佣金 (IB Commission)、平仓利息 (Swap)、平仓盈亏 (Profit)、当天新开客户、当天新开代理。
-- **交互特性**:
-    - **排序**: 所有列均支持点击表头排序（基于时间段数据）。
-    - **对齐**: 数值列右对齐，文本列左对齐。
 
-## 3. 技术实现细节 (Technical Implementation)
+---
 
-### 3.1 数据逻辑 (Data Logic)
-- **多维度聚合**: 后端需要根据 `Group` 和 `User` 进行聚合。
-- **月度数据叠加**: 
-    - 如果开启“月度累计”，API 需要返回一个包含两个时间窗口数值的对象，例如：`{ "range_val": 100, "month_val": 500 }`。
-- **汇总计算**: 前端利用 AG-Grid 的 `pinnedTopRowData` 展示所有记录的合计。
+## 3. 技术专项：IB 报表组别动态管理方案
 
-### 3.2 接口设计 (API Design)
-- **Endpoint**: `POST /api/v1/ib-report/query`
-- **Payload**:
-  ```json
-  {
-    "start_date": "2026-01-04",
-    "end_date": "2026-01-08",
-    "groups": ["HZL", "CCX"],
-    "include_monthly": true
-  }
-  ```
-- **Response Item 结构**:
-  ```json
-  {
-    "group": "HZL",
-    "user_name": "Test User",
-    "time_range": "2026-01-04 ~ 2026-01-08",
-    "deposit": { "range_val": 1000, "month_val": 5000 },
-    "withdrawal": { "range_val": -200, "month_val": -1000 },
-    "ib_withdrawal": { "range_val": 0, "month_val": 0 },
-    "net_deposit": { "range_val": 800, "month_val": 4000 },
-    "volume": { "range_val": 10.5, "month_val": 45.2 },
-    "adjustments": { "range_val": 0, "month_val": 0 }
-  }
-  ```
+### 3.1 需求背景
+为了解决前端硬编码组别导致的维护困难，并提供实时的组别用户量统计，设计此动态加载与缓存方案。
 
-### 3.3 前端组件结构
-- 引用 `AgGridReact` 实现核心表格。
-- 使用 `shadcn/ui` 的 `Card`, `Button`, `Checkbox`, `Popover+Calendar` 构建筛选器。
-- 状态管理使用 React `useState` 和 `useMemo`。
-- 自定义 `DoubleValueRenderer` 用于单元格内的双行数据展示。
+### 3.2 后端设计 (ClickHouse + Python Cache)
+- **数据源**：
+    - 组别定义：`"KCM_fxbackoffice"."fxbackoffice_tags"` (categoryId = 6)
+    - 用户关联：`"KCM_fxbackoffice"."fxbackoffice_user_tags"`
+- **缓存策略**：
+    - 使用 Python 内存对象缓存查询结果。
+    - **有效期**：7 天。
+    - **数据结构**：包含 `tag_id`, `tag_name`, `user_count`, `last_update_time`, `previous_update_time`。
+- **性能优化**：通过 `GROUP BY tagId` 一次性完成所有组别的人数统计，避免 N+1 查询。
+
+### 3.3 前端设计 (React + shadcn/ui)
+- **交互方式**：
+    - Popover 底部新增“查看所有组别”按钮。
+    - 弹出 Dialog 展示所有组别的详细列表（名称、人数）。
+- **持久化**：
+    - “常用组别”存储于浏览器的 `localStorage` 中。
+    - 用户可以在 Dialog 中通过“星标”快速切换常用状态。
+
+### 3.4 交互逻辑详解 (Filtering Logic)
+
+#### 1. 快捷选择器 (Popover Dropdown)
+- **展示内容**：显示“常用组别”与“当前已选中组别”的**并集**。这意味着任何在全量弹窗中勾选的组别，都会自动出现在快捷菜单中。
+- **视觉标识**：
+    - **金星图标**：标识该组别为“常用”，通过点击组别名旁的星标切换。
+    - **蓝色高亮**：标识该组别当前已被选中参与报表计算。
+- **按钮逻辑**：
+    - **清空**：一键清空所有已选组别（`selectedGroups = []`）。
+    - **全选常用**：快速选中所有被标记为“常用”的组别。
+    - **查看所有组别**：打开全量详情弹窗。
+
+#### 2. 全量详情弹窗 (Dialog Overview)
+- **实时同步**：弹窗内的选择状态与主页面报表状态实时联动。在弹窗中勾选 `CheckSquare`，报表数据会同步变化。
+- **元数据展示**：
+    - **MT Server Time**：显示数据最后一次从 MetaTrader 服务器同步的时间（数据源更新时间）。
+    - **数据状态**：显示“数据更新于：时间 (上一次：时间)”，若无历史记录则显示 N/A。
+- **搜索过滤**：支持对 60+ 个组别进行前端实时文本检索。
+- **大小写兼容**：所有匹配逻辑（选中、收藏、过滤）均采用 `toLowerCase()` 处理，自动兼容数据库与前端可能存在的大小写差异（如 `HZL` vs `hzl`）。
+
+### 3.5 待办事项：结束 Mock 阶段 (Next Steps)
+目前报表主体数据处于 Mock 阶段（读取本地 `ib_report_mock.csv`），后续需执行以下步骤实现生产切换：
+
+1.  **后端 SQL 补全**：在 `clickhouse_service.py` 中编写真实的报表聚合 SQL，替代现有的模拟逻辑。
+2.  **API 联调**：将前端 `handleSearch` 函数中的 `fetch` 地址由 `.csv` 路径更改为正式的后端 API 接口。
+3.  **参数传递**：确保前端将 `date_range` (开始/结束日期) 和 `selectedGroups` (已选组别列表) 作为请求参数发送至后端。
+
+### 3.6 安全与规范
+- **连接安全**：使用生产环境专用的环境变量 `CLICKHOUSE_prod_*`。
+- **大小写敏感**：SQL 语句中表名必须使用双引号包裹，如 `"fxbackoffice_tags"`。
+
+---
 
 ## 4. 待明确事项 (Pending Questions)
 1. **组别对应关系**: 数据库中的字段名是 `group` 还是需要通过其他逻辑映射？
@@ -89,6 +103,7 @@ IB 报表主要用于展示各业务组别（Group）及其下属用户的资金
 - [x] 前端：构建筛选卡片 UI（已参考 ClientPnLAnalysis 优化，保持简洁）。
 - [x] 前端：集成 AG-Grid 并配置汇总行（Pinned Top Row）。
 - [x] 前端：实现双行展示逻辑（Selected Range vs Monthly Total）。
+- [x] 前端：实现动态组别加载与“查看所有组别”弹窗。
 - [ ] 后端：编写 ClickHouse 查询逻辑，实现基于组别的 SQL 映射。
 - [ ] 后端：实现月度累计数据的聚合查询。
 - [ ] 联调：前后端 API 对接。

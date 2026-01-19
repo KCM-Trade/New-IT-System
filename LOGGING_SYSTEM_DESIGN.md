@@ -50,7 +50,7 @@
 ## 3. 全链路追踪 (Trace ID)
 
 ### 3.1 后端中间件实现
-1. 在 FastAPI 中编写中间件，为每个 incoming 请求生成唯一 UUID。
+1. 在 FastAPI 中编写中间件，为每个 incoming 请求生成 unique UUID。
 2. 将该 UUID 存入 `contextvars`（线程安全）。
 3. 在日志 Formatter 中提取该 UUID 并打印。
 4. 在 Response Header 中返回 `X-Trace-ID` 给前端。
@@ -89,59 +89,3 @@
 - **日志聚合**：引入 **Grafana Loki** 或 **ELK (Elasticsearch, Logstash, Kibana)**。
 - **主动告警**：对日志中的 `ERROR` 级别设置钉钉或邮件告警规则。
 - **审计日志**：对敏感操作（如删除数据、修改权限）记录独立的审计日志。
-
----
-
-## 7. 技术专项：IB 报表组别动态管理方案
-
-### 7.1 需求背景
-为了解决前端硬编码组别导致的维护困难，并提供实时的组别用户量统计，设计此动态加载与缓存方案。
-
-### 7.2 后端设计 (ClickHouse + Python Cache)
-- **数据源**：
-    - 组别定义：`"KCM_fxbackoffice"."fxbackoffice_tags"` (categoryId = 6)
-    - 用户关联：`"KCM_fxbackoffice"."fxbackoffice_user_tags"`
-- **缓存策略**：
-    - 使用 Python 内存对象缓存查询结果。
-    - **有效期**：7 天。
-    - **数据结构**：包含 `tag_id`, `tag_name`, `user_count`, `last_update_time`, `previous_update_time`。
-- **性能优化**：通过 `GROUP BY tagId` 一次性完成所有组别的人数统计，避免 N+1 查询。
-
-### 7.3 前端设计 (React + shadcn/ui)
-- **交互方式**：
-    - Popover 底部新增“查看所有组别”按钮。
-    - 弹出 Dialog 展示所有组别的详细列表（名称、人数）。
-- **持久化**：
-    - “常用组别”存储于浏览器的 `localStorage` 中。
-    - 用户可以在 Dialog 中通过“星标”快速切换常用状态。
-
-### 7.4 交互逻辑详解 (Filtering Logic)
-
-#### 1. 快捷选择器 (Popover Dropdown)
-- **展示内容**：显示“常用组别”与“当前已选中组别”的**并集**。这意味着任何在全量弹窗中勾选的组别，都会自动出现在快捷菜单中。
-- **视觉标识**：
-    - **金星图标**：标识该组别为“常用”，通过点击组别名旁的星标切换。
-    - **蓝色高亮**：标识该组别当前已被选中参与报表计算。
-- **按钮逻辑**：
-    - **清空**：一键清空所有已选组别（`selectedGroups = []`）。
-    - **全选常用**：快速选中所有被标记为“常用”的组别。
-    - **查看所有组别**：打开全量详情弹窗。
-
-#### 2. 全量详情弹窗 (Dialog Overview)
-- **实时同步**：弹窗内的选择状态与主页面报表状态实时联动。在弹窗中勾选 `CheckSquare`，报表数据会同步变化。
-- **元数据展示**：
-    - **MT Server Time**：显示数据最后一次从 MetaTrader 服务器同步的时间（数据源更新时间）。
-    - **数据状态**：显示“数据更新于：时间 (上一次：时间)”，若无历史记录则显示 N/A。
-- **搜索过滤**：支持对 60+ 个组别进行前端实时文本检索。
-- **大小写兼容**：所有匹配逻辑（选中、收藏、过滤）均采用 `toLowerCase()` 处理，自动兼容数据库与前端可能存在的大小写差异（如 `HZL` vs `hzl`）。
-
-### 7.5 待办事项：结束 Mock 阶段 (Next Steps)
-目前报表主体数据处于 Mock 阶段（读取本地 `ib_report_mock.csv`），后续需执行以下步骤实现生产切换：
-
-1.  **后端 SQL 补全**：在 `clickhouse_service.py` 中编写真实的报表聚合 SQL，替代现有的模拟逻辑。
-2.  **API 联调**：将前端 `handleSearch` 函数中的 `fetch` 地址由 `.csv` 路径更改为正式的后端 API 接口。
-3.  **参数传递**：确保前端将 `date_range` (开始/结束日期) 和 `selectedGroups` (已选组别列表) 作为请求参数发送至后端。
-
-### 7.4 安全与规范
-- **连接安全**：使用生产环境专用的环境变量 `CLICKHOUSE_prod_*`。
-- **大小写敏感**：SQL 语句中表名必须使用双引号包裹，如 `"fxbackoffice_tags"`。

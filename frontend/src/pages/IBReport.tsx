@@ -95,6 +95,8 @@ const DoubleValueRenderer = (params: ICellRendererParams) => {
     return "text-muted-foreground"
   }
 
+  const showMonth = params.context?.includeMonthly ?? true
+
   return (
     <div className={cn("flex flex-col leading-tight py-1", isPinned && "scale-[1.02] origin-left")}>
       <span className={cn(
@@ -103,12 +105,14 @@ const DoubleValueRenderer = (params: ICellRendererParams) => {
       )}>
         {value.range_val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
-      <span className={cn(
-        "text-muted-foreground opacity-70 border-t border-dashed mt-0.5",
-        isPinned ? "text-[11px] font-semibold" : "text-[10px]"
-      )}>
-        Month: {value.month_val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-      </span>
+      {showMonth && (
+        <span className={cn(
+          "text-muted-foreground opacity-70 border-t border-dashed mt-0.5",
+          isPinned ? "text-[11px] font-semibold" : "text-[10px]"
+        )}>
+          Month: {value.month_val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+      )}
     </div>
   )
 }
@@ -152,6 +156,12 @@ export default function IBReport() {
   const [rows, setRows] = useState<IBReportRow[]>([])
   const [gridApi, setGridApi] = useState<GridApi | null>(null)
   const [columnState, setColumnState] = useState<any[]>([])
+
+  useEffect(() => {
+    if (gridApi) {
+      gridApi.refreshCells({ force: true })
+    }
+  }, [includeMonthly, gridApi])
 
   // --- 组别动态加载与收藏状态 ---
   const [allGroups, setAllGroups] = useState<GroupMetadata[]>([])
@@ -389,56 +399,49 @@ export default function IBReport() {
       headerName: "交易调整", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "commission", 
       headerName: "佣金 (Commission)", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "ib_commission", 
       headerName: "IB 佣金", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "swap", 
       headerName: "平仓利息 (Swap)", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "profit", 
       headerName: "平仓盈亏 (Profit)", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "new_clients", 
       headerName: "当天新开客户", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     },
     { 
       field: "new_agents", 
       headerName: "当天新开代理", 
       cellRenderer: DoubleValueRenderer,
       comparator: ibValueComparator,
-      type: 'numericColumn',
-      hide: true
+      type: 'numericColumn'
     }
   ], [])
 
@@ -717,6 +720,7 @@ export default function IBReport() {
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             pinnedTopRowData={pinnedTopRowData}
+            context={{ includeMonthly }}
             gridOptions={{ theme: 'legacy' }}
             rowHeight={50}
             headerHeight={40}
