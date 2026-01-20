@@ -137,8 +137,7 @@ const TimeRangeRenderer = (params: ICellRendererParams) => {
 }
 
 const PREDEFINED_GROUPS = [
-  "HZL", "CCX", "JSA", "SZS", "SZU", "SHY", "SHT037", 
-  "SHT042", "SHT049", "SHS", "SHP", "CS/Company", "SP01"
+  "HZL", "CCX", "szs"
 ]
 
 export default function IBReport() {
@@ -150,7 +149,11 @@ export default function IBReport() {
     from: new Date(2026, 0, 4),
     to: new Date(2026, 0, 8),
   })
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  const [selectedGroups, setSelectedGroups] = useState<string[]>(() => {
+    // 默认加载常用组别 (从 localStorage 或 PREDEFINED_GROUPS)
+    const saved = localStorage.getItem(FAV_GROUPS_STORAGE_KEY)
+    return saved ? JSON.parse(saved) : PREDEFINED_GROUPS
+  })
   const [includeMonthly, setIncludeMonthly] = useState(true)
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<IBReportRow[]>([])
@@ -274,60 +277,34 @@ export default function IBReport() {
 
   // --- Data Fetching ---
   const handleSearch = useCallback(async () => {
+    if (!date?.from || !date?.to) return
+
     setLoading(true)
     try {
-      const response = await fetch('/data/ib_report_mock.csv')
-      if (!response.ok) throw new Error('Failed to fetch mock data')
-      
-      const csvText = await response.text()
-      const lines = csvText.split('\n')
-      
-      const parsedRows: IBReportRow[] = lines.slice(1)
-        .filter(line => line.trim() !== '')
-        .map(line => {
-          const values = line.split(',')
-          const row: any = {}
-          
-          row.group = values[0]
-          row.user_name = values[1]
-          row.time_range = values[2]
-          
-          const toIBValue = (rangeIdx: number, monthIdx: number): IBValue => ({
-            range_val: parseFloat(values[rangeIdx]) || 0,
-            month_val: parseFloat(values[monthIdx]) || 0
-          })
-          
-          row.deposit = toIBValue(3, 4)
-          row.withdrawal = toIBValue(5, 6)
-          row.ib_withdrawal = toIBValue(7, 8)
-          row.net_deposit = toIBValue(9, 10)
-          row.volume = toIBValue(11, 12)
-          row.adjustments = toIBValue(13, 14)
-          
-          const zeroVal = { range_val: 0, month_val: 0 }
-          row.commission = zeroVal
-          row.ib_commission = zeroVal
-          row.swap = zeroVal
-          row.profit = zeroVal
-          row.new_clients = zeroVal
-          row.new_agents = zeroVal
-          
-          return row as IBReportRow
-        })
+      const response = await fetch('/api/v1/ib-report/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          start_date: format(date.from, "yyyy-MM-dd"),
+          end_date: format(date.to, "yyyy-MM-dd"),
+          groups: selectedGroups
+        }),
+      })
 
-      const filteredRows = selectedGroups.length > 0 
-        ? parsedRows.filter(r => 
-            selectedGroups.some(sg => sg.toLowerCase() === r.group.toLowerCase())
-          )
-        : parsedRows
-
-      setRows(filteredRows)
+      if (!response.ok) {
+        throw new Error('Failed to fetch IB report data')
+      }
+      
+      const data: IBReportRow[] = await response.json()
+      setRows(data)
     } catch (error) {
       console.error('Error loading IB report data:', error)
     } finally {
       setLoading(false)
     }
-  }, [selectedGroups])
+  }, [date, selectedGroups])
 
   useEffect(() => {
     handleSearch()

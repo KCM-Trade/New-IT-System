@@ -375,4 +375,192 @@ class ClickHouseService:
             # 抛出异常供上层处理，不再吞掉错误
             raise e
 
+    def get_ib_report_data(
+        self,
+        r_start: datetime,
+        r_end: datetime,
+        m_start: datetime,
+        m_end: datetime,
+        target_groups: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        获取 IB 报表数据。
+        执行复杂的聚合查询，计算 Range 和 Month 维度的资金、交易量和佣金数据。
+        
+        优化：增加了 Redis 缓存机制，避免高并发下重复查询。
+        """
+        # 1. 生成 Cache Key (考虑所有影响 SQL 的变量)
+        try:
+            # 将组别列表排序，确保 ['A', 'B'] 和 ['B', 'A'] 生成相同的 key
+            sorted_groups = sorted(target_groups or [])
+            # 组合所有参数生成唯一字符串
+            cache_params = f"ib_report_v1_{r_start}_{r_end}_{m_start}_{m_end}_{sorted_groups}"
+            # 使用 MD5 生成短 key
+            cache_key = f"app:ib_report:cache:{hashlib.md5(cache_params.encode()).hexdigest()}"
+            
+            # 2. 尝试从 Redis 读取
+            if self.redis_client:
+                cached_data = self.redis_client.get(cache_key)
+                if cached_data:
+                    logger.info(f"🚀 [Redis] IB Report Cache Hit: {cache_key}")
+                    return json.loads(cached_data)
+        except Exception as e:
+            logger.warning(f"⚠️ Redis Read Error: {e}")
+
+        try:
+            logger.info(f"🔍 Fetching IB report data from ClickHouse: range={r_start}~{r_end}, month={m_start}~{m_end}, groups={len(target_groups)}")
+            
+            with self.get_client(use_prod=True) as client:
+                sql = """
+                WITH
+                    -- [1] 参数定义 (由后端动态注入)
+                    toDateTime64(%(r_start)s, 6) AS r_start,
+                    toDateTime64(%(r_end)s, 6) AS r_end,
+                    toDateTime64(%(m_start)s, 6) AS m_start,
+                    toDateTime64(%(m_end)s, 6) AS m_end,
+                    toDate32(%(r_start)s) AS r_date_start,
+                    toDate32(%(r_end)s) AS r_date_end,
+                    toDate32(%(m_start)s) AS m_date_start,
+                    toDate32(%(m_end)s) AS m_date_end,
+                    %(target_groups)s AS target_groups,
+
+                    -- [2] 组别映射: 找到目标组别下的所有 User ID
+                    group_mapping AS (
+                        SELECT
+                            t.tag AS group_name,
+                            ut.userId AS user_id
+                        FROM "fxbackoffice_tags" t
+                        JOIN "fxbackoffice_user_tags" ut ON t.id = ut.tagId
+                        WHERE t.categoryId = 6
+                          AND (length(target_groups) = 0 OR has(arrayMap(x -> lower(x), target_groups), lower(t.tag)))
+                    ),
+
+                    -- [3] 资金统计: Transactions 表
+                    money_stats AS (
+                        SELECT
+                            gm.group_name,
+                            -- Range Stats
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'deposit' AND tr.processedAt BETWEEN r_start AND r_end) AS deposit_range,
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'withdrawal' AND tr.processedAt BETWEEN r_start AND r_end) AS withdrawal_range,
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'ib withdrawal' AND tr.processedAt BETWEEN r_start AND r_end) AS ib_withdrawal_range,
+                            -- Month Stats
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'deposit' AND tr.processedAt BETWEEN m_start AND m_end) AS deposit_month,
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'withdrawal' AND tr.processedAt BETWEEN m_start AND m_end) AS withdrawal_month,
+                            sumIf(if(upper(tr.processedCurrency) = 'CEN', tr.processedAmount / 100, tr.processedAmount), tr.type = 'ib withdrawal' AND tr.processedAt BETWEEN m_start AND m_end) AS ib_withdrawal_month
+                        FROM "fxbackoffice_transactions" tr
+                        INNER JOIN group_mapping gm ON tr.fromUserId = gm.user_id
+                        WHERE tr.status = 'approved' 
+                          AND tr.type IN ('deposit', 'withdrawal', 'ib withdrawal')
+                          AND tr.processedAt >= m_start
+                        GROUP BY gm.group_name
+                    ),
+
+                    -- [4] 交易统计: MT4 Trades 表
+                    trade_stats AS (
+                        SELECT
+                            gm.group_name,
+                            -- Range Stats
+                            sumIf(t.lots / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN r_start AND r_end) AS volume_range,
+                            sumIf((t.PROFIT + t.SWAPS + t.COMMISSION) / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN r_start AND r_end) AS net_profit_range,
+                            sumIf(t.COMMISSION / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN r_start AND r_end) AS commission_range,
+                            sumIf(t.SWAPS / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN r_start AND r_end) AS swap_range,
+                            -- Month Stats
+                            sumIf(t.lots / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN m_start AND m_end) AS volume_month,
+                            sumIf((t.PROFIT + t.SWAPS + t.COMMISSION) / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN m_start AND m_end) AS net_profit_month,
+                            sumIf(t.COMMISSION / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN m_start AND m_end) AS commission_month,
+                            sumIf(t.SWAPS / if(mu.CURRENCY = 'CEN', 100, 1), t.CLOSE_TIME BETWEEN m_start AND m_end) AS swap_month
+                        FROM "fxbackoffice_mt4_trades" t
+                        INNER JOIN "fxbackoffice_mt4_users" mu ON t.LOGIN = mu.LOGIN
+                        INNER JOIN group_mapping gm ON mu.userId = gm.user_id
+                        WHERE t.CMD IN (0, 1) AND t.CLOSE_TIME >= m_start
+                        GROUP BY gm.group_name
+                    ),
+
+                    -- [5] IB佣金统计: Stats 预聚合表
+                    ib_commission_stats AS (
+                        SELECT
+                            gm.group_name,
+                            -- Range Stats
+                            sumIf(st.commission / if(upper(st.currency) = 'CEN', 100, 1), st.date BETWEEN r_date_start AND r_date_end) AS ib_commission_range,
+                            -- Month Stats
+                            sumIf(st.commission / if(upper(st.currency) = 'CEN', 100, 1), st.date BETWEEN m_date_start AND m_date_end) AS ib_commission_month
+                        FROM "fxbackoffice_stats_ib_commissions_by_login_sid" st
+                        -- Fix: Split SID-LOGIN format (e.g., '1-8522845') and match with mu.LOGIN
+                        INNER JOIN "fxbackoffice_mt4_users" mu 
+                            ON splitByChar('-', st.fromLoginSid)[2] = toString(mu.LOGIN)
+                        INNER JOIN group_mapping gm ON mu.userId = gm.user_id
+                        WHERE st.date >= m_date_start
+                        GROUP BY gm.group_name
+                    )
+
+                -- [6] 最终输出 (Result Set)
+                SELECT
+                    coalesce(m.group_name, t.group_name, i.group_name) AS group,
+                    
+                    round(coalesce(m.deposit_range, 0), 2) AS deposit_range,
+                    round(coalesce(m.deposit_month, 0), 2) AS deposit_month,
+                    
+                    round(coalesce(m.withdrawal_range, 0), 2) AS withdrawal_range,
+                    round(coalesce(m.withdrawal_month, 0), 2) AS withdrawal_month,
+                    
+                    round(coalesce(m.ib_withdrawal_range, 0), 2) AS ib_withdrawal_range,
+                    round(coalesce(m.ib_withdrawal_month, 0), 2) AS ib_withdrawal_month,
+                    
+                    -- Net Deposit = D + W + IBW (Arithmetic Sum)
+                    round(coalesce(m.deposit_range, 0) + coalesce(m.withdrawal_range, 0) + coalesce(m.ib_withdrawal_range, 0), 2) AS net_deposit_range,
+                    round(coalesce(m.deposit_month, 0) + coalesce(m.withdrawal_month, 0) + coalesce(m.ib_withdrawal_month, 0), 2) AS net_deposit_month,
+                    
+                    round(coalesce(t.volume_range, 0), 2) AS volume_range,
+                    round(coalesce(t.volume_month, 0), 2) AS volume_month,
+                    
+                    round(coalesce(t.net_profit_range, 0), 2) AS profit_range,
+                    round(coalesce(t.net_profit_month, 0), 2) AS profit_month,
+                    
+                    round(coalesce(t.commission_range, 0), 2) AS commission_range,
+                    round(coalesce(t.commission_month, 0), 2) AS commission_month,
+
+                    round(coalesce(t.swap_range, 0), 2) AS swap_range,
+                    round(coalesce(t.swap_month, 0), 2) AS swap_month,
+                    
+                    round(coalesce(i.ib_commission_range, 0), 2) AS ib_commission_range,
+                    round(coalesce(i.ib_commission_month, 0), 2) AS ib_commission_month
+
+                FROM money_stats m
+                FULL OUTER JOIN trade_stats t ON m.group_name = t.group_name
+                FULL OUTER JOIN ib_commission_stats i ON coalesce(m.group_name, t.group_name) = i.group_name
+                ORDER BY deposit_range DESC
+                """
+                
+                params = {
+                    'r_start': r_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'r_end': r_end.strftime('%Y-%m-%d %H:%M:%S'),
+                    'm_start': m_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'm_end': m_end.strftime('%Y-%m-%d %H:%M:%S'),
+                    'target_groups': target_groups
+                }
+                
+                result = client.query(sql, parameters=params)
+                
+                # Convert result to list of dicts
+                columns = result.column_names
+                data = [dict(zip(columns, row)) for row in result.result_set]
+                
+                # 3. 将结果写入 Redis 缓存 (设置 10 分钟过期)
+                try:
+                    if self.redis_client and data:
+                        self.redis_client.setex(
+                            cache_key,
+                            600, # TTL 10 分钟
+                            json.dumps(data)
+                        )
+                        logger.info(f"✅ [Redis] IB Report Cache Saved: {cache_key}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Redis Save Error: {e}")
+                
+                return data
+                
+        except Exception as e:
+            logger.error(f"❌ Error fetching IB report data: {str(e)}", exc_info=True)
+            raise e
+
 clickhouse_service = ClickHouseService()
