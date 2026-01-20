@@ -50,7 +50,7 @@ function App() {
                 </PrivateRoute>
               }
             >
-              <Route index element={<BasisPage />} />
+              <Route index element={<Navigate to="/cfg/managers" replace />} />
               <Route path="template" element={<DashboardTemplatePage />} />
               <Route path="equity-monitor" element={<EquityMonitorPage />} />
               <Route path="gold" element={<GoldQuotePage />} />
