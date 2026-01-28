@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Account PNL Data Viewer</title>
+    <!-- AG Grid CSS -->
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        margin: 20px;
+        background-color: #f8f9fa;
+      }
+      .header {
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      #myGrid {
+        height: 600px;
+        width: 100%;
+      }
+      .controls {
+        margin-bottom: 10px;
+      }
+      select {
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+      }
+      .status {
+        font-size: 14px;
+        color: #666;
+      }
+      .column-notes {
+        margin-top: 16px;
+        padding: 12px;
+        background: #ffffff;
+        border: 1px solid #e1e5ea;
+        border-radius: 6px;
+      }
+      .column-notes h3 {
+        margin: 0 0 8px 0;
+        font-size: 16px;
+      }
+      .column-notes ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .column-notes li {
+        margin: 4px 0;
+        font-size: 13px;
+        color: #444;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>1月客户交易Pnl数据</h1>
+      <div class="status" id="status">Loading data...</div>
+    </div>
+
+    <div class="controls">
+      <label for="csvSelect">Select Data File:</label>
+      <select id="csvSelect" onchange="loadSelectedCsv()">
+        <option value="">-- Select a CSV file --</option>
+      </select>
+      <button onclick="refreshFileList()">Refresh File List</button>
+    </div>
+
+    <div id="myGrid" class="ag-theme-alpine"></div>
+    <div id="columnNotes" class="column-notes">
+      <h3>字段说明</h3>
+      <div>请选择或运行查询后展示字段说明。</div>
+    </div>
+
+    <script>
+      let gridApi;
+
+      const gridOptions = {
+        columnDefs: [],
+        defaultColDef: {
+          sortable: true,
+          filter: true,
+          resizable: true,
+          floatingFilter: true,
+          flex: 1,
+          minWidth: 100,
+        },
+        pagination: true,
+        paginationPageSize: 100,
+        paginationPageSizeSelector: [10, 50, 100, 500],
+      };
+
+      // Initialize AG Grid
+      const gridDiv = document.querySelector("#myGrid");
+      gridApi = agGrid.createGrid(gridDiv, gridOptions);
+
+      async function refreshFileList() {
+        document.getElementById("status").innerText = "Fetching file list...";
+        try {
+          const response = await fetch("/api/files");
+          const files = await response.json();
+          const select = document.getElementById("csvSelect");
+
+          // Clear existing options except the first one
+          while (select.options.length > 1) {
+            select.remove(1);
+          }
+
+          files.forEach((file) => {
+            const option = document.createElement("option");
+            option.value = file.name;
+            option.text = `${file.name} (${file.date})`;
+            select.add(option);
+          });
+
+          if (files.length > 0) {
+            select.value = files[0].name;
+            loadCsv(files[0].name);
+          }
+          document.getElementById("status").innerText =
+            `Found ${files.length} files.`;
+        } catch (error) {
+          console.error("Error fetching files:", error);
+          document.getElementById("status").innerText =
+            "Error fetching file list. Are you running app.py?";
+        }
+      }
+
+      function loadCsv(filename) {
+        const url = `/api/file/${filename}`;
+        document.getElementById("status").innerText = `Loading ${filename}...`;
+        Papa.parse(url, {
+          download: true,
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: function (results) {
+            if (results.errors.length > 0) {
+              console.error("Errors:", results.errors);
+              document.getElementById("status").innerText =
+                "Error loading CSV. Check console.";
+              return;
+            }
+
+            const data = results.data;
+            if (data.length > 0) {
+              // Column comments for tooltips and the notes panel
+              const columnComments = {
+                client_id: "客户唯一标识 ID。",
+                客户ID: "客户唯一标识 ID。",
+                equity: "当前净值汇总（不含 IB wallet）。",
+                当前净值: "当前净值汇总（不含 IB wallet）。",
+                net_deposit_hist: "历史净入金（入金 + 出金）。",
+                历史净入金: "历史净入金（入金 + 出金）。",
+                net_deposit_hist_negative: "历史净入金是否为负，Y/N。",
+                历史净入金为负: "历史净入金是否为负，Y/N。",
+                net_deposit_month: "当月净入金（本月入金 + 出金）。",
+                当月净入金: "当月净入金（本月入金 + 出金）。",
+                month_trade_profit: "本月交易利润（仅统计当月有交易的客户）。",
+                本月交易利润: "本月交易利润（仅统计当月有交易的客户）。",
+                "调整后收益率(2K以下)%":
+                  "净入金≤0 时，按 K=2000 计算 equity/K。",
+                "调整后收益率(2K-5K)%":
+                  "净入金≤0 时，按 K=5000 计算 equity/K。",
+                "调整后收益率(5K-50K)%":
+                  "净入金≤0 时，按 K=50000 计算 equity/K。",
+                "调整后收益率(50K以上)%":
+                  "净入金≤0 时，按 K=60000 计算 equity/K。",
+                "非调整收益率%":
+                  "净入金>0 时，(equity-net)/net。",
+                profit: "历史利润 = 当前净值 - 历史净入金。",
+                历史利润: "历史利润 = 当前净值 - 历史净入金。",
+                deposit_count: "历史入金次数。",
+                入金次数: "历史入金次数。",
+                deposit_sum: "历史入金总额（CEN 已除 100）。",
+                入金总额: "历史入金总额（CEN 已除 100）。",
+                deposit_avg: "平均入金 = 入金总额 / 入金次数。",
+                平均入金: "平均入金 = 入金总额 / 入金次数。",
+                deposit_avg_bucket: "平均入金区间分组。",
+                平均入金区间: "平均入金区间分组。",
+                return_rate:
+                  "调整后收益率：净入金>0 用 (equity-net)/net，否则 equity/K。",
+                调整后收益率:
+                  "调整后收益率：净入金>0 用 (equity-net)/net，否则 equity/K。",
+                "调整后收益率(%)":
+                  "调整后收益率：净入金>0 用 (equity-net)/net，否则 equity/K。",
+              };
+              const idFields = new Set([
+                "account",
+                "client_id",
+                "sid",
+                "loginSid",
+                "login_sid",
+                "deposit_count",
+                "入金次数",
+              ]);
+              const columns = Object.keys(data[0]).map((key) => ({
+                field: key,
+                headerName: key
+                  .split("_")
+                  .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                  .join(" "),
+                headerTooltip: columnComments[key] || "暂无说明。",
+                cellRenderer:
+                  key === "client_id" || key === "客户ID"
+                    ? (params) => {
+                        if (
+                          params.value === null ||
+                          params.value === undefined ||
+                          params.value === ""
+                        ) {
+                          return "";
+                        }
+                        const clientId = Math.trunc(params.value);
+                        const url = `https://mt4.kohleglobal.com/crm/users/${clientId}`;
+                        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${clientId}</a>`;
+                      }
+                    : undefined,
+                valueFormatter: (params) => {
+                  if (typeof params.value === "number") {
+                    if (idFields.has(key) || key.toLowerCase().endsWith("id")) {
+                      // Keep ID fields as integers (no decimals)
+                      return Number.isFinite(params.value)
+                        ? Math.trunc(params.value).toString()
+                        : params.value;
+                    }
+                    const percentColumns = new Set([
+                      "return_rate",
+                      "调整后收益率",
+                      "调整后收益率(%)",
+                      "非调整收益率%",
+                      "调整后收益率(2K以下)%",
+                      "调整后收益率(2K-5K)%",
+                      "调整后收益率(5K-50K)%",
+                      "调整后收益率(50K以上)%",
+                    ]);
+                    if (
+                      key.includes("multiplier") ||
+                      key.includes("roi") ||
+                      percentColumns.has(key)
+                    ) {
+                      return `${params.value.toFixed(2)}%`;
+                    }
+                    // Default numeric formatting with 2 decimals
+                    return params.value.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    });
+                  }
+                  return params.value;
+                },
+              }));
+              gridApi.setGridOption("columnDefs", columns);
+              gridApi.setGridOption("rowData", data);
+              updateColumnNotes(columns, columnComments);
+              document.getElementById("status").innerText =
+                `Loaded ${data.length} rows from ${url}`;
+            }
+          },
+        });
+      }
+
+      function loadSelectedCsv() {
+        const select = document.getElementById("csvSelect");
+        if (select.value) {
+          loadCsv(select.value);
+        }
+      }
+
+      function updateColumnNotes(columns, columnComments) {
+        const notes = document.getElementById("columnNotes");
+        const items = columns
+          .map((col) => {
+            const name = col.headerName || col.field;
+            const comment = columnComments[col.field] || "暂无说明。";
+            return `<li><strong>${name}</strong>：${comment}</li>`;
+          })
+          .join("");
+        notes.innerHTML = `<h3>字段说明</h3><ul>${items}</ul>`;
+      }
+
+      // Initialize
+      refreshFileList();
+    </script>
+  </body>
+</html>

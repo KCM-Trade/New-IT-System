@@ -17,3 +17,4 @@ __pycache__
 *.svg
 *.txt
 frontend/public/profit_last_refresh.txt
+*.csv
