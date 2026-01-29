@@ -1,4 +1,5 @@
 import os
+import decimal
 import pandas as pd
 import clickhouse_connect
 import redis
@@ -14,6 +15,22 @@ dotenv.load_dotenv()
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _json_serializer(obj):
+    """
+    Custom JSON serializer for types not supported by default json.dumps.
+    
+    Fresh grad note:
+    - ClickHouse often returns Decimal for precise numeric values
+    - Python's json module doesn't know how to serialize Decimal
+    - This function converts Decimal to float for JSON compatibility
+    """
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 class ClickHouseService:
     def __init__(self):
@@ -361,7 +378,7 @@ class ClickHouseService:
                 self.redis_client.setex(
                     cache_key,
                     1800,
-                    json.dumps(result_dict)
+                    json.dumps(result_dict, default=_json_serializer)
                 )
                 logger.info(f"Redis cache saved: {cache_key[:50]}...")
             except Exception as se:
@@ -550,7 +567,7 @@ class ClickHouseService:
                         self.redis_client.setex(
                             cache_key,
                             600, # TTL 10 分钟
-                            json.dumps(data)
+                            json.dumps(data, default=_json_serializer)
                         )
                         logger.info(f"Redis cache saved for IB report: {cache_key[:50]}...")
                 except Exception as e:
