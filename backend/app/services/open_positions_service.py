@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pymysql
 
 from ..core.config import Settings
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> dict[str, Any]:
@@ -184,7 +187,7 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
                         }
                     return res
         except Exception as e:
-            print(f"Error fetching data for {source_name}: {e}")
+            logger.error(f"Error fetching data for {source_name}: {e}")
             return {
                 "source": source_name,
                 "symbol": symbol,

@@ -43,6 +43,9 @@ class Settings:
     # CORS
     CORS_ORIGINS: List[str]
 
+    # Logging
+    LOG_LEVEL: str
+
     def __init__(self) -> None:
         self.DB_HOST = os.environ.get("DB_HOST")
         self.DB_USER = os.environ.get("DB_USER")
@@ -71,6 +74,10 @@ class Settings:
         self.PUBLIC_EXPORT_DIR = os.environ.get("PUBLIC_EXPORT_DIR")
 
         self.CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+        # Logging configuration
+        # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+        self.LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
     @property
     def repo_root(self) -> Path:

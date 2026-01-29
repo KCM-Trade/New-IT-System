@@ -1,14 +1,51 @@
+"""
+FastAPI Application Entry Point
+
+This module initializes the FastAPI application with:
+- Centralized logging configuration
+- Trace ID middleware for request tracking
+- CORS middleware
+- API routers
+"""
+
+import os
+
+# IMPORTANT: Initialize logging BEFORE importing other app modules
+# This ensures all loggers inherit the correct configuration
+from app.core.logging_config import setup_logging, get_logger
+
+# Read log level from environment (default: INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+setup_logging(log_level=LOG_LEVEL)
+
+logger = get_logger(__name__)
+
+# Now import other modules (after logging is configured)
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 
-from .api.v1.routers import api_v1_router
+from app.api.v1.routers import api_v1_router
+from app.core.trace_middleware import TraceIDMiddleware
 
 
 def create_app() -> FastAPI:
+    """
+    Create and configure the FastAPI application instance.
+    
+    Fresh grad note:
+    - Middleware order matters: TraceIDMiddleware should be added first
+      so all subsequent middleware and routes have access to trace_id
+    - CORS must be configured for frontend to access the API
+    """
+    logger.info("Creating FastAPI application...")
+    
     app = FastAPI(title="New IT System API", version="v1")
 
+    # Add Trace ID middleware (must be first to capture all requests)
+    app.add_middleware(TraceIDMiddleware)
+    
     # CORS: keep permissive for now; tighten via settings later
     app.add_middleware(
         CORSMiddleware,
@@ -31,9 +68,8 @@ def create_app() -> FastAPI:
     def favicon_redirect():
         return RedirectResponse(url="/static/Favicon-01.svg", status_code=307)
 
+    logger.info("FastAPI application created successfully")
     return app
 
 
 app = create_app()
-
-

@@ -4,15 +4,16 @@ import clickhouse_connect
 import redis
 import json
 import hashlib
-import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import dotenv
 
 dotenv.load_dotenv()
 
-# 初始化日志记录器 (用于生产环境标准化日志)
-logger = logging.getLogger(__name__)
+# Use centralized logging configuration
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class ClickHouseService:
     def __init__(self):
@@ -54,9 +55,9 @@ class ClickHouseService:
         try:
             with self.get_client() as client:
                 client.command('SELECT 1')
-            logger.info("✅ ClickHouse Default Connection Established.")
+            logger.info("ClickHouse default connection established")
         except Exception as e:
-            logger.warning(f"⚠️ ClickHouse Connection Warning: {e}")
+            logger.warning(f"ClickHouse connection warning: {e}")
 
     def get_client(self, use_prod: bool = False):
         """
@@ -93,11 +94,11 @@ class ClickHouseService:
         
         # 1. 检查缓存是否有效 (7 天有效期)
         if self._group_cache and self._cache_expiry and now < self._cache_expiry:
-            logger.info("🚀 Returning IB groups from memory cache.")
+            logger.info("Returning IB groups from memory cache")
             return self._group_cache
 
         try:
-            logger.info("🔍 Fetching IB groups from ClickHouse Prod...")
+            logger.info("Fetching IB groups from ClickHouse Prod")
             with self.get_client(use_prod=True) as client:
                 # 第一步：获取组别基础信息 (categoryId=6 为组别分类)
                 # 注意：ClickHouse 表名区分大小写，且在生产环境下建议显式写出表名
@@ -138,12 +139,12 @@ class ClickHouseService:
                 self._group_cache = result
                 self._cache_expiry = now + timedelta(days=7)
                 
-                logger.info(f"✅ IB groups cache updated. Found {len(group_list)} groups.")
+                logger.info(f"IB groups cache updated, found {len(group_list)} groups")
                 return result
 
         except Exception as e:
             # 记录详细的异常堆栈，方便小白根据日志定位
-            logger.error(f"❌ Error fetching IB groups from ClickHouse: {str(e)}", exc_info=True)
+            logger.error(f"Error fetching IB groups from ClickHouse: {str(e)}", exc_info=True)
             # 如果查询失败但之前有成功加载过的缓存，则降级返回旧缓存
             if self._group_cache:
                 logger.warning("Using expired cache as fallback due to query error.")
@@ -162,7 +163,7 @@ class ClickHouseService:
         Returns a dict containing 'data' (list of records) and 'statistics' (query metadata).
         Includes Redis caching logic.
         """
-        print(f"🔍 [ClickHouseService] Request: start={start_date}, end={end_date}, search={search}")
+        logger.debug(f"PnL analysis request: start={start_date}, end={end_date}, search={search}")
         
         # 1. 生成缓存 Key (基于日期和搜索词进行 MD5)
         search_key = (search or "").strip()
@@ -173,14 +174,14 @@ class ClickHouseService:
         try:
             cached_data = self.redis_client.get(cache_key)
             if cached_data:
-                print(f"🚀 [Redis] Cache Hit: {cache_key}")
+                logger.info(f"Redis cache hit for PnL analysis: {cache_key[:50]}...")
                 res = json.loads(cached_data)
                 # 注入从缓存读取的标记
                 if "statistics" in res:
                     res["statistics"]["from_cache"] = True
                 return res
         except Exception as re:
-            print(f"⚠️ Redis Read Error: {re}")
+            logger.warning(f"Redis read error: {re}")
 
         try:
             client = self.get_client()
@@ -274,7 +275,7 @@ class ClickHouseService:
             ORDER BY ib_commission_usd DESC
             """
 
-            print(f"📝 [ClickHouseService] Execute SQL Params: {parameters}")
+            logger.debug(f"Executing PnL SQL with params: {parameters}")
             
             # 使用 client.query 获取包含 summary 的结果
             result = client.query(sql, parameters=parameters)
@@ -362,17 +363,15 @@ class ClickHouseService:
                     1800,
                     json.dumps(result_dict)
                 )
-                print(f"✅ [Redis] Cache Saved: {cache_key}")
+                logger.info(f"Redis cache saved: {cache_key[:50]}...")
             except Exception as se:
-                print(f"⚠️ Redis Save Error: {se}")
+                logger.warning(f"Redis save error: {se}")
 
             return result_dict
             
         except Exception as e:
-            print(f"ClickHouse Query Error: {e}")
-            import traceback
-            traceback.print_exc()
-            # 抛出异常供上层处理，不再吞掉错误
+            # Use logger.exception to automatically include stack trace
+            logger.exception(f"ClickHouse query error in get_pnl_analysis")
             raise e
 
     def get_ib_report_data(
@@ -402,13 +401,13 @@ class ClickHouseService:
             if self.redis_client:
                 cached_data = self.redis_client.get(cache_key)
                 if cached_data:
-                    logger.info(f"🚀 [Redis] IB Report Cache Hit: {cache_key}")
+                    logger.info(f"Redis cache hit for IB report: {cache_key[:50]}...")
                     return json.loads(cached_data)
         except Exception as e:
-            logger.warning(f"⚠️ Redis Read Error: {e}")
+            logger.warning(f"Redis read error for IB report: {e}")
 
         try:
-            logger.info(f"🔍 Fetching IB report data from ClickHouse: range={r_start}~{r_end}, month={m_start}~{m_end}, groups={len(target_groups)}")
+            logger.info(f"Fetching IB report data from ClickHouse: range={r_start}~{r_end}, month={m_start}~{m_end}, groups={len(target_groups)}")
             
             with self.get_client(use_prod=True) as client:
                 sql = """
@@ -553,14 +552,14 @@ class ClickHouseService:
                             600, # TTL 10 分钟
                             json.dumps(data)
                         )
-                        logger.info(f"✅ [Redis] IB Report Cache Saved: {cache_key}")
+                        logger.info(f"Redis cache saved for IB report: {cache_key[:50]}...")
                 except Exception as e:
-                    logger.warning(f"⚠️ Redis Save Error: {e}")
+                    logger.warning(f"Redis save error for IB report: {e}")
                 
                 return data
                 
         except Exception as e:
-            logger.error(f"❌ Error fetching IB report data: {str(e)}", exc_info=True)
+            logger.error(f"Error fetching IB report data: {str(e)}", exc_info=True)
             raise e
 
 clickhouse_service = ClickHouseService()

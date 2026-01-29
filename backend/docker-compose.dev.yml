@@ -14,6 +14,8 @@ services:
       - .:/app
       # 将宿主机 frontend 目录挂载到容器 /frontend，便于服务把 JSON 写到 /frontend/public 并在宿主机可见
       - ../frontend:/frontend
+      # 日志持久化：挂载到宿主机，容器重启/删除后日志仍保留
+      - ./logs:/app/logs
     env_file:
       - .env
     environment:
@@ -24,6 +26,13 @@ services:
     restart: unless-stopped
     depends_on:
       - redis
+    # Docker 日志配置 (双保险：除了文件日志，Docker 也保留一份)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"      # 单个日志文件最大 50MB
+        max-file: "10"       # 保留 10 个文件 (约 500MB)
+        compress: "true"     # 压缩旧日志节省空间
 
 
   redis:
@@ -31,4 +40,3 @@ services:
     container_name: new-it-redis
     restart: unless-stopped
     # 内部通讯无需暴露端口到宿主机，更安全
-

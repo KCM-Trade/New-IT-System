@@ -20,3 +20,8 @@ frontend/public/profit_last_refresh.txt
 *.csv
 .agents
 .cursor
+
+# Backend logs (persisted locally, not in git)
+backend/logs/*.log
+backend/logs/*.log.*
+!backend/logs/.gitkeep

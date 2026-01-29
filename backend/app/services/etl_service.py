@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ETL服务模块 - 盈亏汇总数据同步
 
@@ -5,10 +6,7 @@ ETL服务模块 - 盈亏汇总数据同步
 支持同步调用和详细的执行结果返回。
 """
 
-from __future__ import annotations
-
 import os
-import logging
 from typing import List, Tuple, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,13 +16,10 @@ import psycopg2
 from psycopg2.extras import execute_values, RealDictCursor
 
 from ..core.config import get_settings
+from ..core.logging_config import get_logger
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Use centralized logging configuration (no basicConfig needed)
+logger = get_logger(__name__)
 
 
 @dataclass

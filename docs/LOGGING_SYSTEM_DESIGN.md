@@ -1,91 +1,234 @@
-# 全栈项目日志系统设计方案 (React + FastAPI)
+# 后端日志系统设计文档
 
-## 1. 概述与目标
-本方案旨在将现有的零散 `print()` 调试信息升级为专业、标准化、结构化的全链路日志系统。通过统一的日志管理，实现问题的快速定位、性能监控以及生产环境的异常追踪。
-
-### 核心目标
-- **标准化**：替换所有 `print()`，统一日志格式。
-- **可配置**：支持不同环境（开发/生产）的日志级别动态切换。
-- **全链路追踪**：引入 Trace ID，打通前端请求到后端服务的完整链路。
-- **易排查**：日志包含文件名、行号及完整错误堆栈。
+> **状态**: 已实施 ✅  
+> **最后更新**: 2026-01-29  
+> **版本**: v2.0 (含文件持久化)
 
 ---
 
-## 2. 后端日志架构 (FastAPI)
+## 1. 概述
 
-### 2.1 日志等级规范
+本项目采用标准化的全链路日志系统，支持：
+
+- **统一日志格式**：`[时间] [级别] [trace_id] [模块:行号] - 消息`
+- **请求追踪**：每个请求自动生成 Trace ID，便于问题排查
+- **文件持久化**：日志保存 30 天，容器重启不丢失
+- **Docker 友好**：同时输出到 stdout 和文件
+
+---
+
+## 2. 日志架构
+
+### 2.1 核心文件
+
+| 文件 | 说明 |
+|------|------|
+| `backend/app/core/logging_config.py` | 日志配置中心 |
+| `backend/app/core/trace_middleware.py` | Trace ID 中间件 |
+| `backend/logs/` | 日志文件存储目录 |
+
+### 2.2 日志等级规范
+
 | 等级 | 场景 | 生产环境 |
-| :--- | :--- | :--- |
-| **DEBUG** | 详细的开发调试信息、SQL 参数、Redis Key 等 | 默认关闭 |
-| **INFO** | 关键业务节点（API 请求进入、任务完成、用户登录） | 开启 |
-| **WARNING** | 非致命异常（请求超时重试、配置缺失默认值） | 开启 |
-| **ERROR** | 业务逻辑错误、数据库连接失败（需记录堆栈） | 开启 |
-| **CRITICAL** | 系统级崩溃、服务不可用 | 开启 |
+|------|------|----------|
+| **DEBUG** | 详细调试信息、SQL 参数 | 默认关闭 |
+| **INFO** | 关键业务节点、请求进入/完成 | 开启 |
+| **WARNING** | 非致命异常、缓存失败 | 开启 |
+| **ERROR** | 业务错误、数据库连接失败 | 开启 |
+| **CRITICAL** | 系统级崩溃 | 开启 |
 
-### 2.2 日志格式设计 (标准非 Emoji 风格)
-```text
-[时间戳] [日志级别] [请求ID] [文件名:行号] - 消息内容
+### 2.3 日志格式
+
 ```
-**示例：**
-`[2026-01-15 08:30:12.456] [ERROR] [req-550e8400] [clickhouse_service:184] - 字段 'ut.tagid' 无法解析`
+[2026-01-29 10:30:15] [INFO] [req-a1b2c3d4] [app.services.clickhouse_service:165] - PnL analysis request: start=2026-01-01, end=2026-01-29
+```
 
-### 2.3 关键实施步骤
-
-#### 第一步：全局配置 (`backend/app/core/logging_config.py`)
-创建一个中央配置文件，利用 Python 标准库 `logging` 的 `DictConfig` 或 `loguru` 进行初始化。
-- 配置 `StreamHandler` 输出到控制台（Docker 收集）。
-- 配置 `RotatingFileHandler`（可选）输出到本地文件。
-- 根据环境变量 `LOG_LEVEL` 自动过滤。
-
-#### 第二步：项目入口初始化
-在 `backend/app/main.py` 中，在 `create_app` 启动前调用初始化函数。
-
-#### 第三步：业务代码规范
-- **禁止使用 `print()`**。
-- 每个模块顶部声明：`logger = logging.getLogger(__name__)`。
-- 异常捕获必须包含堆栈：使用 `logger.exception("详细描述")`。
+组成部分：
+- `[时间戳]` - 精确到秒
+- `[级别]` - DEBUG/INFO/WARNING/ERROR/CRITICAL
+- `[trace_id]` - 请求追踪 ID (格式: `req-xxxxxxxx`)
+- `[模块:行号]` - 代码位置
+- `消息` - 日志内容
 
 ---
 
-## 3. 全链路追踪 (Trace ID)
+## 3. 文件持久化配置
 
-### 3.1 后端中间件实现
-1. 在 FastAPI 中编写中间件，为每个 incoming 请求生成 unique UUID。
-2. 将该 UUID 存入 `contextvars`（线程安全）。
-3. 在日志 Formatter 中提取该 UUID 并打印。
-4. 在 Response Header 中返回 `X-Trace-ID` 给前端。
+### 3.1 轮转策略
 
-### 3.2 价值
-当用户反馈报错时，只需提供前端收到的 Trace ID，开发者可以在后端日志中一键搜索出该请求涉及的所有数据库查询和逻辑步骤。
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| 轮转周期 | 每天午夜 | `when="midnight"` |
+| 保留天数 | 30 天 | `backupCount=30` |
+| 文件命名 | `backend.log.YYYY-MM-DD` | 按日期后缀 |
+| 存储位置 | `backend/logs/` | 挂载到宿主机 |
+
+### 3.2 目录结构
+
+```
+backend/
+├── logs/
+│   ├── .gitkeep              # Git 保留空目录
+│   ├── backend.log           # 当天日志
+│   ├── backend.log.2026-01-28
+│   ├── backend.log.2026-01-27
+│   └── ...                   # 最多 30 天
+```
+
+### 3.3 Docker 挂载配置
+
+```yaml
+# docker-compose.dev.yml
+services:
+  api:
+    volumes:
+      - ./logs:/app/logs  # 日志持久化
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+```
 
 ---
 
-## 4. 前端日志策略 (React)
+## 4. Trace ID 追踪
 
-### 4.1 异常捕获
-- **React Error Boundary**：捕获组件层面的崩溃，并在渲染降级 UI 的同时上报错误。
-- **Axios 拦截器**：自动记录所有非 2xx 的响应，并提取 Header 中的 `X-Trace-ID`。
+### 4.1 工作原理
 
-### 4.2 日志回传 (可选)
-建立 `/api/v1/logs/client` 接口，接收前端捕获的关键错误。
-**上报内容：**
-- 浏览器版本/操作系统
-- 错误消息与堆栈
-- 关联的后端 Trace ID
-- 发生错误时的前端状态（Store Snapshot）
+1. 请求进入时，中间件生成唯一 UUID：`req-xxxxxxxx`
+2. 存入 `contextvars`（线程安全）
+3. 所有日志自动携带此 ID
+4. 响应头返回 `X-Trace-ID`
 
----
+### 4.2 使用场景
 
-## 5. 快速排查指南 (Ops)
+当用户报告错误时：
+1. 获取前端显示的 Trace ID
+2. 在日志中搜索该 ID
+3. 找到完整的请求链路日志
 
-1. **定位特定错误**：`grep "ERROR" backend.log`
-2. **追踪完整流程**：`grep "TRACE_ID_HERE" backend.log`
-3. **实时监控**：使用 `tail -f` 观察生产环境关键节点日志。
-4. **性能分析**：通过 DEBUG 级别的 SQL 时间戳差异计算查询耗时。
+```bash
+# 搜索特定请求的所有日志
+grep "req-a1b2c3d4" backend/logs/backend.log*
+```
 
 ---
 
-## 6. 后续扩展方向
-- **日志聚合**：引入 **Grafana Loki** 或 **ELK (Elasticsearch, Logstash, Kibana)**。
-- **主动告警**：对日志中的 `ERROR` 级别设置钉钉或邮件告警规则。
-- **审计日志**：对敏感操作（如删除数据、修改权限）记录独立的审计日志。
+## 5. 代码使用示例
+
+### 5.1 在 Service 中使用
+
+```python
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+class MyService:
+    def do_something(self):
+        logger.info("Starting operation")
+        try:
+            # ... business logic ...
+            logger.debug(f"Processing data: {data}")
+        except Exception as e:
+            # exception() 自动包含堆栈信息
+            logger.exception("Operation failed")
+            raise
+```
+
+### 5.2 在 Router 中使用
+
+```python
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+@router.get("/data")
+def get_data():
+    logger.info("Received request for data")
+    # ...
+```
+
+### 5.3 日志级别指南
+
+```python
+# DEBUG: 详细调试信息 (仅开发环境)
+logger.debug(f"SQL params: {params}")
+
+# INFO: 关键业务节点
+logger.info(f"User {user_id} logged in")
+
+# WARNING: 非致命异常
+logger.warning(f"Redis cache miss, falling back to DB")
+
+# ERROR: 业务错误 (需要关注)
+logger.error(f"Failed to process order: {order_id}")
+
+# EXCEPTION: 错误 + 堆栈信息 (用于 except 块)
+logger.exception("Unexpected error occurred")
+```
+
+---
+
+## 6. 配置管理
+
+### 6.1 环境变量
+
+```bash
+# backend/.env
+LOG_LEVEL=INFO    # 可选: DEBUG, INFO, WARNING, ERROR, CRITICAL
+```
+
+### 6.2 动态调整日志级别
+
+```bash
+# 1. 修改 .env 文件
+LOG_LEVEL=DEBUG
+
+# 2. 重启容器
+docker compose -f docker-compose.dev.yml restart api
+```
+
+---
+
+## 7. 运维指南
+
+详见 [后端LOG.md](./后端LOG.md)
+
+---
+
+## 8. 注意事项
+
+### 8.1 禁止事项
+
+- ❌ 不要使用 `print()` 输出日志
+- ❌ 不要在代码中调用 `logging.basicConfig()`
+- ❌ 不要在日志中使用 emoji
+- ❌ 不要记录敏感信息（密码、Token）
+
+### 8.2 最佳实践
+
+- ✅ 使用 `get_logger(__name__)` 获取模块级 logger
+- ✅ 异常使用 `logger.exception()` 自动记录堆栈
+- ✅ 关键操作前后记录 INFO 日志
+- ✅ 性能敏感的详细日志使用 DEBUG 级别
+
+---
+
+## 9. 故障排查
+
+### 9.1 日志未生成
+
+1. 检查 `LOG_LEVEL` 是否正确
+2. 检查 `/app/logs` 目录权限
+3. 检查 Docker 挂载是否正确
+
+### 9.2 日志格式异常
+
+1. 确认未调用 `logging.basicConfig()`
+2. 确认 `main.py` 中 `setup_logging()` 在其他导入之前
+
+### 9.3 Trace ID 为 "-"
+
+- 启动日志正常（无请求上下文）
+- 非 HTTP 请求触发的日志
