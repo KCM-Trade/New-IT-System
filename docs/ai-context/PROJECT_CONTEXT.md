@@ -1,0 +1,308 @@
+# KCM IT System - Complete Project Context
+
+> This document provides comprehensive context for AI assistants and new team members.
+> For quick reference, see the Cursor Rule at `.cursor/rules/project-context.mdc`
+
+## 1. Project Overview
+
+**KCM IT System** is an internal financial trading risk control and analytics platform for KCM Trade, a forex broker. The system provides real-time monitoring, reporting, and analysis capabilities for trading operations.
+
+### Business Domain
+- **Industry**: Forex/CFD Trading
+- **Users**: Risk management team, operations team, IB (Introducing Broker) managers
+- **Data Sources**: MT4/MT5 trading servers, CRM (fxbackoffice)
+
+### Key Capabilities
+1. **Real-time Position Monitoring** - Track open positions across all MT servers
+2. **Client P&L Analysis** - Analyze customer profitability with filtering and export
+3. **IB Commission Reports** - Generate broker commission and transaction reports
+4. **Equity Monitoring** - Monitor account balances and equity changes
+5. **Trade Aggregation** - Summarize trading volumes and profits
+
+---
+
+## 2. Technical Architecture
+
+### System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Frontend (React)                         │
+│  - Pages: Position, ClientPnL, IBReport, Equity, TradeSummary   │
+│  - UI: shadcn/ui + Tailwind CSS + AG-Grid                       │
+│  - Port: 5173 (dev)                                              │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ HTTP/REST API
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Backend (FastAPI)                           │
+│  - API: /api/v1/* endpoints                                      │
+│  - Layers: routes → schemas → services                          │
+│  - Port: 8001                                                    │
+└───────┬─────────────────┬─────────────────┬─────────────────────┘
+        │                 │                 │
+        ▼                 ▼                 ▼
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+│  ClickHouse   │ │    MySQL      │ │    Redis      │
+│  (Analytics)  │ │  (MT4/MT5)    │ │   (Cache)     │
+│  - Reports    │ │  - Trades     │ │  - TTL: 30min │
+│  - Stats      │ │  - Users      │ │               │
+└───────────────┘ └───────────────┘ └───────────────┘
+```
+
+### Tech Stack Details
+
+| Component | Technology | Notes |
+|-----------|------------|-------|
+| Frontend | React 18 + TypeScript + Vite | SPA with client-side routing |
+| UI Library | shadcn/ui + Tailwind CSS | Dark/light theme support |
+| Data Grid | AG-Grid v34 Community | Server-side pagination |
+| Backend | Python FastAPI | Async, auto-docs at /docs |
+| Primary DB | ClickHouse | Analytics, large aggregations |
+| Trading DB | MySQL | MT4/MT5 direct connection |
+| Cache | Redis | Query result caching |
+| Data Processing | DuckDB, Parquet | Local data transformations |
+
+---
+
+## 3. Project Structure
+
+```
+New-IT-System/
+├── frontend/                    # React frontend application
+│   ├── src/
+│   │   ├── main.tsx            # Entry point
+│   │   ├── App.tsx             # Root component, routing
+│   │   ├── index.css           # Global styles (Tailwind)
+│   │   ├── pages/              # Page components
+│   │   │   ├── Position.tsx    # ~800 lines, position monitoring
+│   │   │   ├── ClientPnLAnalysis.tsx
+│   │   │   ├── IBReport.tsx
+│   │   │   ├── EquityMonitor.tsx
+│   │   │   └── TradeSummary.tsx
+│   │   ├── components/         # Reusable components
+│   │   │   ├── ui/             # shadcn/ui components
+│   │   │   ├── site-header.tsx # Page titles
+│   │   │   └── app-sidebar.tsx # Navigation
+│   │   ├── providers/
+│   │   │   └── auth-provider.tsx
+│   │   └── lib/utils.ts
+│   ├── public/                  # Static assets, exported JSONs
+│   └── package.json
+│
+├── backend/                     # FastAPI backend
+│   ├── app/
+│   │   ├── main.py             # FastAPI app factory
+│   │   ├── api/v1/
+│   │   │   ├── routers.py      # Route registration
+│   │   │   └── routes/         # Endpoint handlers
+│   │   │       ├── client_pnl.py
+│   │   │       ├── open_positions.py
+│   │   │       ├── ib_data.py
+│   │   │       └── ...
+│   │   ├── schemas/            # Pydantic models
+│   │   ├── services/           # Business logic
+│   │   │   ├── clickhouse_service.py
+│   │   │   ├── client_pnl_service.py
+│   │   │   └── ...
+│   │   └── core/
+│   │       ├── config.py       # Settings from .env
+│   │       └── logging_config.py
+│   ├── main.py                 # ASGI entry (uvicorn main:app)
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── database/                    # DB scripts
+│   ├── clientpnl_full_load.py
+│   └── clientpnl_incremental_refresh.py
+│
+├── docs/                        # Documentation
+│   ├── README.md               # Documentation hub
+│   ├── architecture/           # System design docs
+│   ├── backend/                # Backend dev guides
+│   ├── frontend/               # Frontend dev guides
+│   ├── features/               # Feature specifications
+│   ├── operations/             # Deployment guides
+│   └── ai-context/             # This file
+│
+└── .cursor/rules/              # Cursor AI rules
+    └── project-context.mdc     # Auto-loaded context
+```
+
+---
+
+## 4. Core Business Modules
+
+### 4.1 Position Monitor (`Position.tsx`)
+**Purpose**: Real-time monitoring of open trading positions across all MT servers.
+
+**Key Features**:
+- Cross-server symbol summary (XAUUSD across mt4_live, mt4_live2, mt5)
+- Fuzzy matching for symbol variants (.cent, .kcm, .kcmc)
+- Parallel queries to multiple databases
+- Drill-down to order details (planned)
+
+**API**: `GET /api/v1/open-positions/summary`
+
+### 4.2 Client PnL Analysis (`ClientPnLAnalysis.tsx`)
+**Purpose**: Analyze customer profitability with advanced filtering.
+
+**Key Features**:
+- Date range filtering
+- Client search and group filtering
+- Column visibility toggle
+- Export to CSV
+- Server-side pagination with AG-Grid
+- Redis caching (shows "⚡ Cached" indicator)
+
+**API**: `GET /api/v1/pnl/summary/paginated`
+
+### 4.3 IB Report (`IBReport.tsx`)
+**Purpose**: Generate reports for Introducing Broker commissions and transactions.
+
+**Key Features**:
+- Dynamic group selection (60+ groups)
+- Dual-row display (selected range + monthly total)
+- Single-pass SQL aggregation with `sumIf`
+- Favorite groups stored in localStorage
+
+**API**: `GET /api/v1/ib-report/summary`
+
+### 4.4 Equity Monitor
+**Purpose**: Track account balances and equity changes.
+
+**API**: `GET /api/v1/equity/monitor`
+
+---
+
+## 5. Database Schema (ClickHouse)
+
+### Key Tables
+
+| Table | Database | Purpose |
+|-------|----------|---------|
+| `fxbackoffice_mt4_trades` | KCM_fxbackoffice | Trade history (closed orders) |
+| `fxbackoffice_mt4_users` | KCM_fxbackoffice | User/account info with userId |
+| `fxbackoffice_transactions` | KCM_fxbackoffice | Deposits, withdrawals, IB payments |
+| `fxbackoffice_tags` | KCM_fxbackoffice | Group/tag definitions (categoryId=6) |
+| `fxbackoffice_user_tags` | KCM_fxbackoffice | User-to-tag mappings |
+| `stats_balances` | KCM_fxbackoffice | Daily balance/equity snapshots |
+| `fxbackoffice_stats_ib_commissions_by_login_sid` | KCM_fxbackoffice | Pre-aggregated IB commissions |
+
+### Important Conventions
+
+1. **Cent Account Handling**: Currency = 'CEN' means amounts must be divided by 100
+2. **Compound ID Format**: `loginSid` uses format `SID-LOGIN` (e.g., "1-8522845")
+3. **Trade Commands**: CMD 0 = Buy, CMD 1 = Sell
+4. **Transaction Types**: 'deposit', 'withdrawal', 'ib withdrawal'
+
+---
+
+## 6. API Conventions
+
+### Base URL
+- Development: `http://localhost:8001/api/v1/`
+- API Docs: `http://localhost:8001/docs` (Swagger UI)
+
+### Common Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | int | Page number (1-indexed) |
+| `page_size` | int | Items per page (default 50) |
+| `sort_by` | string | Column to sort by |
+| `sort_order` | 'asc' \| 'desc' | Sort direction |
+| `start_date` | string | Filter start (YYYY-MM-DD) |
+| `end_date` | string | Filter end (YYYY-MM-DD) |
+
+### Response Structure
+
+```json
+{
+  "data": [...],
+  "total": 1234,
+  "page": 1,
+  "page_size": 50,
+  "total_pages": 25,
+  "statistics": {
+    "from_cache": true,
+    "query_time_ms": 45
+  }
+}
+```
+
+---
+
+## 7. Coding Conventions
+
+### Frontend
+- **Components**: Functional components with hooks
+- **Styling**: Tailwind CSS classes, shadcn/ui components
+- **State**: React useState/useEffect, localStorage for persistence
+- **Tables**: AG-Grid with server-side pagination
+- **Comments**: English only
+
+### Backend
+- **Routes** (`routes/`): Handle HTTP request/response only
+- **Schemas** (`schemas/`): Define request/response shapes (Pydantic)
+- **Services** (`services/`): Implement business logic, database queries
+- **Config** (`core/`): Centralized settings from .env
+
+### Adding New Features
+
+**New API Endpoint**:
+1. Create schema in `backend/app/schemas/`
+2. Implement service in `backend/app/services/`
+3. Add route in `backend/app/api/v1/routes/`
+4. Register in `backend/app/api/v1/routers.py`
+
+**New Frontend Page**:
+1. Create component in `frontend/src/pages/`
+2. Add route in `App.tsx`
+3. Add to sidebar in `app-sidebar.tsx`
+4. Add title in `site-header.tsx` titleMap
+
+---
+
+## 8. Common Issues & Solutions
+
+| Issue | Solution |
+|-------|----------|
+| AG-Grid blank | Set container height (e.g., `h-[600px]`) |
+| AG-Grid error #272 | Register modules in main.tsx |
+| CORS errors | Set CORS_ORIGINS in backend .env |
+| ClickHouse connection | Check VPN, verify credentials |
+| CEN account wrong amounts | Ensure dividing by 100 |
+| Cache not updating | Wait 30min TTL or clear Redis |
+
+---
+
+## 9. Environment Setup
+
+### Backend (.env)
+```env
+DB_HOST=your_clickhouse_host
+DB_USER=your_user
+DB_PASSWORD=your_password
+DB_NAME=KCM_fxbackoffice
+DB_PORT=9000
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+CORS_ORIGINS=http://localhost:5173
+```
+
+### Frontend (.env.development)
+```env
+VITE_API_BASE_URL=http://localhost:8001
+VITE_DISABLE_AUTH=true  # Skip login for dev
+```
+
+---
+
+## 10. Contact & Resources
+
+- **Backend API Docs**: http://localhost:8001/docs
+- **Documentation Hub**: [docs/README.md](../README.md)
+- **Cursor AI Rules**: `.cursor/rules/project-context.mdc`

@@ -1,69 +1,121 @@
-# React + TypeScript + Vite
+# KCM IT System - Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React-based frontend for the KCM IT System analytics platform.
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| React | 18.x | UI framework |
+| TypeScript | 5.x | Type safety |
+| Vite | 6.x | Build tool & dev server |
+| shadcn/ui | - | UI component library |
+| Tailwind CSS | 4.x | Styling |
+| AG-Grid | 34.x | Data tables with server-side pagination |
 
-## Expanding the ESLint configuration
+## Quick Start
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+```bash
+# Install dependencies
+npm install
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+# Start development server
+npm run dev
+# Opens at http://localhost:5173
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+# Build for production
+npm run build
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Preview production build
+npm run preview
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Project Structure
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
 ```
+frontend/
+├── src/
+│   ├── main.tsx           # App entry point
+│   ├── App.tsx            # Root component with routing
+│   ├── index.css          # Global styles (Tailwind)
+│   ├── pages/             # Page components
+│   │   ├── Position.tsx   # Real-time position monitor
+│   │   ├── ClientPnLAnalysis.tsx
+│   │   ├── IBReport.tsx
+│   │   └── ...
+│   ├── components/        # Reusable components
+│   │   ├── ui/            # shadcn/ui components
+│   │   ├── site-header.tsx
+│   │   └── ...
+│   ├── providers/         # Context providers
+│   │   └── auth-provider.tsx
+│   └── lib/               # Utilities
+│       └── utils.ts
+├── public/                # Static assets
+├── index.html             # HTML template
+├── vite.config.ts         # Vite configuration
+├── tailwind.config.js     # Tailwind configuration
+└── components.json        # shadcn/ui CLI config
+```
+
+## Key Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| Position Monitor | `/position` | Real-time open positions across MT4/MT5 |
+| Client PnL | `/client-pnl` | Customer profit/loss analysis |
+| IB Report | `/ib-report` | Broker commission reports |
+| Equity Monitor | `/equity` | Account equity tracking |
+| Trade Summary | `/trade-summary` | Trading volume aggregation |
+
+## Development Guide
+
+### Adding a New Page
+
+1. Create page component in `src/pages/MyPage.tsx`
+2. Add route in `src/App.tsx`:
+   ```tsx
+   <Route path="/my-page" element={<MyPage />} />
+   ```
+3. Add to sidebar navigation in `src/components/app-sidebar.tsx`
+4. Update title mapping in `src/components/site-header.tsx`:
+   ```tsx
+   const titleMap = {
+     "/my-page": "My Page Title",
+     // ...
+   }
+   ```
+
+### Using AG-Grid
+
+See [AG-Grid Integration Guide](../docs/frontend/ag-grid-integration.md) for:
+- Module registration
+- Theme configuration
+- Server-side pagination
+- Common troubleshooting
+
+### Theme Support
+
+The app supports light/dark themes:
+- Theme provider in `src/components/theme-provider.tsx`
+- Toggle in `src/components/mode-toggle.tsx`
+- AG-Grid theme switches automatically with `ag-theme-quartz` / `ag-theme-quartz-dark`
+
+## Environment Variables
+
+Create `.env.development` or `.env.production`:
+
+```env
+# API backend URL
+VITE_API_BASE_URL=http://localhost:8001
+
+# Skip authentication (dev only)
+VITE_DISABLE_AUTH=true
+```
+
+## Documentation
+
+- [File Structure Explained](../docs/frontend/file-structure.md)
+- [AG-Grid Integration](../docs/frontend/ag-grid-integration.md)
+- [Filter Module Design](../docs/frontend/filter-module-design.md)
+- [Full Documentation](../docs/)

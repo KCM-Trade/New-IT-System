@@ -1,130 +1,122 @@
-# 54 New IT System
+# KCM IT System Documentation
 
-This document provides instructions on how to set up and run the project locally. The project consists of a React frontend and a Python FastAPI backend.
+This is the documentation hub for the KCM IT System - an internal financial trading risk control and analytics platform.
 
-## Prerequisites
+## Quick Start
 
-Before you begin, ensure you have the following installed on your system:
+| Role | Start Here |
+|------|------------|
+| **New Developer** | [Backend Overview](backend/overview.md) / [Frontend File Structure](frontend/file-structure.md) |
+| **Frontend Dev** | [Frontend Docs](frontend/) |
+| **Backend Dev** | [Backend Docs](backend/) |
+| **PM / Business** | [Features Docs](features/) |
+| **DevOps** | [Operations Docs](operations/) |
+| **AI Assistant** | [AI Context](ai-context/PROJECT_CONTEXT.md) |
 
-- **Git:** For cloning the repository.
-- **Node.js and npm:** For managing the frontend dependencies and running the development server. You can download it from [nodejs.org](https://nodejs.org/).
-  - To check your versions, run:
-    ```bash
-    node -v
-    npm -v
-    ```
-- **Python 3:** For running the backend server. You can download it from [python.org](https://www.python.org/).
-  - To check your version, run:
-    ```bash
-    python --version
-    # or on some systems
-    python3 --version
-    ```
+## Project Overview
 
-## Setup and Installation
+### Tech Stack
 
-Follow these steps to get your development environment set up.
+| Layer | Technology |
+|-------|------------|
+| Frontend | React + TypeScript + Vite + shadcn/ui + AG-Grid |
+| Backend | Python FastAPI + ClickHouse + Redis |
+| Database | ClickHouse (analytics) + MySQL (MT4/MT5 data) |
+| Deployment | Docker + systemd |
 
-### 1. Clone the Repository
+### Core Modules
 
-First, clone the project repository to your local machine using Git.
+| Module | Description | Docs |
+|--------|-------------|------|
+| Client PnL Analysis | Customer profit/loss analysis | [Features](features/) |
+| Position Monitor | Real-time position monitoring | [position-monitor.md](features/position-monitor.md) |
+| IB Report | Broker commission reports | [ib-report.md](features/ib-report.md) |
+| Equity Monitor | Account equity tracking | [equity-monitor.md](features/equity-monitor.md) |
+
+## Documentation Structure
+
+```
+docs/
+├── README.md                    # You are here
+├── architecture/                # System design & technical decisions
+│   ├── caching-strategy.md     # Redis caching implementation
+│   ├── logging-system.md       # Logging system design
+│   ├── backend-logging.md      # Backend logging details
+│   └── mt5-database-schema.md  # MT5 database schema
+├── backend/                     # Backend development guides
+│   ├── overview.md             # Backend quick start (MUST READ)
+│   ├── etl-service-guide.md    # ETL service documentation
+│   ├── sync-pnl-summary.md     # PnL sync usage
+│   └── client-pnl-refresh-logging.md
+├── frontend/                    # Frontend development guides
+│   ├── file-structure.md       # Project structure explained
+│   ├── ag-grid-integration.md  # AG-Grid v34 integration guide
+│   ├── filter-module-design.md # Filter module architecture
+│   ├── filter-integration-guide.md
+│   ├── filter-static-demo.md
+│   ├── swapfree-control.md
+│   ├── design-ui.md
+│   └── page-operation-guide.md
+├── features/                    # Feature specifications & guides
+│   ├── position-monitor.md     # Position monitoring features
+│   ├── ib-report.md            # IB report design
+│   ├── ib-net-deposit-reform.md
+│   ├── ib-net-deposit-summary.md
+│   ├── open-positions-reform.md
+│   ├── client-pnl-local-filtering.md
+│   ├── client-pnl-column-toggle.md
+│   ├── equity-monitor.md
+│   ├── profit-deep-analysis.md
+│   ├── pnl-monitor-integration.md
+│   └── filter-backend-integration.md
+├── operations/                  # Deployment & operations
+│   ├── clickhouse-connection.md # ClickHouse production setup
+│   └── clientid-based-page.md
+└── ai-context/                  # AI assistant context
+    └── PROJECT_CONTEXT.md      # Detailed project context for AI
+```
+
+## Development Setup
+
+### Prerequisites
+- Node.js 18+ and npm
+- Python 3.10+
+- Docker (recommended)
+
+### Quick Start
 
 ```bash
-git clone <your-repository-url>
-cd "54 New IT System"
+# Clone repository
+git clone <repo-url>
+cd New-IT-System
+
+# Backend setup
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: .\venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env      # Configure database credentials
+uvicorn main:app --reload --port 8001
+
+# Frontend setup (new terminal)
+cd frontend
+npm install
+npm run dev               # Runs on http://localhost:5173
 ```
-Replace `<your-repository-url>` with the actual URL of your Git repository.
 
-### 2. Backend Setup
+## Contributing
 
-The backend is a Python application built with the FastAPI framework.
+### Code Style
+- All comments in **English**
+- Frontend: Functional components + hooks
+- Backend: Follow routes/schemas/services separation
 
-1.  **Navigate to the backend directory:**
-    ```bash
-    cd backend
-    ```
+### Documentation
+- Use kebab-case for filenames (e.g., `my-feature.md`)
+- Place docs in appropriate category folder
+- Update this README when adding new docs
 
-2.  **Create and activate a virtual environment (Recommended):**
-    This helps to isolate project-specific dependencies.
+## Related Resources
 
-    - For macOS/Linux:
-      ```bash
-      python3 -m venv venv
-      source venv/bin/activate
-      ```
-    - For Windows:
-      ```bash
-      python -m venv venv
-      .\venv\Scripts\activate
-      ```
-
-3.  **Install Python dependencies:**
-    Install all the required packages listed in `requirements.txt`.
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **Configure Environment Variables:**
-    The backend requires database credentials, which are loaded from a `.env` file. Create a file named `.env` inside the `backend` directory and add the following variables. **Do not commit this file to version control.**
-
-    ```env
-    DB_HOST=your_database_host
-    DB_USER=your_database_user
-    DB_PASSWORD=your_database_password
-    DB_NAME=your_database_name
-    DB_PORT=3306
-    DB_CHARSET=utf8mb4
-    ```
-    Replace the placeholder values with your actual MySQL database connection details.
-
-
-### 3. Frontend Setup
-
-The frontend is a React application built with Vite.
-
-1.  **Navigate to the frontend directory:**
-    From the project root directory:
-    ```bash
-    cd frontend
-    ```
-
-2.  **Install Node.js dependencies:**
-    This command reads the `package.json` file and installs all the necessary packages.
-    ```bash
-    npm install
-    ```
-
-## Running the Project
-
-You need to run both the backend and frontend servers simultaneously in separate terminal windows.
-
-### 1. Run the Backend Server
-
-1.  **Navigate to the backend directory:**
-    ```bash
-    cd backend
-    ```
-2.  **Activate the virtual environment** (if you are in a new terminal):
-    - macOS/Linux: `source venv/bin/activate`
-    - Windows: `.\venv\Scripts\activate`
-
-3.  **Start the FastAPI server:**
-    The `uvicorn` command starts the server. The `--reload` flag enables hot-reloading, which automatically restarts the server when you make changes to the code.
-    ```bash
-    uvicorn main:app --reload
-    ```
-    The backend API will be running at `http://127.0.0.1:8000`.
-
-### 2. Run the Frontend Development Server
-
-1.  **Navigate to the frontend directory:**
-    ```bash
-    cd frontend
-    ```
-
-2.  **Start the Vite development server:**
-    This command starts the frontend application.
-    ```bash
-    npm run dev
-    ```
-    The frontend will be accessible in your web browser, typically at `http://localhost:5173`. The terminal will show the exact URL.
+- [Backend API Docs](http://localhost:8001/docs) (Swagger UI when running locally)
+- [Cursor AI Rules](../.cursor/rules/) - Auto-loaded context for AI assistance
