@@ -497,13 +497,15 @@ export default function PositionPage() {
                       <TableRow className="bg-muted/50">
                         <TableHead>服务器</TableHead>
                         <TableHead>包含产品</TableHead>
-                        <TableHead className="text-right">Volume Buy</TableHead>
+                        <TableHead className="text-right">Lots (Buy)</TableHead>
                         <TableHead className="text-right">
-                          Volume Sell
+                          Lots (Sell)
                         </TableHead>
-                        <TableHead className="text-right">Profit Buy</TableHead>
                         <TableHead className="text-right">
-                          Profit Sell
+                          Profit (Buy)
+                        </TableHead>
+                        <TableHead className="text-right">
+                          Profit (Sell)
                         </TableHead>
                         <TableHead className="text-right">
                           Total Profit
@@ -586,27 +588,27 @@ export default function PositionPage() {
       {/* 顶部统计卡片（5个） */}
       <div className="grid grid-cols-1 gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
-          title="Volume Buy"
+          title="Lots (Buy)"
           value={formatVolume(totals.volume_buy)}
           positive={totals.volume_buy >= 0}
           icon={TrendingUp}
           variant="neutral"
         />
         <StatCard
-          title="Volume Sell"
+          title="Lots (Sell)"
           value={formatVolume(totals.volume_sell)}
           positive={totals.volume_sell >= 0}
           icon={TrendingUp}
           variant="neutral"
         />
         <StatCard
-          title="Profit Buy"
+          title="Profit (Buy)"
           value={format2(totals.profit_buy)}
           positive={totals.profit_buy >= 0}
           variant="profit"
         />
         <StatCard
-          title="Profit Sell"
+          title="Profit (Sell)"
           value={format2(totals.profit_sell)}
           positive={totals.profit_sell >= 0}
           variant="profit"

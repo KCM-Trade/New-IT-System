@@ -31,7 +31,6 @@ This is the documentation hub for the KCM IT System - an internal financial trad
 | Client PnL Analysis | Customer profit/loss analysis | [Features](features/) |
 | Position Monitor | Real-time position monitoring | [position-monitor.md](features/position-monitor.md) |
 | IB Report | Broker commission reports | [ib-report.md](features/ib-report.md) |
-| Equity Monitor | Account equity tracking | [equity-monitor.md](features/equity-monitor.md) |
 
 ## Documentation Structure
 
@@ -65,7 +64,6 @@ docs/
 │   ├── open-positions-reform.md
 │   ├── client-pnl-local-filtering.md
 │   ├── client-pnl-column-toggle.md
-│   ├── equity-monitor.md
 │   ├── profit-deep-analysis.md
 │   ├── pnl-monitor-integration.md
 │   └── filter-backend-integration.md

@@ -23,7 +23,7 @@ export const enUS = {
     customerPnLMonitorV2: "AccountID PnL Monitor",
     clientPnLMonitor: "ClientID PnL Monitor",
     ibReport: "IB Report",
-    equityMonitor: "Equity - Monitor",
+    // equityMonitor: "Equity - Monitor", // [REMOVED]
     clientTrading: "Client Trading Analysis",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "Basis Analysis",
@@ -50,7 +50,7 @@ export const enUS = {
   // Page titles
   pages: {
     template: "Template",
-    equityMonitor: "Equity - Monitor",
+    // equityMonitor: "Equity - Monitor", // [REMOVED]
     goldQuote: "Gold Quote",
     basisAnalysis: "Basis Analysis",
     // downloads: "Downloads", // [REMOVED]

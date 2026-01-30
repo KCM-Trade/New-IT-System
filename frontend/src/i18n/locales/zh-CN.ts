@@ -23,7 +23,7 @@ export const zhCN = {
     customerPnLMonitorV2: "交易账户 - 盈亏监控",
     clientPnLMonitor: "客户 - 盈亏监控",
     ibReport: "IB 报表",
-    equityMonitor: "Equity - Monitor",
+    // equityMonitor: "Equity - Monitor", // [REMOVED]
     clientTrading: "客户交易分析",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "基差分析",
@@ -50,7 +50,7 @@ export const zhCN = {
   // Page titles
   pages: {
     template: "模板",
-    equityMonitor: "Equity - Monitor",
+    // equityMonitor: "Equity - Monitor", // [REMOVED]
     goldQuote: "黄金报价",
     basisAnalysis: "基差分析",
     // downloads: "数据下载", // [REMOVED]

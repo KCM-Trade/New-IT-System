@@ -51,7 +51,7 @@ export default function ConfigPlaceholder() {
         { title: t("nav.template"), url: "/template" },
         { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
         { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
-        { title: t("nav.equityMonitor"), url: "/equity-monitor" },
+        // { title: t("nav.equityMonitor"), url: "/equity-monitor" }, // [REMOVED]
       ],
     },
   ]

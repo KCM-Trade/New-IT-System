@@ -79,13 +79,13 @@ New-IT-System/
 │   │   │   ├── ClientPnLMonitor.tsx    # Client-level PnL (PostgreSQL ETL)
 │   │   │   ├── ClientPnLAnalysis.tsx   # Client PnL (ClickHouse, recommended)
 │   │   │   ├── IBReport.tsx
-│   │   │   ├── EquityMonitor.tsx
 │   │   │   └── ...
 │   │   │   # Removed pages (2025-01):
 │   │   │   # - CustomerPnLMonitor.tsx (replaced by ClientPnLAnalysis)
 │   │   │   # - CustomerPnLMonitorV2.tsx (replaced by ClientPnLAnalysis)
 │   │   │   # - ClientTradingAnalytics.tsx (deprecated)
 │   │   │   # - Downloads.tsx (deprecated, 2025-01)
+│   │   │   # - EquityMonitor.tsx (deprecated, 2026-01)
 │   │   ├── components/         # Reusable components
 │   │   │   ├── ui/             # shadcn/ui components
 │   │   │   ├── site-header.tsx # Page titles

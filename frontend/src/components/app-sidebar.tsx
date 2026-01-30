@@ -77,7 +77,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             // { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
             // [DEPRECATED] CustomerPnLMonitor - removed, use ClientPnLAnalysis instead
             // { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
-            { title: t("nav.equityMonitor"), url: "/equity-monitor" },
+            // [REMOVED] EquityMonitor page deleted
+            // { title: t("nav.equityMonitor"), url: "/equity-monitor" },
           ],
         },
       ],

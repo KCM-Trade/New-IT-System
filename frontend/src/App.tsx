@@ -10,7 +10,8 @@ const GoldQuotePage = lazy(() => import("@/pages/GoldQuote"))
 // [REMOVED] Downloads page deprecated
 // const DownloadsPage = lazy(() => import("@/pages/Downloads"))
 const WarehousePage = lazy(() => import("@/pages/Warehouse"))
-const EquityMonitorPage = lazy(() => import("@/pages/EquityMonitor"))
+// [REMOVED] EquityMonitor page deleted
+// const EquityMonitorPage = lazy(() => import("@/pages/EquityMonitor"))
 const PositionPage = lazy(() => import("@/pages/Position"))
 const WarehouseProductsPage = lazy(() => import("@/pages/WarehouseProducts"))
 const WarehouseOthersPage = lazy(() => import("@/pages/WarehouseOthers"))
@@ -50,7 +51,8 @@ function App() {
             >
               <Route index element={<Navigate to="/cfg/managers" replace />} />
               <Route path="template" element={<DashboardTemplatePage />} />
-              <Route path="equity-monitor" element={<EquityMonitorPage />} />
+              {/* [REMOVED] EquityMonitor page deleted */}
+              {/* <Route path="equity-monitor" element={<EquityMonitorPage />} /> */}
               <Route path="gold" element={<GoldQuotePage />} />
               <Route path="basis" element={<BasisPage />} />
               {/* [REMOVED] Downloads page deprecated */}
