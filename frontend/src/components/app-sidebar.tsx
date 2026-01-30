@@ -73,7 +73,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             // [REMOVED] Downloads page deprecated
             // { title: t("nav.downloads"), url: "/downloads" },
             { title: t("nav.template"), url: "/template" },
-            { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
+            // [HIDDEN] AgentGlobal - static JSON page, not using backend API
+            // { title: t("nav.agentGlobal"), url: "/warehouse/agent-global" },
             // [DEPRECATED] CustomerPnLMonitor - removed, use ClientPnLAnalysis instead
             // { title: t("nav.customerPnLMonitor"), url: "/customer-pnl-monitor" },
             { title: t("nav.equityMonitor"), url: "/equity-monitor" },
