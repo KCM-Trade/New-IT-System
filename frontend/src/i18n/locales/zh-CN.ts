@@ -17,7 +17,7 @@ export const zhCN = {
     close: "关闭",
     comma: "，",
   },
-  
+
   // Navigation
   nav: {
     customerPnLMonitorV2: "交易账户 - 盈亏监控",
@@ -27,13 +27,13 @@ export const zhCN = {
     clientTrading: "客户交易分析",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "基差分析",
-    downloads: "数据下载",
+    // downloads: "数据下载", // [REMOVED]
     warehouse: "报仓数据",
     warehouseProducts: "CN 产品报仓",
     ibData: "IB - 出入金数据",
     position: "全仓报表",
     warehouseOthers: "其他",
-    loginIPs: "Login IP监测",
+    loginIPs: "MT LoginIP 监测",
     profitAnalysis: "利润分析",
     template: "模板",
     agentGlobal: "代理统计Global",
@@ -44,16 +44,16 @@ export const zhCN = {
     globalCsDepartment: "Global CS Department",
     riskControlDepartment: "Risk Control",
     otherSection: "Other",
-    ibidLots: "IBID 手数查询",
+    ibidLots: "IB及旗下客户交易查询",
   },
-  
+
   // Page titles
   pages: {
     template: "模板",
     equityMonitor: "Equity - Monitor",
     goldQuote: "黄金报价",
     basisAnalysis: "基差分析",
-    downloads: "数据下载",
+    // downloads: "数据下载", // [REMOVED]
     warehouseAgentGlobal: "代理统计Global",
     warehouse: "报仓数据",
     warehouseProducts: "CN 产品报仓",
@@ -72,13 +72,13 @@ export const zhCN = {
     configuration: "配置",
     ibidLots: "IBID 手数查询",
   },
-  
+
   ibidLotsPage: {
     description: "该功能仅支持公司内网或VPN访问，请提前确认网络环境。",
     note: "点击下方按钮会在新标签中打开 IBID 手数查询系统。",
     button: "打开查询系统",
   },
-  
+
   // Configuration
   config: {
     managers: "Managers",
@@ -89,12 +89,12 @@ export const zhCN = {
     tasks: "Tasks",
     marketing: "Marketing",
   },
-  
+
   // Site header
   header: {
     title: "KCM Analytics System",
   },
-  
+
   // Customer P&L Monitor V2 page
   pnlMonitor: {
     title: "客户盈亏监控 - 筛选",
@@ -185,5 +185,4 @@ export const zhCN = {
       completed: "刷新完成",
     },
   },
-} as const
-
+} as const;

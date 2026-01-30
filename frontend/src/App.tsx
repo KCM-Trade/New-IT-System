@@ -7,7 +7,8 @@ const LoginPage = lazy(() => import("@/pages/Login"))
 const DashboardTemplatePage = lazy(() => import("@/pages/Dashboard"))
 const BasisPage = lazy(() => import("@/pages/Basis"))
 const GoldQuotePage = lazy(() => import("@/pages/GoldQuote"))
-const DownloadsPage = lazy(() => import("@/pages/Downloads"))
+// [REMOVED] Downloads page deprecated
+// const DownloadsPage = lazy(() => import("@/pages/Downloads"))
 const WarehousePage = lazy(() => import("@/pages/Warehouse"))
 const EquityMonitorPage = lazy(() => import("@/pages/EquityMonitor"))
 const PositionPage = lazy(() => import("@/pages/Position"))
@@ -17,11 +18,8 @@ const IBDataPage = lazy(() => import("@/pages/IBData"))
 const LoginIPsPage = lazy(() => import("@/pages/LoginIPs"))
 const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
-const ClientTradingAnalyticsPage = lazy(() => import("@/pages/ClientTradingAnalytics"))
 const IbidLotsPage = lazy(() => import("@/pages/IbidLots"))
 const SwapFreeControlPage = lazy(() => import("@/pages/SwapFreeControl"))
-const CustomerPnLMonitorPage = lazy(() => import("@/pages/CustomerPnLMonitor"))
-const CustomerPnLMonitorV2Page = lazy(() => import("@/pages/CustomerPnLMonitorV2"))
 const ClientPnLMonitorPage = lazy(() => import("@/pages/ClientPnLMonitor"))
 const ClientPnLAnalysisPage = lazy(() => import("@/pages/ClientPnLAnalysis"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
@@ -55,7 +53,8 @@ function App() {
               <Route path="equity-monitor" element={<EquityMonitorPage />} />
               <Route path="gold" element={<GoldQuotePage />} />
               <Route path="basis" element={<BasisPage />} />
-              <Route path="downloads" element={<DownloadsPage />} />
+              {/* [REMOVED] Downloads page deprecated */}
+              {/* <Route path="downloads" element={<DownloadsPage />} /> */}
               <Route path="warehouse" element={<WarehousePage />} />
               <Route path="warehouse/products" element={<WarehouseProductsPage />} />
               <Route path="warehouse/ib-data" element={<IBDataPage />} />
@@ -64,11 +63,8 @@ function App() {
               <Route path="position" element={<PositionPage />} />
               <Route path="login-ips" element={<LoginIPsPage />} />
               <Route path="profit" element={<ProfitPage />} />
-              <Route path="client-trading" element={<ClientTradingAnalyticsPage />} />
               <Route path="ibid-lots" element={<IbidLotsPage />} />
               <Route path="swap-free-control" element={<SwapFreeControlPage />} />
-              <Route path="customer-pnl-monitor" element={<CustomerPnLMonitorPage />} />
-              <Route path="customer-pnl-monitor-v2" element={<CustomerPnLMonitorV2Page />} />
               <Route path="client-pnl-monitor" element={<ClientPnLMonitorPage />} />
               <Route path="client-pnl-analysis" element={<ClientPnLAnalysisPage />} />
               <Route path="ib-report" element={<IBReportPage />} />

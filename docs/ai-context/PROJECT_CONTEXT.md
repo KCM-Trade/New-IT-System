@@ -74,12 +74,18 @@ New-IT-System/
 │   │   ├── main.tsx            # Entry point
 │   │   ├── App.tsx             # Root component, routing
 │   │   ├── index.css           # Global styles (Tailwind)
-│   │   ├── pages/              # Page components
+│   │   ├── pages/              # Page components (active)
 │   │   │   ├── Position.tsx    # ~800 lines, position monitoring
-│   │   │   ├── ClientPnLAnalysis.tsx
+│   │   │   ├── ClientPnLMonitor.tsx    # Client-level PnL (PostgreSQL ETL)
+│   │   │   ├── ClientPnLAnalysis.tsx   # Client PnL (ClickHouse, recommended)
 │   │   │   ├── IBReport.tsx
 │   │   │   ├── EquityMonitor.tsx
-│   │   │   └── TradeSummary.tsx
+│   │   │   └── ...
+│   │   │   # Removed pages (2025-01):
+│   │   │   # - CustomerPnLMonitor.tsx (replaced by ClientPnLAnalysis)
+│   │   │   # - CustomerPnLMonitorV2.tsx (replaced by ClientPnLAnalysis)
+│   │   │   # - ClientTradingAnalytics.tsx (deprecated)
+│   │   │   # - Downloads.tsx (deprecated, 2025-01)
 │   │   ├── components/         # Reusable components
 │   │   │   ├── ui/             # shadcn/ui components
 │   │   │   ├── site-header.tsx # Page titles
@@ -144,8 +150,8 @@ New-IT-System/
 
 **API**: `GET /api/v1/open-positions/summary`
 
-### 4.2 Client PnL Analysis (`ClientPnLAnalysis.tsx`)
-**Purpose**: Analyze customer profitability with advanced filtering.
+### 4.2 Client PnL Analysis (`ClientPnLAnalysis.tsx`) ⭐ Recommended
+**Purpose**: Analyze customer profitability with advanced filtering (ClickHouse-based).
 
 **Key Features**:
 - Date range filtering
@@ -153,9 +159,21 @@ New-IT-System/
 - Column visibility toggle
 - Export to CSV
 - Server-side pagination with AG-Grid
-- Redis caching (shows "⚡ Cached" indicator)
+- ClickHouse real-time analytics
 
-**API**: `GET /api/v1/pnl/summary/paginated`
+**API**: `GET /api/v1/client-pnl-analysis/query`
+
+### 4.2b Client PnL Monitor (`ClientPnLMonitor.tsx`) - Legacy
+**Purpose**: Client-level PnL aggregation from PostgreSQL ETL pipeline.
+
+**Key Features**:
+- Client-level summary with account drill-down
+- Zipcode mapping from CRM
+- PostgreSQL-based data
+
+**API**: `GET /api/v1/client-pnl/summary/paginated`, `GET /api/v1/client-pnl/{id}/accounts`
+
+> Note: Consider migrating to ClientPnLAnalysis for real-time ClickHouse queries.
 
 ### 4.3 IB Report (`IBReport.tsx`)
 **Purpose**: Generate reports for Introducing Broker commissions and transactions.

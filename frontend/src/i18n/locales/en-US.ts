@@ -27,7 +27,7 @@ export const enUS = {
     clientTrading: "Client Trading Analysis",
     swapFreeControl: "Swap Free Control",
     basisAnalysis: "Basis Analysis",
-    downloads: "Downloads",
+    // downloads: "Downloads", // [REMOVED]
     warehouse: "Warehouse Data",
     warehouseProducts: "Product Warehouse",
     ibData: "IB Data",
@@ -53,7 +53,7 @@ export const enUS = {
     equityMonitor: "Equity - Monitor",
     goldQuote: "Gold Quote",
     basisAnalysis: "Basis Analysis",
-    downloads: "Downloads",
+    // downloads: "Downloads", // [REMOVED]
     warehouseAgentGlobal: "Agent Statistics Global",
     warehouse: "Warehouse Data",
     warehouseProducts: "Product Warehouse",

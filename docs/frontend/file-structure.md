@@ -46,10 +46,10 @@
 ```ts
 const titleMap: Record<string, string> = {
   "/template": "模板",
-  "/downloads": "数据下载",
   "/warehouse/agent-global": "代理统计Global", // 新增示例
   "/position": "全仓报表",
   "/profit": "利润分析",
+  "/client-pnl-monitor": "客户盈亏监控",
 }
 ```
 
