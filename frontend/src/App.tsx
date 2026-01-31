@@ -21,7 +21,8 @@ const ProfitPage = lazy(() => import("@/pages/Profit"))
 const AgentGlobalPage = lazy(() => import("@/pages/AgentGlobal"))
 const IbidLotsPage = lazy(() => import("@/pages/IbidLots"))
 const SwapFreeControlPage = lazy(() => import("@/pages/SwapFreeControl"))
-const ClientPnLMonitorPage = lazy(() => import("@/pages/ClientPnLMonitor"))
+// [HIDDEN] ClientPnLMonitor page hidden
+// const ClientPnLMonitorPage = lazy(() => import("@/pages/ClientPnLMonitor"))
 const ClientPnLAnalysisPage = lazy(() => import("@/pages/ClientPnLAnalysis"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
 const IBReportPage = lazy(() => import("@/pages/IBReport"))
@@ -67,7 +68,8 @@ function App() {
               <Route path="profit" element={<ProfitPage />} />
               <Route path="ibid-lots" element={<IbidLotsPage />} />
               <Route path="swap-free-control" element={<SwapFreeControlPage />} />
-              <Route path="client-pnl-monitor" element={<ClientPnLMonitorPage />} />
+              {/* [HIDDEN] ClientPnLMonitor page hidden */}
+              {/* <Route path="client-pnl-monitor" element={<ClientPnLMonitorPage />} /> */}
               <Route path="client-pnl-analysis" element={<ClientPnLAnalysisPage />} />
               <Route path="ib-report" element={<IBReportPage />} />
               {/* test page removed */}

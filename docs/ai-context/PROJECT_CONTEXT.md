@@ -76,7 +76,7 @@ New-IT-System/
 │   │   ├── index.css           # Global styles (Tailwind)
 │   │   ├── pages/              # Page components (active)
 │   │   │   ├── Position.tsx    # ~800 lines, position monitoring
-│   │   │   ├── ClientPnLMonitor.tsx    # Client-level PnL (PostgreSQL ETL)
+│   │   │   # ├── ClientPnLMonitor.tsx  # [HIDDEN] 2026-01, use ClientPnLAnalysis
 │   │   │   ├── ClientPnLAnalysis.tsx   # Client PnL (ClickHouse, recommended)
 │   │   │   ├── IBReport.tsx
 │   │   │   └── ...
@@ -163,7 +163,9 @@ New-IT-System/
 
 **API**: `GET /api/v1/client-pnl-analysis/query`
 
-### 4.2b Client PnL Monitor (`ClientPnLMonitor.tsx`) - Legacy
+### 4.2b Client PnL Monitor (`ClientPnLMonitor.tsx`) - Hidden (2026-01)
+> **Status**: Page hidden from sidebar. Use ClientPnLAnalysis instead.
+
 **Purpose**: Client-level PnL aggregation from PostgreSQL ETL pipeline.
 
 **Key Features**:
@@ -172,8 +174,6 @@ New-IT-System/
 - PostgreSQL-based data
 
 **API**: `GET /api/v1/client-pnl/summary/paginated`, `GET /api/v1/client-pnl/{id}/accounts`
-
-> Note: Consider migrating to ClientPnLAnalysis for real-time ClickHouse queries.
 
 ### 4.3 IB Report (`IBReport.tsx`)
 **Purpose**: Generate reports for Introducing Broker commissions and transactions.
