@@ -40,10 +40,11 @@ export const enUS = {
     customerPnLMonitor: "Customer P&L Monitor",
     others: "Others",
     getHelp: "Get Help",
-    cnCsDepartment: "CN CS Department",
-    globalCsDepartment: "Global CS Department",
+    csDepartment: "CS Department",
+    // [REMOVED] globalCsDepartment - merged into csDepartment
     riskControlDepartment: "Risk Control",
     otherSection: "Other",
+    dataQuery: "Data Query",
     ibidLots: "IBID Lots Lookup",
   },
   

@@ -30,7 +30,7 @@ export const zhCN = {
     // downloads: "数据下载", // [REMOVED]
     warehouse: "报仓数据",
     warehouseProducts: "CN 产品报仓",
-    ibData: "IB - 出入金数据",
+    ibData: "IB 出入金查询",
     position: "全仓报表",
     warehouseOthers: "其他",
     loginIPs: "MT LoginIP 监测",
@@ -40,10 +40,11 @@ export const zhCN = {
     customerPnLMonitor: "客户盈亏监控",
     others: "其他",
     getHelp: "获取帮助",
-    cnCsDepartment: "CN CS Department",
-    globalCsDepartment: "Global CS Department",
+    csDepartment: "CS Department",
+    // [REMOVED] globalCsDepartment - merged into csDepartment
     riskControlDepartment: "Risk Control",
     otherSection: "Other",
+    dataQuery: "Data Query",
     ibidLots: "IB及旗下客户交易查询",
   },
 
@@ -57,7 +58,7 @@ export const zhCN = {
     warehouseAgentGlobal: "代理统计Global",
     warehouse: "报仓数据",
     warehouseProducts: "CN 产品报仓",
-    ibData: "IB - 出入金数据",
+    ibData: "IB 出入金查询",
     warehouseOthers: "其他报仓",
     position: "全仓报表",
     loginIPs: "Login IP监测",

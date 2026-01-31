@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  IconChartBar,
   IconDashboard,
   IconDatabase,
   IconFileWord,
@@ -37,30 +36,31 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       },
       navSections: [
         {
-          title: t("nav.cnCsDepartment"),
+          title: t("nav.csDepartment"),
           icon: IconUsers,
           children: [
             // { title: t("nav.clientTrading"), url: "/client-trading" },
             { title: t("nav.loginIPs"), url: "/login-ips" },
             { title: t("nav.ibidLots"), url: "/ibid-lots" },
-            { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
+            // [HIDDEN] ClientPnLMonitor page hidden
+            // { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor" },
           ],
         },
         {
-          title: t("nav.globalCsDepartment"),
-          icon: IconChartBar,
+          // Data Query section - data lookup and report pages
+          title: t("nav.dataQuery"),
+          icon: IconDatabase,
           children: [
-            // [HIDDEN] ClientPnLMonitor page hidden
-            // { title: t("nav.clientPnLMonitor"), url: "/client-pnl-monitor" },
-            { title: t("nav.ibData"), url: "/warehouse/ib-data" },
+            { title: t("nav.warehouseProducts"), url: "/warehouse/products" },
             { title: t("nav.position"), url: "/position" },
+            { title: t("nav.ibData"), url: "/warehouse/ib-data" },
+            { title: t("nav.ibReport"), url: "/ib-report" },
           ],
         },
         {
           title: t("nav.riskControlDepartment"),
           icon: IconDashboard,
           children: [
-            { title: t("nav.ibReport"), url: "/ib-report" },
             { title: "盈亏监控 (Preview)", url: "/client-pnl-analysis" },
             { title: t("nav.swapFreeControl"), url: "/swap-free-control" },
             { title: t("nav.basisAnalysis"), url: "/basis" },
