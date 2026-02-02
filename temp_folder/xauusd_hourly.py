@@ -3,9 +3,15 @@ XAUUSD Hourly Profit Analysis
 Shows past 5 days profit by hour, with AKCM vs Regular clients
 Excludes test accounts (NAME/GROUP contains 'test')
 Supports filtering by CMD (Buy/Sell) and SID (1/5/6)
+
+TIMEZONE NOTE:
+- MT4 Server Time: UTC+2 (EET)
+- Hong Kong Time: UTC+8
+- Difference: HK is 6 hours ahead of MT4 server
+- Conversion: MT4_time = HK_time - 6 hours
 """
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import mysql.connector
 import pandas as pd
@@ -31,14 +37,51 @@ DB_CONFIG = {
 }
 FXBACK_DB = os.getenv("FXBACK_DB_NAME", "fxbackoffice").replace("'", "").replace('"', "").strip()
 
+# Timezone definitions
+TZ_HK = timezone(timedelta(hours=8))    # Hong Kong UTC+8
+TZ_MT4 = timezone(timedelta(hours=2))   # MT4 Server UTC+2 (EET)
+
+
+def get_mt4_server_time():
+    """
+    Get current MT4 server time by converting from local (HK) time.
+    MT4 Server: UTC+2, Hong Kong: UTC+8
+    MT4_time = HK_time - 6 hours
+    """
+    now_hk = datetime.now(TZ_HK)
+    now_mt4 = now_hk.astimezone(TZ_MT4)
+    return now_mt4.replace(tzinfo=None)  # Return naive datetime for DB query
+
+
+def get_date_range():
+    """
+    Calculate date range for past 5 days based on MT4 server time.
+    Returns (start_date, end_date) as naive datetime objects.
+    """
+    mt4_now = get_mt4_server_time()
+    
+    # End date: today at 23:59:59 (MT4 server time)
+    end_date = mt4_now.replace(hour=23, minute=59, second=59)
+    
+    # Start date: 5 days ago at 00:00:00 (MT4 server time)
+    # Using days=4 because we include today, so: today + 4 previous days = 5 days
+    start_date = (mt4_now - timedelta(days=4)).replace(hour=0, minute=0, second=0)
+    
+    return start_date, end_date
+
 
 def get_trade_data():
     """
     Fetch XAUUSD closed trades for past 5 days.
-    Returns raw data with CMD and SID for frontend filtering.
+    Returns (DataFrame, start_date, end_date) tuple.
+    
+    Date range is calculated based on MT4 server time (UTC+2).
     """
-    end_date = datetime(2026, 1, 30, 23, 59, 59)
-    start_date = datetime(2026, 1, 26, 0, 0, 0)
+    start_date, end_date = get_date_range()
+    
+    print(f"[Timezone] HK now: {datetime.now(TZ_HK).strftime('%Y-%m-%d %H:%M:%S')} (UTC+8)")
+    print(f"[Timezone] MT4 now: {get_mt4_server_time().strftime('%Y-%m-%d %H:%M:%S')} (UTC+2)")
+    print(f"[Query Range] {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')} (MT4 time)")
 
     sql = f"""
     SELECT 
@@ -66,10 +109,10 @@ def get_trade_data():
         df = pd.read_sql(sql, conn)
         conn.close()
         print(f"Fetched {len(df)} trades")
-        return df
+        return df, start_date, end_date
     except Exception as e:
         print(f"Database error: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), start_date, end_date
 
 
 def process_data(df):
@@ -98,22 +141,33 @@ def process_data(df):
 @app.get("/api/trades")
 def get_trades():
     """API endpoint to get all trade data for frontend filtering"""
-    df = get_trade_data()
+    df, start_date, end_date = get_trade_data()
     df = process_data(df)
     
-    if df.empty:
-        return JSONResponse({"data": [], "hours": []})
-    
-    # Generate all 120 hours for complete x-axis
-    start_date = datetime(2026, 1, 26, 0, 0, 0)
-    end_date = datetime(2026, 1, 30, 23, 0, 0)
-    all_hours = pd.date_range(start=start_date, end=end_date, freq="h")
+    # Generate all hours for complete x-axis (5 days * 24 hours = 120 hours)
+    # Use start of day for hour range
+    hour_start = start_date.replace(hour=0, minute=0, second=0)
+    hour_end = end_date.replace(hour=23, minute=0, second=0)
+    all_hours = pd.date_range(start=hour_start, end=hour_end, freq="h")
     hours_list = [{"hour_str": h.strftime("%m-%d %H:00"), "hour_ts": int(h.timestamp())} for h in all_hours]
+    
+    # Date range info for frontend display
+    date_range = {
+        "start": start_date.strftime("%Y-%m-%d %H:%M"),
+        "end": end_date.strftime("%Y-%m-%d %H:%M"),
+        "start_display": start_date.strftime("%m-%d"),
+        "end_display": end_date.strftime("%m-%d"),
+        "mt4_now": get_mt4_server_time().strftime("%Y-%m-%d %H:%M:%S"),
+        "hk_now": datetime.now(TZ_HK).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    
+    if df.empty:
+        return JSONResponse({"data": [], "hours": hours_list, "date_range": date_range})
     
     # Return trade data
     trades = df[["hour_str", "hour_ts", "sid", "CMD", "PROFIT", "client_type"]].to_dict(orient="records")
     
-    return JSONResponse({"data": trades, "hours": hours_list})
+    return JSONResponse({"data": trades, "hours": hours_list, "date_range": date_range})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -234,7 +288,8 @@ def index():
     <body>
         <div class="container">
             <h1>XAUUSD Hourly Profit Analysis</h1>
-            <p class="subtitle">2026-01-26 00:00 to 2026-01-30 23:00 (120 hours)</p>
+            <p class="subtitle" id="subtitle">Loading date range...</p>
+            <p class="subtitle" id="timezone-info" style="font-size: 0.75em; color: #666;"></p>
             
             <!-- Filter Panel -->
             <div class="filter-panel">
@@ -290,13 +345,15 @@ def index():
             </div>
             
             <div id="chart"><div class="loading">Loading data...</div></div>
-            <p class="footer">AKCM = GROUP starts with 'AKCM' | Regular = All other valid clients | Excludes test accounts</p>
+            <p class="footer">AKCM = GROUP starts with 'AKCM' | Regular = All other valid clients | Excludes test accounts (NAME/GROUP contains 'test')</p>
+            <p class="footer">Time Conversion: MT4 Server (UTC+2) = Hong Kong (UTC+8) - 6 hours</p>
         </div>
         
         <script>
             // Global data storage
             let allTrades = [];
             let allHours = [];
+            let dateRange = {};
             
             // Fetch data on load
             fetch('/api/trades')
@@ -304,10 +361,22 @@ def index():
                 .then(data => {
                     allTrades = data.data;
                     allHours = data.hours;
+                    dateRange = data.date_range || {};
+                    
+                    // Update subtitle with dynamic date range
+                    if (dateRange.start && dateRange.end) {
+                        const hours = allHours.length;
+                        document.getElementById('subtitle').textContent = 
+                            `${dateRange.start} to ${dateRange.end} (${hours} hours) - MT4 Server Time (UTC+2)`;
+                        document.getElementById('timezone-info').textContent = 
+                            `MT4 Server: ${dateRange.mt4_now} (UTC+2) | Hong Kong: ${dateRange.hk_now} (UTC+8)`;
+                    }
+                    
                     updateChart();
                 })
                 .catch(err => {
                     document.getElementById('chart').innerHTML = '<div class="loading">Error loading data</div>';
+                    document.getElementById('subtitle').textContent = 'Error loading data';
                 });
             
             // Add event listeners to all checkboxes
