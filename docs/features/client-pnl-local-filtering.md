@@ -87,7 +87,9 @@
 
 该页面当前已有 computed 列：
 
-- `net_pnl_with_comm_usd = trade_profit_usd + ib_commission_usd`
+- `trade_profit_usd`（交易盈亏）= `profit + commission + swap`
+  - 注意：显示时已包含佣金和隔夜利息，非纯利润
+- `net_pnl_with_comm_usd`（净盈亏含佣金）= `profit + commission + swap + ib_commission`
 
 实现方式：
 

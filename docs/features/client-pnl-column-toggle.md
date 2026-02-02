@@ -8,7 +8,8 @@
 
 - **用户可自行选择显示/隐藏哪些列**
 - **不同浏览器（或同浏览器不同 Profile）分别记住偏好**（使用 localStorage）
-- **默认全部显示**：如果用户从未设置过列显示偏好，则不应用任何缓存状态
+- **默认隐藏部分列**：`client_name`（客户名称）、`total_trades`（总交易数）默认隐藏
+- **Server 快速筛选**：支持 MT4/MT5/MT4Live2 多选筛选，默认全选，状态保存到 localStorage
 
 ---
 
@@ -79,6 +80,34 @@ AG Grid 的列持久化依赖 `colId` 匹配。对于没有 `field` 的“计算
 
 - 用 `columnState` 仅做 UI 快照（展示勾选状态）
 - 以 AG Grid 自身 Column State 为准（单一事实来源）
+
+---
+
+## Server 快速筛选
+
+### 功能说明
+
+- **位置**：位于时间快速选择右侧
+- **选项**：MT4 (sid=1)、MT5 (sid=5)、MT4Live2 (sid=6)
+- **交互**：多选下拉菜单，支持"全选"和"清空"快捷操作
+- **默认值**：全选（显示所有服务器数据）
+- **持久化**：选择状态保存到 `CLIENT_PNL_SETTINGS_V1` localStorage key
+
+### 筛选逻辑
+
+- 筛选在前端本地执行，作用于后端返回的结果集
+- 与其他本地筛选（FilterBuilder）联动：先应用 Server 筛选，再应用 FilterBuilder 条件
+
+---
+
+## 默认隐藏列
+
+以下列通过 `hide: true` 设置为默认隐藏：
+
+- `client_name`（客户名称）
+- `total_trades`（总交易数）
+
+用户可通过"列显示"菜单手动显示这些列。
 
 ---
 
