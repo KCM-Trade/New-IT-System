@@ -30,7 +30,7 @@ export const enUS = {
     // downloads: "Downloads", // [REMOVED]
     warehouse: "Warehouse Data",
     warehouseProducts: "Trade Summary",
-    ibData: "IB Deposit/Withdrawal",
+    ibData: "Deposit/Withdrawal",
     position: "Open Positions",
     warehouseOthers: "Others",
     loginIPs: "Login IP Monitoring",
@@ -58,7 +58,7 @@ export const enUS = {
     warehouseAgentGlobal: "Agent Statistics Global",
     warehouse: "Warehouse Data",
     warehouseProducts: "Trade Summary",
-    ibData: "IB Deposit/Withdrawal",
+    ibData: "Deposit/Withdrawal",
     warehouseOthers: "Other Warehouse",
     position: "Open Positions",
     loginIPs: "Login IP Monitoring",

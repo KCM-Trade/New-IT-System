@@ -186,7 +186,22 @@ New-IT-System/
 
 **API**: `GET /api/v1/ib-report/summary`
 
-### 4.4 Equity Monitor
+### 4.4 Deposit/Withdrawal Query (`IBData.tsx`)
+**Purpose**: Query deposit and withdrawal data by IB ID or by region (Company).
+
+**Key Features**:
+- IB Deposit/Withdrawal Query: Aggregate by specific IB IDs
+- Company Deposit/Withdrawal Query: Aggregate by region (CN/Global based on cid)
+- Quick date range selection (week, month, last month, custom)
+- Summary row with highlighted totals
+- Color-coded values (green for deposits, red for withdrawals)
+
+**APIs**: 
+- `POST /api/v1/ib-data/query` - Query by IB IDs
+- `POST /api/v1/ib-data/region-query` - Query by region (Company)
+- `GET /api/v1/ib-data/last-run` - Get last query timestamp
+
+### 4.5 Equity Monitor
 **Purpose**: Track account balances and equity changes.
 
 **API**: `GET /api/v1/equity/monitor`

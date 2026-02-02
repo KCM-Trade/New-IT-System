@@ -11,6 +11,7 @@ import fcntl
 import pymysql
 
 from ..core.config import Settings
+from ..schemas.ib_data import RegionSummary, RegionTypeMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -242,4 +243,117 @@ def aggregate_ib_data(
         logger.error(f"IB data aggregation failed: {type(e).__name__}: {e}", exc_info=True)
         raise
 
+
+# ============ Region Analytics (地区出入金查询) ============
+
+REGION_QUERY = """
+SELECT 
+    u.cid,
+    t.type,
+    COUNT(*) AS tx_count,
+    SUM(
+        CASE 
+            WHEN UPPER(t.processedCurrency) = 'CEN' THEN t.processedAmount / 100.0 
+            ELSE t.processedAmount 
+        END
+    ) AS amount_usd
+FROM fxbackoffice.transactions t
+INNER JOIN fxbackoffice.users u ON t.fromUserId = u.id
+WHERE t.status = 'approved'
+  AND t.type IN ('deposit', 'withdrawal', 'ib withdrawal')
+  AND t.processedAt >= %s
+  AND t.processedAt < %s
+GROUP BY u.cid, t.type
+ORDER BY u.cid, t.type
+"""
+
+
+def _get_company_name(cid: int) -> str:
+    """Convert cid to human-readable company name."""
+    if cid == 0:
+        return "CN"
+    elif cid == 1:
+        return "Global"
+    else:
+        return f"Unknown({cid})"
+
+
+def query_region_analytics(
+    settings: Settings,
+    start: datetime,
+    end: datetime,
+) -> List[RegionSummary]:
+    """
+    Query deposit/withdrawal analytics grouped by region (company).
+    
+    Args:
+        settings: Application settings with DB credentials
+        start: Inclusive start time
+        end: Exclusive end time
+        
+    Returns:
+        List of RegionSummary objects, one per region (cid)
+    """
+    if end < start:
+        raise ValueError("end must be greater than or equal to start")
+
+    start_str = _normalize_range(start)
+    end_str = _normalize_range(end)
+
+    logger.info(f"Region analytics query: start={start_str}, end={end_str}")
+
+    try:
+        conn = _connect(settings)
+    except Exception as e:
+        logger.error(f"Database connection failed: {type(e).__name__}: {e}")
+        raise RuntimeError(f"数据库连接失败: {str(e)}") from e
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(REGION_QUERY, (start_str, end_str))
+            rows = cur.fetchall()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Group results by cid
+    # Expected rows: [{'cid': 0, 'type': 'deposit', 'tx_count': 100, 'amount_usd': Decimal('...')}, ...]
+    region_map: dict[int, RegionSummary] = {}
+
+    for row in rows:
+        cid = int(row.get("cid", -1))
+        tx_type = str(row.get("type", "")).lower()
+        tx_count = int(row.get("tx_count", 0))
+        amount_usd = _to_float(row.get("amount_usd"))
+
+        # Initialize region if not exists
+        if cid not in region_map:
+            region_map[cid] = RegionSummary(
+                cid=cid,
+                company_name=_get_company_name(cid),
+            )
+
+        region = region_map[cid]
+        metrics = RegionTypeMetrics(tx_count=tx_count, amount_usd=amount_usd)
+
+        # Assign metrics to the appropriate type
+        if tx_type == "deposit":
+            region.deposit = metrics
+        elif tx_type == "withdrawal":
+            region.withdrawal = metrics
+        elif tx_type == "ib withdrawal":
+            region.ib_withdrawal = metrics
+
+    # Calculate derived fields for each region
+    for region in region_map.values():
+        region.total_deposit_usd = region.deposit.amount_usd
+        region.total_withdrawal_usd = abs(region.withdrawal.amount_usd) + abs(region.ib_withdrawal.amount_usd)
+        region.net_deposit_usd = region.total_deposit_usd - region.total_withdrawal_usd
+
+    # Sort by cid and return as list
+    result = sorted(region_map.values(), key=lambda r: r.cid)
+    logger.info(f"Region analytics completed: {len(result)} regions")
+    return result
 

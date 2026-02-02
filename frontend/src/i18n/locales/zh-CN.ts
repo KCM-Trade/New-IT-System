@@ -30,7 +30,7 @@ export const zhCN = {
     // downloads: "数据下载", // [REMOVED]
     warehouse: "报仓数据",
     warehouseProducts: "交易汇总",
-    ibData: "IB 出入金查询",
+    ibData: "出入金查询",
     position: "实时持仓",
     warehouseOthers: "其他",
     loginIPs: "MT LoginIP 监测",
@@ -58,7 +58,7 @@ export const zhCN = {
     warehouseAgentGlobal: "代理统计Global",
     warehouse: "报仓数据",
     warehouseProducts: "交易汇总",
-    ibData: "IB 出入金查询",
+    ibData: "出入金查询",
     warehouseOthers: "其他报仓",
     position: "实时持仓",
     loginIPs: "Login IP监测",

@@ -73,3 +73,61 @@ class LastQueryResponse(BaseModel):
     last_query_time: datetime | None = None
 
 
+# ============ Region Analytics (地区出入金查询) ============
+
+class RegionAnalyticsRequest(BaseModel):
+    """Request payload for region-based deposit/withdrawal analytics."""
+    
+    start: datetime = Field(..., description="Inclusive start time (YYYY-MM-DD HH:MM:SS)")
+    end: datetime = Field(..., description="Exclusive end time (YYYY-MM-DD HH:MM:SS)")
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _parse_datetime(cls, value: str | datetime) -> datetime:
+        """Parse datetime from string format 'YYYY-MM-DD HH:MM:SS' or ISO format."""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+            try:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                raise ValueError(f"Invalid datetime format: {value}. Expected 'YYYY-MM-DD HH:MM:SS' or ISO format")
+        raise ValueError(f"Invalid datetime type: {type(value)}")
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "RegionAnalyticsRequest":
+        """Validate that end >= start."""
+        if self.end < self.start:
+            raise ValueError("end must be greater than or equal to start")
+        return self
+
+
+class RegionTypeMetrics(BaseModel):
+    """Metrics for a specific transaction type within a region."""
+    tx_count: int = 0
+    amount_usd: float = 0.0
+
+
+class RegionSummary(BaseModel):
+    """Summary for a single region (CN or Global)."""
+    cid: int
+    company_name: str  # 'CN' or 'Global'
+    deposit: RegionTypeMetrics = Field(default_factory=RegionTypeMetrics)
+    withdrawal: RegionTypeMetrics = Field(default_factory=RegionTypeMetrics)
+    ib_withdrawal: RegionTypeMetrics = Field(default_factory=RegionTypeMetrics)
+    # Derived fields for convenience
+    total_deposit_usd: float = 0.0
+    total_withdrawal_usd: float = 0.0  # withdrawal + ib_withdrawal
+    net_deposit_usd: float = 0.0       # deposit - total_withdrawal
+
+
+class RegionAnalyticsResponse(BaseModel):
+    """Response for region analytics query."""
+    regions: List[RegionSummary]
+    query_time_ms: float = 0.0  # Query execution time in milliseconds
+
+

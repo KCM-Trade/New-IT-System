@@ -9,10 +9,13 @@ from ....schemas.ib_data import (
     IBAnalyticsRequest,
     IBAnalyticsResponse,
     LastQueryResponse,
+    RegionAnalyticsRequest,
+    RegionAnalyticsResponse,
 )
 from ....services.ib_data_service import (
     aggregate_ib_data,
     read_last_query_time,
+    query_region_analytics,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,5 +47,33 @@ async def query_ib_data(payload: IBAnalyticsRequest, settings: Settings = Depend
 async def get_last_run(settings: Settings = Depends(get_settings)):
     """Expose the shared txt marker so the UI can show last execution time."""
     return LastQueryResponse(last_query_time=read_last_query_time(settings))
+
+
+@router.post("/region-query", response_model=RegionAnalyticsResponse, status_code=status.HTTP_200_OK)
+async def query_region_data(payload: RegionAnalyticsRequest, settings: Settings = Depends(get_settings)):
+    """
+    Query deposit/withdrawal analytics grouped by region (company).
+    cid=0: CN, cid=1: Global
+    """
+    import time
+    
+    try:
+        start_time = time.perf_counter()
+        regions = query_region_analytics(settings, payload.start, payload.end)
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        
+        return RegionAnalyticsResponse(regions=regions, query_time_ms=round(elapsed_ms, 2))
+    except ValueError as exc:
+        logger.warning(f"Validation error: {exc}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.error(f"Runtime error: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Unexpected error: {type(exc).__name__}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询失败: {str(exc)}"
+        ) from exc
 
 
