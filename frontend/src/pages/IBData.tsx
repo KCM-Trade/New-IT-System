@@ -116,30 +116,68 @@ const normalizeRange = (range: DateRange | undefined) => {
   return { start, end };
 };
 
-type QuickRangeValue = "week" | "month" | "custom";
+type QuickRangeValue = "week" | "month" | "lastMonth" | "custom";
 
+// Unified preset range calculation for both IB and Company queries
 const getPresetRange = (
   preset: Exclude<QuickRangeValue, "custom">
 ): DateRange => {
   const today = new Date();
-  const endOfRange = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-    23,
-    59,
-    59
-  );
-  const startOfRange = new Date(endOfRange);
+
   if (preset === "week") {
+    // Past 7 days including today
+    const endOfRange = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate(),
+      23,
+      59,
+      59
+    );
+    const startOfRange = new Date(endOfRange);
     startOfRange.setDate(endOfRange.getDate() - 6);
-  } else {
-    startOfRange.setDate(1);
     startOfRange.setHours(0, 0, 0, 0);
     return { from: startOfRange, to: endOfRange };
+  } else if (preset === "month") {
+    // Current month: 1st day to today
+    const startOfRange = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      1,
+      0,
+      0,
+      0
+    );
+    const endOfRange = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate(),
+      23,
+      59,
+      59
+    );
+    return { from: startOfRange, to: endOfRange };
+  } else {
+    // Last month: 1st day to last day of previous month
+    const startOfRange = new Date(
+      today.getFullYear(),
+      today.getMonth() - 1,
+      1,
+      0,
+      0,
+      0
+    );
+    // Day 0 of current month = last day of previous month
+    const endOfRange = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      0,
+      23,
+      59,
+      59
+    );
+    return { from: startOfRange, to: endOfRange };
   }
-  startOfRange.setHours(0, 0, 0, 0);
-  return { from: startOfRange, to: endOfRange };
 };
 
 export default function IBDataPage() {
@@ -157,9 +195,8 @@ export default function IBDataPage() {
   const [error, setError] = useState<string | null>(null);
 
   // ============ Region Analytics State ============
-  type RegionQuickRange = "week" | "month" | "lastMonth" | "custom";
   const [regionQuickRange, setRegionQuickRange] =
-    useState<RegionQuickRange>("week");
+    useState<QuickRangeValue>("week");
   const [regionDateRange, setRegionDateRange] = useState<DateRange | undefined>(
     getPresetRange("week")
   );
@@ -168,71 +205,10 @@ export default function IBDataPage() {
   const [regionLoading, setRegionLoading] = useState(false);
   const [regionError, setRegionError] = useState<string | null>(null);
 
-  // Get preset range for region analytics (includes "lastMonth" option)
-  const getRegionPresetRange = (
-    preset: Exclude<RegionQuickRange, "custom">
-  ): DateRange => {
-    const today = new Date();
-
-    if (preset === "week") {
-      const endOfRange = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        23,
-        59,
-        59
-      );
-      const startOfRange = new Date(endOfRange);
-      startOfRange.setDate(endOfRange.getDate() - 6);
-      startOfRange.setHours(0, 0, 0, 0);
-      return { from: startOfRange, to: endOfRange };
-    } else if (preset === "month") {
-      // Current month: 1st day to today
-      const startOfRange = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        1,
-        0,
-        0,
-        0
-      );
-      const endOfRange = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-        23,
-        59,
-        59
-      );
-      return { from: startOfRange, to: endOfRange };
-    } else {
-      // Last month: 1st day to last day of previous month
-      const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const startOfRange = new Date(
-        lastMonth.getFullYear(),
-        lastMonth.getMonth(),
-        1,
-        0,
-        0,
-        0
-      );
-      const endOfRange = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        0,
-        23,
-        59,
-        59
-      ); // Day 0 = last day of prev month
-      return { from: startOfRange, to: endOfRange };
-    }
-  };
-
-  const handleRegionQuickRangeSelect = (value: RegionQuickRange) => {
+  const handleRegionQuickRangeSelect = (value: QuickRangeValue) => {
     setRegionQuickRange(value);
     if (value !== "custom") {
-      setRegionDateRange(getRegionPresetRange(value));
+      setRegionDateRange(getPresetRange(value));
     }
   };
 
@@ -428,26 +404,28 @@ export default function IBDataPage() {
   };
 
   const quickRangeOptions = [
-    { label: "本周", value: "week" as const },
+    { label: "过去一周", value: "week" as const },
     { label: "本月", value: "month" as const },
+    { label: "上个月", value: "lastMonth" as const },
     { label: "自定义", value: "custom" as const },
   ];
 
   return (
-    <div className="space-y-5 p-3 sm:space-y-6 sm:p-6">
-      <div className="space-y-1.5">
+    <div className="space-y-3 p-2 sm:space-y-6 sm:p-6">
+      <div className="space-y-1">
         <h1 className="text-2xl font-semibold">出入金查询</h1>
       </div>
 
-      {/* ============ IB Analytics Section ============ */}
-      <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-        <CardHeader>
-          <CardTitle className="text-blue-900 dark:text-blue-100">IB 出入金查询</CardTitle>
+      {/* ============ IB Analytics Section (merged) ============ */}
+      <Card>
+        <CardHeader className="pb-3 sm:pb-6">
+          <CardTitle>IB 出入金查询</CardTitle>
         </CardHeader>
 
-        <CardContent className="space-y-4 text-sm sm:space-y-5">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-6">
+        <CardContent className="space-y-4 text-sm">
+          {/* Filter section */}
+          <div className="flex flex-col gap-2 sm:gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-4">
               <div className="flex flex-1 flex-col gap-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <span className="text-xs font-medium text-muted-foreground sm:text-sm sm:min-w-[48px] sm:flex-none">
@@ -456,7 +434,7 @@ export default function IBDataPage() {
                   <Input
                     id="ib-ids"
                     placeholder="107779,129860"
-                    className="h-10 sm:flex-1"
+                    className="h-9 sm:h-10 sm:flex-1"
                     value={ibIdsInput}
                     onChange={(event) => setIbIdsInput(event.target.value)}
                   />
@@ -469,7 +447,7 @@ export default function IBDataPage() {
                     时间范围：
                   </span>
                   <div className="flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       {quickRangeOptions.map((option) => (
                         <Button
                           key={option.value}
@@ -478,7 +456,7 @@ export default function IBDataPage() {
                             quickRange === option.value ? "default" : "outline"
                           }
                           className={cn(
-                            "h-8 rounded-full px-4 text-xs sm:text-sm",
+                            "h-7 sm:h-8 rounded-full px-3 sm:px-4 text-xs sm:text-sm",
                             quickRange !== option.value && "bg-background"
                           )}
                           onClick={() => handleQuickRangeSelect(option.value)}
@@ -490,12 +468,12 @@ export default function IBDataPage() {
                         <PopoverTrigger asChild>
                           <Button
                             variant="outline"
-                            className="h-10 justify-start gap-2 text-left font-normal"
+                            className="h-9 sm:h-10 justify-start gap-1.5 sm:gap-2 text-left font-normal"
                           >
                             <span className="text-xs uppercase text-muted-foreground">
                               当前区间
                             </span>
-                            <span className="text-sm font-medium text-foreground">
+                            <span className="text-xs sm:text-sm font-medium text-foreground">
                               {rangeLabel}
                             </span>
                           </Button>
@@ -529,14 +507,14 @@ export default function IBDataPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 sm:pl-[4.5rem]">
+            <div className="flex flex-wrap gap-1.5 sm:gap-2 sm:pl-[4.5rem]">
               {defaultIBGroups.map((group) => (
                 <Button
                   key={group.label}
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="rounded-full px-3"
+                  className="h-7 sm:h-8 rounded-full px-2.5 sm:px-3 text-xs"
                   onClick={() => setIbIdsInput(group.ids.join(","))}
                 >
                   {group.label} · {group.ids.join(", ")}
@@ -545,138 +523,135 @@ export default function IBDataPage() {
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
-        </CardContent>
-      </Card>
 
-      <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-        <CardHeader>
-          <CardTitle className="text-blue-900 dark:text-blue-100">IB 查询结果</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 sm:space-y-5">
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline">参数：{ibIdsInput || "无"}</Badge>
-            <Badge variant="outline">区间：{rangeLabel}</Badge>
-            <Badge variant="outline">
-              上次查询：{formatLastRun(lastQueryTime)}
-            </Badge>
-          </div>
+          {/* Result section */}
+          <div className="space-y-3 pt-2 border-t">
+            <div className="flex flex-wrap gap-1.5 sm:gap-2 text-xs text-muted-foreground">
+              <Badge variant="outline">参数：{ibIdsInput || "无"}</Badge>
+              <Badge variant="outline">区间：{rangeLabel}</Badge>
+              <Badge variant="outline">
+                上次查询：{formatLastRun(lastQueryTime)}
+              </Badge>
+            </div>
 
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-800 dark:bg-slate-900 hover:bg-slate-800 dark:hover:bg-slate-900">
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    IBID
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    Deposit (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    Total Withdrawal (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    IB Withdrawal (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    IB Wallet Balance (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    Net Deposit (USD)
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {/* Summary row with highlighted background */}
-                {rows.length > 0 && (
-                  <TableRow className="bg-blue-100/70 dark:bg-blue-900/30 hover:bg-blue-100/70 dark:hover:bg-blue-900/30">
-                    <TableCell className="font-bold text-lg">
-                      汇总
-                    </TableCell>
-                    <TableCell className="font-bold text-lg text-emerald-600 dark:text-emerald-400">
-                      {formatCurrency(activeTotals.deposit_usd)}
-                    </TableCell>
-                    <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                      {formatCurrency(activeTotals.total_withdrawal_usd)}
-                    </TableCell>
-                    <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                      {formatCurrency(activeTotals.ib_withdrawal_usd)}
-                    </TableCell>
-                    <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                      {formatCurrency(activeTotals.ib_wallet_balance)}
-                    </TableCell>
-                    <TableCell className={cn(
-                      "font-bold text-lg",
-                      activeTotals.net_deposit_usd >= 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-red-600 dark:text-red-400"
-                    )}>
-                      {formatCurrency(activeTotals.net_deposit_usd)}
-                    </TableCell>
+            <div className="overflow-x-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-800 dark:bg-slate-900 hover:bg-slate-800 dark:hover:bg-slate-900">
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      IBID
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      Deposit (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      Total Withdrawal (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      IB Withdrawal (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      IB Wallet Balance (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      Net Deposit (USD)
+                    </TableHead>
                   </TableRow>
-                )}
-                {rows.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="text-center text-base text-muted-foreground"
-                    >
-                      暂无数据，请输入条件后查询。
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  rows.map((row) => (
-                    <TableRow key={row.ibid}>
-                      <TableCell className="font-bold text-base">{row.ibid}</TableCell>
-                      <TableCell className="font-bold text-base text-emerald-600 dark:text-emerald-400">
-                        {formatCurrency(row.deposit_usd)}
+                </TableHeader>
+                <TableBody>
+                  {/* Summary row with highlighted background */}
+                  {rows.length > 0 && (
+                    <TableRow className="bg-blue-100/70 dark:bg-blue-900/30 hover:bg-blue-100/70 dark:hover:bg-blue-900/30">
+                      <TableCell className="font-bold text-lg">
+                        汇总
                       </TableCell>
-                      <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
-                        {formatCurrency(row.total_withdrawal_usd)}
+                      <TableCell className="font-bold text-lg text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(activeTotals.deposit_usd)}
                       </TableCell>
-                      <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
-                        {formatCurrency(row.ib_withdrawal_usd)}
+                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                        {formatCurrency(activeTotals.total_withdrawal_usd)}
                       </TableCell>
-                      <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
-                        {formatCurrency(row.ib_wallet_balance)}
+                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                        {formatCurrency(activeTotals.ib_withdrawal_usd)}
+                      </TableCell>
+                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                        {formatCurrency(activeTotals.ib_wallet_balance)}
                       </TableCell>
                       <TableCell className={cn(
-                        "font-bold text-base",
-                        row.net_deposit_usd >= 0
+                        "font-bold text-lg",
+                        activeTotals.net_deposit_usd >= 0
                           ? "text-emerald-600 dark:text-emerald-400"
                           : "text-red-600 dark:text-red-400"
                       )}>
-                        {formatCurrency(row.net_deposit_usd)}
+                        {formatCurrency(activeTotals.net_deposit_usd)}
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  )}
+                  {rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={6}
+                        className="text-center text-base text-muted-foreground"
+                      >
+                        暂无数据，请输入条件后查询。
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    rows.map((row) => (
+                      <TableRow key={row.ibid}>
+                        <TableCell className="font-bold text-base">{row.ibid}</TableCell>
+                        <TableCell className="font-bold text-base text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(row.deposit_usd)}
+                        </TableCell>
+                        <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
+                          {formatCurrency(row.total_withdrawal_usd)}
+                        </TableCell>
+                        <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
+                          {formatCurrency(row.ib_withdrawal_usd)}
+                        </TableCell>
+                        <TableCell className="font-bold text-base text-red-600 dark:text-red-400">
+                          {formatCurrency(row.ib_wallet_balance)}
+                        </TableCell>
+                        <TableCell className={cn(
+                          "font-bold text-base",
+                          row.net_deposit_usd >= 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-600 dark:text-red-400"
+                        )}>
+                          {formatCurrency(row.net_deposit_usd)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
 
-          <p className="text-xs text-muted-foreground">
-            SQL 计算方式：总提现 = Withdrawal + IB Withdrawal，Net Deposit =
-            Deposit + 总提现 - IB Wallet Balance。
-          </p>
+            <p className="text-xs text-muted-foreground">
+              SQL 计算方式：总提现 = Withdrawal + IB Withdrawal，Net Deposit =
+              Deposit + 总提现 - IB Wallet Balance。
+            </p>
+          </div>
         </CardContent>
       </Card>
 
-      {/* ============ Company Analytics Section ============ */}
-      <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-        <CardHeader>
-          <CardTitle className="text-emerald-900 dark:text-emerald-100">Company 出入金查询</CardTitle>
+      {/* ============ Company Analytics Section (merged) ============ */}
+      <Card>
+        <CardHeader className="pb-3 sm:pb-6">
+          <CardTitle>Company 出入金查询</CardTitle>
         </CardHeader>
 
-        <CardContent className="space-y-4 text-sm sm:space-y-5">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-6">
+        <CardContent className="space-y-4 text-sm">
+          {/* Filter section */}
+          <div className="flex flex-col gap-2 sm:gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-4">
               <div className="flex flex-1 flex-col gap-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <span className="text-xs font-medium text-muted-foreground sm:text-sm sm:min-w-[64px] sm:flex-none">
                     时间范围：
                   </span>
                   <div className="flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       {regionQuickRangeOptions.map((option) => (
                         <Button
                           key={option.value}
@@ -687,7 +662,7 @@ export default function IBDataPage() {
                               : "outline"
                           }
                           className={cn(
-                            "h-8 rounded-full px-4 text-xs sm:text-sm",
+                            "h-7 sm:h-8 rounded-full px-3 sm:px-4 text-xs sm:text-sm",
                             regionQuickRange !== option.value && "bg-background"
                           )}
                           onClick={() =>
@@ -701,12 +676,12 @@ export default function IBDataPage() {
                         <PopoverTrigger asChild>
                           <Button
                             variant="outline"
-                            className="h-10 justify-start gap-2 text-left font-normal"
+                            className="h-9 sm:h-10 justify-start gap-1.5 sm:gap-2 text-left font-normal"
                           >
                             <span className="text-xs uppercase text-muted-foreground">
                               当前区间
                             </span>
-                            <span className="text-sm font-medium text-foreground">
+                            <span className="text-xs sm:text-sm font-medium text-foreground">
                               {regionRangeLabel}
                             </span>
                           </Button>
@@ -743,137 +718,133 @@ export default function IBDataPage() {
               <p className="text-sm text-destructive">{regionError}</p>
             )}
           </div>
-        </CardContent>
-      </Card>
 
-      <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-        <CardHeader>
-          <CardTitle className="text-emerald-900 dark:text-emerald-100">Company 查询结果</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 sm:space-y-5">
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline">区间：{regionRangeLabel}</Badge>
-            {regionQueryTimeMs > 0 && (
-              <Badge variant="outline">
-                查询耗时：{regionQueryTimeMs.toFixed(2)} ms
-              </Badge>
-            )}
-          </div>
+          {/* Result section */}
+          <div className="space-y-3 pt-2 border-t">
+            <div className="flex flex-wrap gap-1.5 sm:gap-2 text-xs text-muted-foreground">
+              <Badge variant="outline">区间：{regionRangeLabel}</Badge>
+              {regionQueryTimeMs > 0 && (
+                <Badge variant="outline">
+                  查询耗时：{regionQueryTimeMs.toFixed(2)} ms
+                </Badge>
+              )}
+            </div>
 
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-800 dark:bg-slate-900 hover:bg-slate-800 dark:hover:bg-slate-900">
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    地区 (Company)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    入金 (Deposit USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    出金 (Withdrawal USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    IB出金 (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    总出金 (USD)
-                  </TableHead>
-                  <TableHead className="text-white dark:text-slate-100 font-bold text-base">
-                    净入金 (USD)
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {/* Summary row with highlighted background */}
-                {regionData.length > 0 && (() => {
-                  const totalNetDeposit = regionData.reduce((sum, r) => sum + r.net_deposit_usd, 0);
-                  return (
-                    <TableRow className="bg-emerald-100/70 dark:bg-emerald-900/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/30">
-                      <TableCell className="font-bold text-lg">
-                        汇总
-                      </TableCell>
-                      <TableCell className="font-bold text-lg text-emerald-600 dark:text-emerald-400">
-                        {formatCurrency(
-                          regionData.reduce((sum, r) => sum + r.deposit.amount_usd, 0)
-                        )}
-                      </TableCell>
-                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                        {formatCurrency(
-                          regionData.reduce((sum, r) => sum + r.withdrawal.amount_usd, 0)
-                        )}
-                      </TableCell>
-                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                        {formatCurrency(
-                          regionData.reduce((sum, r) => sum + r.ib_withdrawal.amount_usd, 0)
-                        )}
-                      </TableCell>
-                      <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
-                        {formatCurrency(
-                          regionData.reduce((sum, r) => sum + r.total_withdrawal_usd, 0)
-                        )}
-                      </TableCell>
-                      <TableCell className={cn(
-                        "font-bold text-lg",
-                        totalNetDeposit >= 0
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-red-600 dark:text-red-400"
-                      )}>
-                        {formatCurrency(totalNetDeposit)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })()}
-                {regionData.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="text-center text-base text-muted-foreground"
-                    >
-                      暂无数据，请选择时间范围后查询。
-                    </TableCell>
+            <div className="overflow-x-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-800 dark:bg-slate-900 hover:bg-slate-800 dark:hover:bg-slate-900">
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      地区 (Company)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      入金 (Deposit USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      出金 (Withdrawal USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      IB出金 (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      总出金 (USD)
+                    </TableHead>
+                    <TableHead className="text-white dark:text-slate-100 font-bold text-base">
+                      净入金 (USD)
+                    </TableHead>
                   </TableRow>
-                ) : (
-                  regionData.map((region) => (
-                    <TableRow key={region.cid}>
-                      <TableCell className="font-bold text-base">
-                        {region.company_name}
-                      </TableCell>
-                      <TableCell className="text-emerald-600 dark:text-emerald-400 font-bold text-base">
-                        {formatCurrency(region.deposit.amount_usd)}
-                      </TableCell>
-                      <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
-                        {formatCurrency(region.withdrawal.amount_usd)}
-                      </TableCell>
-                      <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
-                        {formatCurrency(region.ib_withdrawal.amount_usd)}
-                      </TableCell>
-                      <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
-                        {formatCurrency(region.total_withdrawal_usd)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "font-bold text-base",
-                          region.net_deposit_usd >= 0
+                </TableHeader>
+                <TableBody>
+                  {/* Summary row with highlighted background */}
+                  {regionData.length > 0 && (() => {
+                    const totalNetDeposit = regionData.reduce((sum, r) => sum + r.net_deposit_usd, 0);
+                    return (
+                      <TableRow className="bg-emerald-100/70 dark:bg-emerald-900/30 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/30">
+                        <TableCell className="font-bold text-lg">
+                          汇总
+                        </TableCell>
+                        <TableCell className="font-bold text-lg text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(
+                            regionData.reduce((sum, r) => sum + r.deposit.amount_usd, 0)
+                          )}
+                        </TableCell>
+                        <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                          {formatCurrency(
+                            regionData.reduce((sum, r) => sum + r.withdrawal.amount_usd, 0)
+                          )}
+                        </TableCell>
+                        <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                          {formatCurrency(
+                            regionData.reduce((sum, r) => sum + r.ib_withdrawal.amount_usd, 0)
+                          )}
+                        </TableCell>
+                        <TableCell className="font-bold text-lg text-red-600 dark:text-red-400">
+                          {formatCurrency(
+                            regionData.reduce((sum, r) => sum + r.total_withdrawal_usd, 0)
+                          )}
+                        </TableCell>
+                        <TableCell className={cn(
+                          "font-bold text-lg",
+                          totalNetDeposit >= 0
                             ? "text-emerald-600 dark:text-emerald-400"
                             : "text-red-600 dark:text-red-400"
-                        )}
+                        )}>
+                          {formatCurrency(totalNetDeposit)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })()}
+                  {regionData.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={6}
+                        className="text-center text-base text-muted-foreground"
                       >
-                        {formatCurrency(region.net_deposit_usd)}
+                        暂无数据，请选择时间范围后查询。
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  ) : (
+                    regionData.map((region) => (
+                      <TableRow key={region.cid}>
+                        <TableCell className="font-bold text-base">
+                          {region.company_name}
+                        </TableCell>
+                        <TableCell className="text-emerald-600 dark:text-emerald-400 font-bold text-base">
+                          {formatCurrency(region.deposit.amount_usd)}
+                        </TableCell>
+                        <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
+                          {formatCurrency(region.withdrawal.amount_usd)}
+                        </TableCell>
+                        <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
+                          {formatCurrency(region.ib_withdrawal.amount_usd)}
+                        </TableCell>
+                        <TableCell className="text-red-600 dark:text-red-400 font-bold text-base">
+                          {formatCurrency(region.total_withdrawal_usd)}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "font-bold text-base",
+                            region.net_deposit_usd >= 0
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-red-600 dark:text-red-400"
+                          )}
+                        >
+                          {formatCurrency(region.net_deposit_usd)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
 
-          <p className="text-xs text-muted-foreground">
-            SQL 计算方式：总出金 = Withdrawal + IB Withdrawal，净入金 = Deposit
-            - 总出金。
-            <br />
-            地区判断：cid = 0 为 CN，cid = 1 为 Global。
-          </p>
+            <p className="text-xs text-muted-foreground">
+              SQL 计算方式：总出金 = Withdrawal + IB Withdrawal，净入金 = Deposit
+              - 总出金。
+              <br />
+              地区判断：cid = 0 为 CN，cid = 1 为 Global。
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>
