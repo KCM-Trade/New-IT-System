@@ -138,8 +138,9 @@ function StatCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm text-muted-foreground">{title}</div>
+          {/* Use break-all to allow large numbers to wrap instead of being truncated */}
           <div
-            className={`mt-1 font-semibold tabular-nums ${valueClass} text-xl sm:text-2xl truncate whitespace-nowrap`}
+            className={`mt-1 font-semibold tabular-nums ${valueClass} text-base sm:text-lg break-all`}
           >
             {prefix}
             {value}
@@ -454,42 +455,6 @@ export default function PositionPage() {
 
             {summaryData && (
               <div className="space-y-6 animate-in fade-in slide-in-from-top-2 duration-300">
-                {/* 汇总统计卡片 */}
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                  <StatCard
-                    title={`${summarySymbol} 总买入量`}
-                    value={formatVolume(summaryData.total?.volume_buy || 0)}
-                    positive={(summaryData.total?.volume_buy || 0) >= 0}
-                    icon={TrendingUp}
-                    variant="neutral"
-                  />
-                  <StatCard
-                    title={`${summarySymbol} 总卖出量`}
-                    value={formatVolume(summaryData.total?.volume_sell || 0)}
-                    positive={(summaryData.total?.volume_sell || 0) >= 0}
-                    icon={TrendingUp}
-                    variant="neutral"
-                  />
-                  <StatCard
-                    title={`${summarySymbol} 总买入盈亏`}
-                    value={format2(summaryData.total?.profit_buy || 0)}
-                    positive={(summaryData.total?.profit_buy || 0) >= 0}
-                    variant="profit"
-                  />
-                  <StatCard
-                    title={`${summarySymbol} 总卖出盈亏`}
-                    value={format2(summaryData.total?.profit_sell || 0)}
-                    positive={(summaryData.total?.profit_sell || 0) >= 0}
-                    variant="profit"
-                  />
-                  <StatCard
-                    title={`${summarySymbol} 总净盈亏`}
-                    value={format2(summaryData.total?.profit_total || 0)}
-                    positive={(summaryData.total?.profit_total || 0) >= 0}
-                    variant="profit"
-                  />
-                </div>
-
                 {/* 各服务器对比表 */}
                 <div className="overflow-hidden rounded-md border shadow-sm">
                   <Table>
@@ -548,7 +513,7 @@ export default function PositionPage() {
                         </TableRow>
                       ))}
                       {summaryData.total && (
-                        <TableRow className="bg-muted/30 font-bold border-t-2">
+                        <TableRow className="bg-amber-100/70 dark:bg-amber-900/40 font-bold border-t-2">
                           <TableCell>TOTAL</TableCell>
                           <TableCell>All Related</TableCell>
                           <TableCell className="text-right tabular-nums">
@@ -623,9 +588,9 @@ export default function PositionPage() {
 
       {/* Toolbar：数据源胶囊 + 刷新按钮 + 状态显示 */}
       <Card>
-        <CardContent className="flex flex-col items-center gap-3 py-6">
+        <CardContent className="flex flex-col items-center gap-2 px-3 py-3 sm:px-6 sm:py-4">
           {/* Data source capsule toggle + refresh button (same row) */}
-          <div className="flex w-full flex-col sm:w-auto sm:flex-row items-center gap-4">
+          <div className="flex w-full flex-col sm:w-auto sm:flex-row items-center gap-2 sm:gap-3">
             <ToggleGroup
               type="single"
               value={source}

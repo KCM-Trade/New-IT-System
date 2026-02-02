@@ -149,8 +149,8 @@ export default function ClientPnLAnalysis() {
 
   // Calculate Dates based on Range
   const getDateRange = useCallback((range: string) => {
-    // 截止日期更新至 2026-01-03
-    const MAX_DATE = new Date("2026-01-03")
+    // 截止日期更新至 2026-01-31
+    const MAX_DATE = new Date("2026-01-31")
     const end = new Date(MAX_DATE) // Clone it
     const start = new Date(MAX_DATE) // Clone it
     
@@ -725,7 +725,7 @@ export default function ClientPnLAnalysis() {
       <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="font-semibold">预览版 (Preview)</span>
-          <span>— 当前数据截止至 2026-01-03。</span>
+          <span>— 当前数据截止至 2026-01-31。</span>
         </div>
         <div className="ml-0 sm:ml-7 text-xs opacity-90">
           当前 ClickHouse database 服务器处于 Dev 模式（30min 自动休眠）。首次加载时间可能略长（需唤醒），后续刷新时间恢复正常。
@@ -780,7 +780,7 @@ export default function ClientPnLAnalysis() {
                       }
                     }}
                     numberOfMonths={2}
-                    disabled={(date) => date > new Date("2026-01-03")}
+                    disabled={(date) => date > new Date("2026-01-31")}
                   />
                 </PopoverContent>
               </Popover>
@@ -1004,7 +1004,7 @@ export default function ClientPnLAnalysis() {
 
       {/* Banner below filters: data freshness reminder */}
       <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded px-4 py-2 text-rose-800 dark:text-rose-200 text-sm">
-        数据仅更新至 <span className="font-semibold">2026-01-03</span>，并非最新实时数据。
+        数据仅更新至 <span className="font-semibold">2026-01-31</span>，并非最新实时数据。
       </div>
 
       <div className="flex-1 relative">
