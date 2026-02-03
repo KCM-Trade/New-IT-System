@@ -46,6 +46,7 @@ export const zhCN = {
     otherSection: "Other",
     dataQuery: "Data Query",
     ibidLots: "IB及旗下客户交易查询",
+    clientReturnRate: "客户收益率",
   },
 
   // Page titles
@@ -72,6 +73,7 @@ export const zhCN = {
     search: "搜索",
     configuration: "配置",
     ibidLots: "IBID 手数查询",
+    clientReturnRate: "客户收益率",
   },
 
   ibidLotsPage: {

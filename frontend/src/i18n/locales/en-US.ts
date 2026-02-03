@@ -46,6 +46,7 @@ export const enUS = {
     otherSection: "Other",
     dataQuery: "Data Query",
     ibidLots: "IBID Lots Lookup",
+    clientReturnRate: "Client Return Rate",
   },
   
   // Page titles
@@ -72,6 +73,7 @@ export const enUS = {
     search: "Search",
     configuration: "Configuration",
     ibidLots: "IBID Lots Lookup",
+    clientReturnRate: "Client Return Rate",
   },
   
   ibidLotsPage: {

@@ -5,7 +5,8 @@ import { AuthProvider, useAuth } from "@/providers/auth-provider"
 const DashboardLayout = lazy(() => import("@/layouts/DashboardLayout"))
 const LoginPage = lazy(() => import("@/pages/Login"))
 const DashboardTemplatePage = lazy(() => import("@/pages/Dashboard"))
-const BasisPage = lazy(() => import("@/pages/Basis"))
+// [HIDDEN] Basis page - 10.6.20.138:8050 service disabled
+// const BasisPage = lazy(() => import("@/pages/Basis"))
 const GoldQuotePage = lazy(() => import("@/pages/GoldQuote"))
 // [REMOVED] Downloads page deprecated
 // const DownloadsPage = lazy(() => import("@/pages/Downloads"))
@@ -24,6 +25,7 @@ const SwapFreeControlPage = lazy(() => import("@/pages/SwapFreeControl"))
 // [HIDDEN] ClientPnLMonitor page hidden
 // const ClientPnLMonitorPage = lazy(() => import("@/pages/ClientPnLMonitor"))
 const ClientPnLAnalysisPage = lazy(() => import("@/pages/ClientPnLAnalysis"))
+const ClientReturnRatePage = lazy(() => import("@/pages/ClientReturnRate"))
 const ConfigPlaceholder = lazy(() => import("@/pages/ConfigPlaceholder"))
 const IBReportPage = lazy(() => import("@/pages/IBReport"))
 const SettingsPage = lazy(() => import("@/pages/Settings"))
@@ -55,7 +57,8 @@ function App() {
               {/* [REMOVED] EquityMonitor page deleted */}
               {/* <Route path="equity-monitor" element={<EquityMonitorPage />} /> */}
               <Route path="gold" element={<GoldQuotePage />} />
-              <Route path="basis" element={<BasisPage />} />
+              {/* [HIDDEN] Basis page - 10.6.20.138:8050 service disabled */}
+              {/* <Route path="basis" element={<BasisPage />} /> */}
               {/* [REMOVED] Downloads page deprecated */}
               {/* <Route path="downloads" element={<DownloadsPage />} /> */}
               <Route path="warehouse" element={<WarehousePage />} />
@@ -71,6 +74,7 @@ function App() {
               {/* [HIDDEN] ClientPnLMonitor page hidden */}
               {/* <Route path="client-pnl-monitor" element={<ClientPnLMonitorPage />} /> */}
               <Route path="client-pnl-analysis" element={<ClientPnLAnalysisPage />} />
+              <Route path="client-return-rate" element={<ClientReturnRatePage />} />
               <Route path="ib-report" element={<IBReportPage />} />
               {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />

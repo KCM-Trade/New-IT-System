@@ -40,7 +40,8 @@ export default function ConfigPlaceholder() {
         { title: t("nav.ibReport"), url: "/ib-report" },
         { title: "盈亏监控 (Preview)", url: "/client-pnl-analysis" },
         { title: t("nav.swapFreeControl"), url: "/swap-free-control" },
-        { title: t("nav.basisAnalysis"), url: "/basis" },
+        // [HIDDEN] Basis page - 10.6.20.138:8050 service disabled
+        // { title: t("nav.basisAnalysis"), url: "/basis" },
         { title: t("nav.profitAnalysis"), url: "/profit" },
       ],
     },

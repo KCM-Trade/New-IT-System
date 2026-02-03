@@ -80,12 +80,13 @@ New-IT-System/
 │   │   │   ├── ClientPnLAnalysis.tsx   # Client PnL (ClickHouse, recommended)
 │   │   │   ├── IBReport.tsx
 │   │   │   └── ...
-│   │   │   # Removed pages (2025-01):
-│   │   │   # - CustomerPnLMonitor.tsx (replaced by ClientPnLAnalysis)
-│   │   │   # - CustomerPnLMonitorV2.tsx (replaced by ClientPnLAnalysis)
-│   │   │   # - ClientTradingAnalytics.tsx (deprecated)
+│   │   │   # Removed/Hidden pages:
+│   │   │   # - CustomerPnLMonitor.tsx (replaced by ClientPnLAnalysis, 2025-01)
+│   │   │   # - CustomerPnLMonitorV2.tsx (replaced by ClientPnLAnalysis, 2025-01)
+│   │   │   # - ClientTradingAnalytics.tsx (deprecated, 2025-01)
 │   │   │   # - Downloads.tsx (deprecated, 2025-01)
 │   │   │   # - EquityMonitor.tsx (deprecated, 2026-01)
+│   │   │   # - Basis.tsx (hidden, 2026-02, 10.6.20.138:8050 service disabled)
 │   │   ├── components/         # Reusable components
 │   │   │   ├── ui/             # shadcn/ui components
 │   │   │   ├── site-header.tsx # Page titles

@@ -12,7 +12,7 @@ const routeToKeyMap: Record<string, string> = {
   "/template": "pages.template",
   // "/equity-monitor": "pages.equityMonitor", // [REMOVED]
   "/gold": "pages.goldQuote",
-  "/basis": "pages.basisAnalysis",
+  // "/basis": "pages.basisAnalysis", // [HIDDEN] - service disabled
   "/downloads": "pages.downloads",
   "/warehouse/agent-global": "pages.warehouseAgentGlobal",
   "/warehouse": "pages.warehouse",
