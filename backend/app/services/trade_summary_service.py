@@ -82,9 +82,10 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
     excluded_groupsids = _get_excluded_groupsids(settings)
 
     # Build dynamic IN clause for excluded groupsids
+    # Note: mt4_live.mt4_users uses `GROUP` column (not groupsid)
     if excluded_groupsids:
         groupsid_placeholders = ", ".join([f"%(excluded_g{i})s" for i in range(len(excluded_groupsids))])
-        groupsid_condition = f"OR u.groupsid IN ({groupsid_placeholders})"
+        groupsid_condition = f"OR u.`GROUP` IN ({groupsid_placeholders})"
         groupsid_params = {f"excluded_g{i}": g for i, g in enumerate(excluded_groupsids)}
     else:
         groupsid_condition = ""
