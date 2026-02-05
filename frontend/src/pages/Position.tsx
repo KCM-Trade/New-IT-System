@@ -430,6 +430,10 @@ export default function PositionPage() {
                     <SelectItem value="XAUUSD (Related)">
                       XAUUSD相关 (模糊匹配)
                     </SelectItem>
+                    <SelectItem value="XAGUSD">XAGUSD</SelectItem>
+                    <SelectItem value="XAGUSD (Related)">
+                      XAGUSD相关 (模糊匹配)
+                    </SelectItem>
                     <SelectItem value="OTHERS" disabled>
                       其他 (联系Kieran添加)
                     </SelectItem>

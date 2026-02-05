@@ -11,6 +11,36 @@ from ..core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _get_excluded_groupsids(settings: Settings) -> list[str]:
+    """
+    Pre-fetch groupsids that should be excluded (demo/test groups).
+    This is cached per request to avoid repeated queries.
+    """
+    sql = """
+        SELECT groupsid 
+        FROM fxbackoffice.groups 
+        WHERE groupsid LIKE '%demo%' OR groupsid LIKE '%test%'
+    """
+    try:
+        conn = pymysql.connect(
+            host=settings.DB_HOST,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.FXBACK_DB_NAME,
+            port=int(settings.DB_PORT),
+            charset=settings.DB_CHARSET,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+        return [row["groupsid"] for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch excluded groupsids: {e}")
+        return []
+
+
 def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> dict[str, Any]:
     """
     Query all open positions using the consolidated mt4_trades table.
@@ -19,6 +49,7 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
     - sid 5: MT5
     - Uses closeDate = '1970-01-01' for optimized index usage.
     - Automatically handles cent accounts (profit / 100).
+    - Excludes test/demo accounts based on groups table.
     """
 
     # Map source to sid
@@ -29,7 +60,19 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
     }
     sid = sid_map.get(source, 1)
 
-    sql = """
+    # Pre-fetch excluded groupsids for better performance
+    excluded_groupsids = _get_excluded_groupsids(settings)
+
+    # Build dynamic IN clause for excluded groupsids using named params
+    if excluded_groupsids:
+        groupsid_placeholders = ", ".join([f"%(excluded_g{i})s" for i in range(len(excluded_groupsids))])
+        groupsid_condition = f"OR u.groupsid IN ({groupsid_placeholders})"
+        groupsid_params = {f"excluded_g{i}": g for i, g in enumerate(excluded_groupsids)}
+    else:
+        groupsid_condition = ""
+        groupsid_params = {}
+
+    sql = f"""
         SELECT
           t.SYMBOL AS symbol,
           -- Use 'lots' virtual column for volume
@@ -59,6 +102,7 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
                     (u.`GROUP` LIKE %(like_test)s OR u.NAME LIKE %(like_test)s)
                     AND (u.`GROUP` LIKE %(like_kcm)s OR u.`GROUP` LIKE %(like_testkcm)s)
                 )
+                {groupsid_condition}
               )
           )
         GROUP BY t.SYMBOL
@@ -70,6 +114,7 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
         "like_test": "%test%",
         "like_kcm": "KCM%",
         "like_testkcm": "testKCM%",
+        **groupsid_params,
     }
 
     try:
@@ -90,12 +135,14 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
 
         return {"ok": True, "items": rows}
     except Exception as exc:
+        logger.error(f"Error in get_open_positions_today: {exc}")
         return {"ok": False, "items": [], "error": str(exc)}
 
 
 def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str, Any]:
     """
     Query a specific symbol's summary across all servers (mt4_live, mt4_live2, mt5).
+    Excludes test/demo accounts based on groups table.
     """
     sources = ["mt4_live", "mt4_live2", "mt5"]
     sid_map = {
@@ -104,7 +151,19 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
         "mt5": 5
     }
 
-    sql = """
+    # Pre-fetch excluded groupsids once before parallel execution
+    excluded_groupsids = _get_excluded_groupsids(settings)
+
+    # Build dynamic IN clause for excluded groupsids
+    if excluded_groupsids:
+        groupsid_placeholders = ", ".join([f"%(excluded_g{i})s" for i in range(len(excluded_groupsids))])
+        groupsid_condition = f"OR u.groupsid IN ({groupsid_placeholders})"
+        groupsid_params = {f"excluded_g{i}": g for i, g in enumerate(excluded_groupsids)}
+    else:
+        groupsid_condition = ""
+        groupsid_params = {}
+
+    sql = f"""
         SELECT
           %(source)s AS source,
           -- Use GROUP_CONCAT to show which symbols were included
@@ -140,6 +199,7 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
                     (u.`GROUP` LIKE %(like_test)s OR u.NAME LIKE %(like_test)s)
                     AND (u.`GROUP` LIKE %(like_kcm)s OR u.`GROUP` LIKE %(like_testkcm)s)
                 )
+                {groupsid_condition}
               )
           )
         """
@@ -158,6 +218,7 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
             "like_test": "%test%",
             "like_kcm": "KCM%",
             "like_testkcm": "testKCM%",
+            **groupsid_params,
         }
         
         try:
@@ -216,6 +277,7 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
 
         return {"ok": True, "items": items, "total": total}
     except Exception as exc:
+        logger.error(f"Error in get_symbol_cross_server_summary: {exc}")
         return {"ok": False, "items": [], "error": str(exc)}
 
 

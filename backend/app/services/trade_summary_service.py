@@ -6,7 +6,39 @@ from typing import Any
 import pymysql
 
 from ..core.config import Settings
+from ..core.logging_config import get_logger
 
+logger = get_logger(__name__)
+
+
+def _get_excluded_groupsids(settings: Settings) -> list[str]:
+    """
+    Pre-fetch groupsids that should be excluded (demo/test groups).
+    Query from fxbackoffice.groups table.
+    """
+    sql = """
+        SELECT groupsid 
+        FROM fxbackoffice.groups 
+        WHERE groupsid LIKE '%demo%' OR groupsid LIKE '%test%'
+    """
+    try:
+        conn = pymysql.connect(
+            host=settings.DB_HOST,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+            database=settings.DB_NAME,
+            port=int(settings.DB_PORT),
+            charset=settings.DB_CHARSET,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+        return [row["groupsid"] for row in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch excluded groupsids: {e}")
+        return []
 
 
 def _compute_day_bounds(target_date: date) -> tuple[str, str, str]:
@@ -27,15 +59,16 @@ def _compute_day_bounds(target_date: date) -> tuple[str, str, str]:
 
 def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dict[str, Any]:
     """按给定日期与品种返回分组汇总。
-    - grp: 正在持仓/当日已平/昨日已平（周一“昨日”按上周五计算）
+    - grp: 正在持仓/当日已平/昨日已平（周一"昨日"按上周五计算）
     - settlement: 过夜/当天（参考前端查询逻辑）
     - direction: buy/sell
+    - Excludes test/demo accounts based on groups table.
     """
 
     # 当天与相邻日期边界
     yday_start, today_start, tomorrow_start = _compute_day_bounds(target_date)
 
-    # 计算“昨日”区间：若为周一，则按上周五 00:00:00 至 周六 00:00:00
+    # 计算"昨日"区间：若为周一，则按上周五 00:00:00 至 周六 00:00:00
     # 否则为自然昨日 00:00:00 至 今日 00:00:00
     if target_date.weekday() == 0:  # Monday
         friday_date = target_date - timedelta(days=3)
@@ -45,11 +78,22 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
         prev_start = yday_start
         prev_end = today_start
 
+    # Pre-fetch excluded groupsids for better performance
+    excluded_groupsids = _get_excluded_groupsids(settings)
+
+    # Build dynamic IN clause for excluded groupsids
+    if excluded_groupsids:
+        groupsid_placeholders = ", ".join([f"%(excluded_g{i})s" for i in range(len(excluded_groupsids))])
+        groupsid_condition = f"OR u.groupsid IN ({groupsid_placeholders})"
+        groupsid_params = {f"excluded_g{i}": g for i, g in enumerate(excluded_groupsids)}
+    else:
+        groupsid_condition = ""
+        groupsid_params = {}
+
     # 统一查询：
     # - 第一部分为过夜（swaps <> 0）
     # - 第二部分为当天（不区分 swaps）
-    sql = (
-        """
+    sql = f"""
         SELECT
           core.grp AS grp,
           '过夜' AS settlement,
@@ -84,6 +128,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
                       (u.`GROUP` LIKE %(like_test)s OR u.name LIKE %(like_test)s)
                       AND (u.`GROUP` LIKE %(like_kcm)s OR u.`GROUP` LIKE %(like_testkcm)s)
                   )
+                  {groupsid_condition}
                   )
               )
         ) core
@@ -125,12 +170,12 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
                       (u.`GROUP` LIKE %(like_test)s OR u.name LIKE %(like_test)s)
                       AND (u.`GROUP` LIKE %(like_kcm)s OR u.`GROUP` LIKE %(like_testkcm)s)
                   )
+                  {groupsid_condition}
                   )
               )
         ) core
         GROUP BY core.grp, core.direction
         """
-    )
 
     params = {
         "symbol": symbol,
@@ -141,6 +186,7 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
         "like_test": "%test%",
         "like_kcm": "KCM%",
         "like_testkcm": "testKCM%",
+        **groupsid_params,
     }
 
     try:
@@ -160,7 +206,6 @@ def get_trade_summary(settings: Settings, target_date: date, symbol: str) -> dic
                 rows = cur.fetchall()
 
         return {"ok": True, "items": rows}
-    except Exception as exc:  # keep simple handling; refine as needed
+    except Exception as exc:
+        logger.error(f"Error in get_trade_summary: {exc}")
         return {"ok": False, "items": [], "error": str(exc)}
-
-
