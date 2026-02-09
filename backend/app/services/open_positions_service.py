@@ -246,7 +246,16 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
                             "profit_sell": 0.0,
                             "profit_total": 0.0
                         }
-                    return res
+                    # Replace None values with 0 to prevent frontend/calculation issues
+                    return {
+                        "source": res.get("source") or source_name,
+                        "symbol": res.get("symbol") or symbol,
+                        "volume_buy": res.get("volume_buy") or 0.0,
+                        "volume_sell": res.get("volume_sell") or 0.0,
+                        "profit_buy": res.get("profit_buy") or 0.0,
+                        "profit_sell": res.get("profit_sell") or 0.0,
+                        "profit_total": res.get("profit_total") or 0.0,
+                    }
         except Exception as e:
             logger.error(f"Error fetching data for {source_name}: {e}")
             return {
@@ -268,11 +277,12 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
         total = {
             "source": "Total",
             "symbol": symbol,
-            "volume_buy": sum(i.get("volume_buy", 0) for i in items),
-            "volume_sell": sum(i.get("volume_sell", 0) for i in items),
-            "profit_buy": sum(i.get("profit_buy", 0) for i in items),
-            "profit_sell": sum(i.get("profit_sell", 0) for i in items),
-            "profit_total": sum(i.get("profit_total", 0) for i in items),
+            # Use `or 0` to handle None values (dict.get only returns default when key is missing, not when value is None)
+            "volume_buy": sum(i.get("volume_buy") or 0 for i in items),
+            "volume_sell": sum(i.get("volume_sell") or 0 for i in items),
+            "profit_buy": sum(i.get("profit_buy") or 0 for i in items),
+            "profit_sell": sum(i.get("profit_sell") or 0 for i in items),
+            "profit_total": sum(i.get("profit_total") or 0 for i in items),
         }
 
         return {"ok": True, "items": items, "total": total}

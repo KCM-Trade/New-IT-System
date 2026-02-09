@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "@/providers/auth-provider"
 
 const DashboardLayout = lazy(() => import("@/layouts/DashboardLayout"))
 const LoginPage = lazy(() => import("@/pages/Login"))
+const HomePage = lazy(() => import("@/pages/Home"))
 const DashboardTemplatePage = lazy(() => import("@/pages/Dashboard"))
 // [HIDDEN] Basis page - 10.6.20.138:8050 service disabled
 // const BasisPage = lazy(() => import("@/pages/Basis"))
@@ -52,7 +53,9 @@ function App() {
                 </PrivateRoute>
               }
             >
-              <Route index element={<Navigate to="/cfg/managers" replace />} />
+              {/* Default route: show home page */}
+              <Route index element={<HomePage />} />
+              <Route path="home" element={<HomePage />} />
               <Route path="template" element={<DashboardTemplatePage />} />
               {/* [REMOVED] EquityMonitor page deleted */}
               {/* <Route path="equity-monitor" element={<EquityMonitorPage />} /> */}

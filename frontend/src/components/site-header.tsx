@@ -9,6 +9,7 @@ import { useI18n } from "@/components/i18n-provider"
 
 // Route to translation key mapping
 const routeToKeyMap: Record<string, string> = {
+  "/home": "pages.home",
   "/template": "pages.template",
   // "/equity-monitor": "pages.equityMonitor", // [REMOVED]
   "/gold": "pages.goldQuote",
@@ -38,8 +39,8 @@ export function SiteHeader() {
   
   const pageTitle = useMemo(() => {
     const path = location.pathname
-    // Handle root path
-    if (path === "/") return t("pages.basisAnalysis")
+    // Handle root path - show home page title
+    if (path === "/") return t("pages.home")
     // Handle configuration routes
     if (path.startsWith("/cfg")) return t("pages.configuration")
     // Get translation key for current route

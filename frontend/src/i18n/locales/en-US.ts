@@ -47,10 +47,13 @@ export const enUS = {
     dataQuery: "Data Query",
     ibidLots: "IBID Lots Lookup",
     clientReturnRate: "Client Return Rate",
+    home: "Home",
   },
   
   // Page titles
   pages: {
+    home: "Home",
+    homeWelcome: "Welcome to KCM Analytics System. Select a module from the sidebar to get started.",
     template: "Template",
     // equityMonitor: "Equity - Monitor", // [REMOVED]
     goldQuote: "Gold Quote",

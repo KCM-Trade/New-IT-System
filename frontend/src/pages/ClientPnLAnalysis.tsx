@@ -212,8 +212,8 @@ export default function ClientPnLAnalysis() {
   //   3m = 3 months including current (e.g., Nov 1 ~ Jan 31)
   //   6m = 6 months including current (e.g., Aug 1 ~ Jan 31)
   const getDateRange = useCallback((range: string) => {
-    // 截止日期更新至 2026-01-31
-    const MAX_DATE = new Date("2026-01-31");
+    // 截止日期更新至 2026-02-09
+    const MAX_DATE = new Date("2026-02-09");
     const end = new Date(MAX_DATE); // Clone it
     const start = new Date(MAX_DATE); // Clone it
 
@@ -1103,7 +1103,7 @@ export default function ClientPnLAnalysis() {
       <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-4 py-2 text-amber-800 dark:text-amber-200 text-sm flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="font-semibold">预览版 (Preview)</span>
-          <span>— 当前数据截止至 2026-01-31。</span>
+          <span>— 当前数据截止至 2026-02-09。</span>
         </div>
         <div className="ml-0 sm:ml-7 text-xs opacity-90">
           当前 ClickHouse database 服务器处于 Dev 模式（30min
@@ -1159,7 +1159,7 @@ export default function ClientPnLAnalysis() {
                       }
                     }}
                     numberOfMonths={2}
-                    disabled={(date) => date > new Date("2026-01-31")}
+                    disabled={(date) => date > new Date("2026-02-09")}
                   />
                 </PopoverContent>
               </Popover>

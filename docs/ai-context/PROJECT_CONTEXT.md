@@ -75,6 +75,7 @@ New-IT-System/
 │   │   ├── App.tsx             # Root component, routing
 │   │   ├── index.css           # Global styles (Tailwind)
 │   │   ├── pages/              # Page components (active)
+│   │   │   ├── Home.tsx        # Dashboard home page (landing page)
 │   │   │   ├── Position.tsx    # ~800 lines, position monitoring
 │   │   │   # ├── ClientPnLMonitor.tsx  # [HIDDEN] 2026-01, use ClientPnLAnalysis
 │   │   │   ├── ClientPnLAnalysis.tsx   # Client PnL (ClickHouse, recommended)
@@ -139,6 +140,18 @@ New-IT-System/
 ---
 
 ## 4. Core Business Modules
+
+### 4.0 Dashboard (`Home.tsx`)
+**Purpose**: Landing page showing system overview and key metrics summary.
+
+**Key Features**:
+- Default route (`/`) and alias (`/home`)
+- Sidebar "Dashboard" entry with home icon
+- Sidebar logo click navigates to home
+- Placeholder page (awaiting backend API integration)
+
+**API** (planned): `GET /api/v1/dashboard/summary`
+**Docs**: [dashboard.md](../features/dashboard.md)
 
 ### 4.1 Position Monitor (`Position.tsx`)
 **Purpose**: Real-time monitoring of open trading positions across all MT servers.

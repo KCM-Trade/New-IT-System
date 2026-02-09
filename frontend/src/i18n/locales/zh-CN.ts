@@ -47,10 +47,13 @@ export const zhCN = {
     dataQuery: "Data Query",
     ibidLots: "IB及旗下客户交易查询",
     clientReturnRate: "客户收益率",
+    home: "首页",
   },
 
   // Page titles
   pages: {
+    home: "首页",
+    homeWelcome: "欢迎使用 KCM Analytics System，请从左侧导航选择功能模块。",
     template: "模板",
     // equityMonitor: "Equity - Monitor", // [REMOVED]
     goldQuote: "黄金报价",

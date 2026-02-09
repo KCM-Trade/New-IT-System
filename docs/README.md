@@ -28,6 +28,7 @@ This is the documentation hub for the KCM IT System - an internal financial trad
 
 | Module | Description | Docs |
 |--------|-------------|------|
+| Dashboard | Home page with system overview | [dashboard.md](features/dashboard.md) |
 | Client PnL Analysis | Customer profit/loss analysis | [Features](features/) |
 | Position Monitor | Real-time position monitoring | [position-monitor.md](features/position-monitor.md) |
 | IB Report | Broker commission reports | [ib-report.md](features/ib-report.md) |

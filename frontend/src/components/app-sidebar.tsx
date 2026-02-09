@@ -1,9 +1,11 @@
 import * as React from "react";
+import { Link } from "react-router-dom";
 import {
   IconDashboard,
   IconDatabase,
   IconFileWord,
   IconHelp,
+  IconHome,
   IconListDetails,
   IconReport,
   IconSearch,
@@ -35,6 +37,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         avatar: "/avatars/shadcn.jpg",
       },
       navSections: [
+        {
+          // Dashboard - direct link to home page
+          title: "Dashboard",
+          icon: IconHome,
+          url: "/",
+        },
         {
           title: t("nav.csDepartment"),
           icon: IconUsers,
@@ -126,10 +134,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-3 py-2">
+        {/* Logo links to home page */}
+        <Link to="/" className="flex items-center gap-2 px-3 py-2">
           <img src="/logo.svg" alt="Company" className="h-24 w-auto block" />
-          {/* <span className="text-base font-semibold">KCM Trade</span> */}
-        </div>
+        </Link>
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={data.navSections} />
