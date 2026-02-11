@@ -115,7 +115,8 @@ New-IT-System/
 │   │   │   └── ...
 │   │   └── core/
 │   │       ├── config.py       # Settings from .env
-│   │       └── logging_config.py
+│   │       ├── logging_config.py
+│   │       └── singleflight.py # Request coalescing utility
 │   ├── main.py                 # ASGI entry (uvicorn main:app)
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -294,6 +295,34 @@ New-IT-System/
 - **Schemas** (`schemas/`): Define request/response shapes (Pydantic)
 - **Services** (`services/`): Implement business logic, database queries
 - **Config** (`core/`): Centralized settings from .env
+
+### Request Deduplication
+
+**Frontend - AbortController in useEffect** (standard React 18 pattern):
+All `useEffect` hooks that fetch data MUST use `AbortController` for cleanup.
+This prevents duplicate requests caused by React StrictMode double-mounting.
+
+```tsx
+useEffect(() => {
+  const controller = new AbortController();
+  fetchData(controller.signal);
+  return () => controller.abort();
+}, []);
+```
+
+Fetch functions should accept an optional `signal?: AbortSignal` param and pass it to `fetch()`.
+Catch blocks should ignore `AbortError`:
+```tsx
+catch (error) {
+  if (error instanceof DOMException && error.name === "AbortError") return;
+  // handle real errors
+}
+```
+
+**Backend - SingleFlight** (`backend/app/core/singleflight.py`):
+Coalesces concurrent identical ClickHouse queries so only one thread executes.
+Used in `clickhouse_service.py` for `get_pnl_analysis` and `get_ib_groups`.
+When 4 identical requests arrive before Redis cache is populated, only 1 hits ClickHouse.
 
 ### Adding New Features
 

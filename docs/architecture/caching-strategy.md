@@ -23,6 +23,18 @@ Redis 是一个高性能的键值对内存数据库，非常适合存储查询�
     *   API 响应的 `statistics` 中包含 `from_cache` 布尔值。
     *   前端 UI 在统计栏显示 “⚡ 已缓存 (Cached)” 标识，提升用户对响应速度的感知。
 
+### SingleFlight 请求合并 (Concurrent Query Coalescing)
+
+当 Redis 缓存为空时（冷启动），多个相同请求可能同时到达后端。如果没有防护，每个请求都会独立查询 ClickHouse，造成资源浪费。
+
+**实现**：`backend/app/core/singleflight.py`
+
+- 基于 `threading.Lock` + `threading.Event`，Go singleflight 的 Python 实现。
+- 当多个线程使用相同的 cache key 调用时，只有第一个执行 ClickHouse 查询，其余阻塞等待并共享结果。
+- 已集成到 `clickhouse_service.py` 的 `get_pnl_analysis` 和 `get_ib_groups` 方法。
+
+**与 Redis 的关系**：SingleFlight 是 Redis 缓存的互补防御层。Redis 处理"跨时间"的重复请求（TTL 30 分钟），SingleFlight 处理"同一时刻"的并发重复请求。
+
 ---
 
 ## 2. 前端持久化 (Frontend Persistence)

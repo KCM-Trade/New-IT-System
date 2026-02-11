@@ -144,9 +144,9 @@ export default function ClientPnLAnalysis() {
   const [timeRange, setTimeRange] = useState<string>(
     initialSettings?.timeRange ?? "1m"
   ); // Default to 1 month
-  const [hasSearched, setHasSearched] = useState(
-    !!initialSettings?.hasSearched
-  );
+  // Always start as false — user must click "Search" to load data.
+  // This prevents expensive auto-queries when the user just navigates through pages.
+  const [hasSearched, setHasSearched] = useState(false);
   const [date, setDate] = useState<DateRange | undefined>(
     initialSettings?.date
   );
@@ -251,7 +251,8 @@ export default function ClientPnLAnalysis() {
   }, []);
 
   // Fetch Data
-  const handleSearch = useCallback(async () => {
+  // AbortSignal allows cancelling the request when component unmounts (React 18 StrictMode cleanup)
+  const handleSearch = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setHasSearched(true);
     setStats(null);
@@ -295,7 +296,8 @@ export default function ClientPnLAnalysis() {
       }
 
       const response = await fetch(
-        `/api/v1/client-pnl-analysis/query?${params}`
+        `/api/v1/client-pnl-analysis/query?${params}`,
+        { signal }
       );
 
       if (!response.ok) {
@@ -330,6 +332,8 @@ export default function ClientPnLAnalysis() {
         setRows([]);
       }
     } catch (error) {
+      // Ignore AbortError — request was cancelled by cleanup (e.g. StrictMode remount)
+      if (error instanceof DOMException && error.name === "AbortError") return;
       console.error("Fetch error:", error);
       setRows([]);
     } finally {
@@ -337,13 +341,11 @@ export default function ClientPnLAnalysis() {
     }
   }, [timeRange, date, searchInput, getDateRange]);
 
-  // Auto search on mount if we have previous search state
-  useEffect(() => {
-    if (initialSettings?.hasSearched) {
-      handleSearch();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Removed: auto-search on mount.
+  // Previously this useEffect would call handleSearch() if the user had searched before,
+  // but that triggers an expensive ClickHouse query every time the user navigates to this page,
+  // even if they immediately leave. Now the user must explicitly click "Search" to fetch data.
+  // The previous search filters (date range, search input) are still restored from localStorage.
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

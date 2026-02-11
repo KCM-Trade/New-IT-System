@@ -68,6 +68,7 @@
 - 模型（schemas）：定义请求/响应“长什么样”。
 - 服务（services）：做“怎么查/怎么算/怎么输出”。
 - 配置（core）：集中化读取 .env、路径、CORS 等。
+- 请求合并（core/singleflight.py）：当多个相同的 ClickHouse 查询并发到达时，只执行一次，其余等待共享结果。用于 `clickhouse_service.py` 的 `get_pnl_analysis` 和 `get_ib_groups`。
 
 七、扩展指南（Add a new API）
 1) 在 schemas/ 添加请求/响应模型。

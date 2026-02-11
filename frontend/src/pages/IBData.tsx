@@ -285,27 +285,26 @@ export default function IBDataPage() {
     { label: "自定义", value: "custom" as const },
   ];
 
+  // Fresh grad note: AbortController is the standard React 18 way to cancel fetch on unmount.
+  // This prevents duplicate requests caused by StrictMode double-mounting.
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
 
     const loadLastRun = async () => {
       try {
-        const res = await fetch("/api/v1/ib-data/last-run");
+        const res = await fetch("/api/v1/ib-data/last-run", { signal: controller.signal });
         if (!res.ok) return;
         const data = (await res.json()) as LastRunResponsePayload;
-        if (!cancelled) {
-          setLastQueryTime(data.last_query_time ?? null);
-        }
-      } catch {
-        // ignore network hiccups on initial render
+        setLastQueryTime(data.last_query_time ?? null);
+      } catch (err) {
+        // Ignore AbortError (cleanup) and network hiccups on initial render
+        if (err instanceof DOMException && err.name === "AbortError") return;
       }
     };
 
     // Fresh grad note: showing last run immediately improves perceived responsiveness.
     loadLastRun();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   const rangeLabel = useMemo(() => {

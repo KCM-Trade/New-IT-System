@@ -78,24 +78,27 @@ export default function SwapFreeControlPage() {
   })()
 
   // fresh grad: fetch zipcode distribution on mount
+  // AbortController cancels the request when component unmounts (React 18 StrictMode cleanup)
   useEffect(() => {
+    const controller = new AbortController()
     ;(async () => {
       setDistLoading(true)
       setDistError(null)
       try {
-        // Backend is expected to provide this API; on failure we gracefully fallback to empty table
-        const res = await fetch("/api/v1/zipcode/distribution")
+        const res = await fetch("/api/v1/zipcode/distribution", { signal: controller.signal })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const payload = await res.json()
         const data: DistRow[] = payload?.data ?? []
         setDistRows(data)
       } catch (e: any) {
+        if (e instanceof DOMException && e.name === "AbortError") return
         setDistRows([])
         setDistError(e?.message ?? "Failed to load distribution")
       } finally {
         setDistLoading(false)
       }
     })()
+    return () => controller.abort()
   }, [])
   
   // fresh grad: helper to format Date -> "YYYY-MM-DD HH:MM:SS" in UTC (backend uses UTC+0)
@@ -125,8 +128,9 @@ export default function SwapFreeControlPage() {
   }
 
   // fresh grad: load zipcode change logs with optional time window, limit 100
-  const loadLogs = async (options?: { start?: string; end?: string; clientId?: number }) => {
-    const { start, end, clientId } = options ?? {}
+  // signal param allows cancelling the request on unmount (React 18 StrictMode cleanup)
+  const loadLogs = async (options?: { start?: string; end?: string; clientId?: number; signal?: AbortSignal }) => {
+    const { start, end, clientId, signal } = options ?? {}
     setLogsLoading(true)
     setLogsError(null)
     try {
@@ -136,12 +140,13 @@ export default function SwapFreeControlPage() {
       if (start) params.set("start", start)
       if (end) params.set("end", end)
       if (clientId) params.set("client_id", String(clientId))
-      const res = await fetch(`/api/v1/zipcode/changes?${params.toString()}`)
+      const res = await fetch(`/api/v1/zipcode/changes?${params.toString()}`, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const payload = await res.json()
       const data: ChangeLogRow[] = payload?.data ?? []
       setLogRows(data)
     } catch (e: any) {
+      if (e instanceof DOMException && e.name === "AbortError") return
       setLogRows([])
       setLogsError(e?.message ?? "Failed to load change logs")
     } finally {
@@ -151,7 +156,9 @@ export default function SwapFreeControlPage() {
 
   // fresh grad: on mount, load default logs (backend defaults to last 25h)
   useEffect(() => {
-    loadLogs()
+    const controller = new AbortController()
+    loadLogs({ signal: controller.signal })
+    return () => controller.abort()
   }, [])
 
   // fresh grad: trigger zipcode logs fetch by client id only
@@ -199,16 +206,18 @@ export default function SwapFreeControlPage() {
   }
 
   // fresh grad: fetch exclusions (active only) so we can reuse after manual add
-  const loadExclusions = useCallback(async () => {
+  // signal param allows cancelling the request on unmount (React 18 StrictMode cleanup)
+  const loadExclusions = useCallback(async (signal?: AbortSignal) => {
     setExLoading(true)
     setExError(null)
     try {
-      const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`)
+      const res = await fetch(`/api/v1/zipcode/exclusions?is_active=true`, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const payload = await res.json()
       const data: ExclusionRow[] = payload?.data ?? []
       setExRows(data)
     } catch (e: any) {
+      if (e instanceof DOMException && e.name === "AbortError") return
       setExRows([])
       setExError(e?.message ?? "Failed to load exclusions")
     } finally {
@@ -217,7 +226,9 @@ export default function SwapFreeControlPage() {
   }, [])
 
   useEffect(() => {
-    loadExclusions()
+    const controller = new AbortController()
+    loadExclusions(controller.signal)
+    return () => controller.abort()
   }, [loadExclusions])
 
   // fresh grad: manual add handler (validates input then POST to backend)
@@ -288,17 +299,19 @@ export default function SwapFreeControlPage() {
     "bg-gradient-to-t from-zinc-200/70 via-zinc-100/30 to-transparent dark:from-zinc-900/70 dark:via-zinc-800/40 dark:to-transparent"
 
   // fresh grad: load client change frequency (last 30 days, only >=2 changes)
-  const loadFrequency = useCallback(async () => {
+  // signal param allows cancelling the request on unmount (React 18 StrictMode cleanup)
+  const loadFrequency = useCallback(async (signal?: AbortSignal) => {
     setFreqLoading(true)
     setFreqError(null)
     try {
-      const res = await fetch(`/api/v1/zipcode/change-frequency?window_days=30&page=1&page_size=200`)
+      const res = await fetch(`/api/v1/zipcode/change-frequency?window_days=30&page=1&page_size=200`, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const payload = await res.json()
       const data: FrequencyRow[] = Array.isArray(payload?.data) ? payload.data : []
       const filtered = data.filter((row) => Number(row.changes) >= 2)
       setFreqRows(filtered)
     } catch (e: any) {
+      if (e instanceof DOMException && e.name === "AbortError") return
       setFreqRows([])
       setFreqError(e?.message ?? "Failed to load change frequency")
     } finally {
@@ -307,7 +320,9 @@ export default function SwapFreeControlPage() {
   }, [])
 
   useEffect(() => {
-    loadFrequency()
+    const controller = new AbortController()
+    loadFrequency(controller.signal)
+    return () => controller.abort()
   }, [loadFrequency])
   
   return (

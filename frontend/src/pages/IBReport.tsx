@@ -214,9 +214,10 @@ export default function IBReport() {
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
 
   // --- 获取所有组别数据 (后端 7 天缓存) ---
-  const fetchAllGroups = useCallback(async () => {
+  // AbortSignal allows cancelling the request on unmount (React 18 StrictMode cleanup)
+  const fetchAllGroups = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/v1/ib-report/groups");
+      const res = await fetch("/api/v1/ib-report/groups", { signal });
       if (!res.ok) throw new Error("Failed to fetch groups");
       const data: GroupsApiResponse = await res.json();
       setAllGroups(data.group_list);
@@ -225,12 +226,15 @@ export default function IBReport() {
         prev_update: data.previous_update_time,
       });
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       console.error("Error fetching IB groups:", err);
     }
   }, []);
 
   useEffect(() => {
-    fetchAllGroups();
+    const controller = new AbortController();
+    fetchAllGroups(controller.signal);
+    return () => controller.abort();
   }, [fetchAllGroups]);
 
   // 收藏状态持久化
@@ -314,7 +318,8 @@ export default function IBReport() {
   }, [saveGridState]);
 
   // --- Data Fetching ---
-  const handleSearch = useCallback(async () => {
+  // AbortSignal allows cancelling the request on unmount (React 18 StrictMode cleanup)
+  const handleSearch = useCallback(async (signal?: AbortSignal) => {
     if (!date?.from || !date?.to) return;
 
     setLoading(true);
@@ -329,6 +334,7 @@ export default function IBReport() {
           end_date: format(date.to, "yyyy-MM-dd"),
           groups: selectedGroups,
         }),
+        signal,
       });
 
       if (!response.ok) {
@@ -338,6 +344,7 @@ export default function IBReport() {
       const data: IBReportRow[] = await response.json();
       setRows(data);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       console.error("Error loading IB report data:", error);
     } finally {
       setLoading(false);
@@ -345,7 +352,10 @@ export default function IBReport() {
   }, [date, selectedGroups]);
 
   useEffect(() => {
-    handleSearch();
+    const controller = new AbortController();
+    handleSearch(controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- Table Configuration ---
