@@ -1314,7 +1314,7 @@ export default function ClientPnLAnalysis() {
                   - Desktop: buttons are same width and stay on the right of the search input */}
               <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <Button
-                  onClick={handleSearch}
+                  onClick={() => handleSearch()}
                   disabled={loading}
                   className="w-full sm:w-[140px] whitespace-nowrap min-w-[80px]"
                 >
@@ -1550,7 +1550,17 @@ export default function ClientPnLAnalysis() {
               "hsl(var(--primary) / 0.04)",
           }}
         >
-          {!hasSearched && !loading ? (
+          {/* Loading overlay - shown while fetching data from backend */}
+          {loading ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-background/60 backdrop-blur-sm z-10">
+              <div className="text-center flex flex-col items-center gap-3">
+                <RefreshCw className="h-10 w-10 animate-spin text-primary opacity-70" />
+                <p className="text-sm text-muted-foreground font-medium">
+                  {tz("clientPnl.loading", "正在查询，请稍候...", "Loading, please wait...")}
+                </p>
+              </div>
+            </div>
+          ) : !hasSearched ? (
             <div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
               <div className="text-center">
                 <Search className="h-12 w-12 mx-auto mb-2 opacity-20" />
