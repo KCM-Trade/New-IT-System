@@ -134,8 +134,23 @@ def rmdb(tmp_path, monkeypatch):
     return rmdb
 
 
+def _recent_day() -> str:
+    """Yesterday (UTC) as YYYY-MM-DD.
+
+    Seed timestamps MUST be derived from now, never literal dates:
+    `append_xauusd_snapshots` runs the 60-day retention purge inline, so a
+    hardcoded seed silently starts being deleted-on-insert once the literal
+    date ages past the window (this file rotted exactly that way — seeded
+    2026-06-29, went red ~2026-08-28).
+    """
+    import datetime as _dt
+
+    return (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def test_fetch_filters_by_server_and_symbol(rmdb):
-    captured_at = "2026-06-29T06:30:00Z"
+    day = _recent_day()
+    captured_at = f"{day}T06:30:00Z"
     rows = [
         {"server": "mt4_live", "symbol": "XAUUSD",
          "volume_buy": 5.0, "volume_sell": 1.0, "net_position": 4.0},
@@ -146,7 +161,7 @@ def test_fetch_filters_by_server_and_symbol(rmdb):
     ]
     rmdb.append_xauusd_snapshots(captured_at, rows)
 
-    start, end = "2026-06-29T00:00:00Z", "2026-06-29T23:59:59Z"
+    start, end = f"{day}T00:00:00Z", f"{day}T23:59:59Z"
 
     # Unfiltered → all three.
     assert len(rmdb.fetch_xauusd_snapshots(start, end)) == 3
@@ -175,7 +190,8 @@ def test_fetch_filters_by_server_and_symbol(rmdb):
 
 
 def test_iter_snapshots_streams_same_rows(rmdb):
-    captured_at = "2026-06-29T06:30:00Z"
+    day = _recent_day()
+    captured_at = f"{day}T06:30:00Z"
     rows = [
         {"server": "mt4_live", "symbol": "XAUUSD",
          "volume_buy": 5.0, "volume_sell": 1.0, "net_position": 4.0},
@@ -185,7 +201,7 @@ def test_iter_snapshots_streams_same_rows(rmdb):
     rmdb.append_xauusd_snapshots(captured_at, rows)
     streamed = list(
         rmdb.iter_xauusd_snapshots(
-            "2026-06-29T00:00:00Z", "2026-06-29T23:59:59Z"
+            f"{day}T00:00:00Z", f"{day}T23:59:59Z"
         )
     )
     assert len(streamed) == 2
