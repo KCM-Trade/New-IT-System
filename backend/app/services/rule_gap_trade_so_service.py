@@ -4,7 +4,11 @@ Gap Trade — Stop-out (SO) + AB pair detection (rule_id = 71).
 Ported from `Azure_Function_BAU/W04_Blowup_Audit_Weekly.py`. Detects forced
 liquidations (COMMENT prefix `[so` / `so:` / `cso:`) inside the MT 00:00–02:00
 weekday window and pairs each loser leg with a suspected counter-leg from a
-DIFFERENT client in the SAME groupsid (canonical cross-client AB collusion).
+either the SAME client on a different account (self-mirror AB — added
+2026-09-15 after the Perfect Edafiogho 5-67043827/5-67043828 weekend-gap pair
+slipped past the old cross-client-only filter) or a DIFFERENT client in the
+SAME groupsid (cross-client AB collusion). Same criteria as the W04 weekly
+audit script since 2026-09-15.
 
 Output rows are enriched with:
 - ``shared_ips`` — intersection of L and C login IPs across the holding window,
@@ -193,6 +197,57 @@ def _so_comment_filter_sql(alias: str) -> str:
     )
 
 
+def _passes_dust_floor(alert: Dict[str, Any], min_l_loss_usd: float) -> bool:
+    """Decide whether a pair alert survives the `min_l_loss_usd` dust floor.
+
+    The flat USD floor exists to cut random dust SO events, but two signals
+    are far higher-specificity than loss magnitude and always win:
+
+    - **shared IP** during the holding window — empirically the strongest
+      collusion patterns sit at $3–$5 per leg, deliberately below any
+      sane floor, coordinated across the same VPN exit nodes.
+    - **same client** (L and C legs belong to one userid) — deterministic
+      identity evidence; a stranger's dust never pairs by accident when the
+      userid must match. This bypass is also what makes the 2026-09-15
+      same-client scope actually surface at the 07:20 cron: mobile-carrier
+      IPs rotate daily, and the two legs may only share an IP on the gap
+      day itself — whose login_ip file is not generated until 05:10 the
+      NEXT day. Perfect Edafiogho (67043827/67043828, per-order loss
+      ≤ $19 vs the $100 floor) shared an IP only on close day 09-14.
+    """
+    if abs(alert.get("l_profit_usd") or 0) >= min_l_loss_usd:
+        return True
+    if (alert.get("shared_ip_count") or 0) > 0:
+        return True
+    l_uid = alert.get("l_userid")
+    return l_uid is not None and l_uid == alert.get("c_userid")
+
+
+def _pair_scope_filter(cross_client_only: bool) -> str:
+    """SQL fragment restricting which counterpart accounts can pair with a loser.
+
+    ``cross_client_only=True`` (config default) keeps the two real-world AB
+    forms and nothing else:
+
+    - same client on a different account (``Cu.userid = Ls.L_userid``; group
+      may differ — client identity is the linkage; ``C.loginSid !=
+      Ls.L_loginSid`` in the join already excludes the trivial same-account
+      case). Added 2026-09-15: Perfect Edafiogho (userid 175460) mirrored
+      5-67043828 buys with 5-67043827 sells over the 2026-09-14 weekend gap
+      and the old ``userid !=`` form dropped the pair entirely.
+    - cross-client inside the same MT group (``Cu.groupsid = Ls.L_groupsid``
+      with a different userid — collusion via one IB group).
+
+    ``False`` disables the scope filter (any two accounts; noisy, debug only).
+    """
+    if not cross_client_only:
+        return ""
+    return (
+        "\n         AND (Cu.userid = Ls.L_userid"
+        "\n              OR Cu.groupsid = Ls.L_groupsid)"
+    )
+
+
 def _query_so_ab_pairs(
     conn,
     *,
@@ -218,13 +273,7 @@ def _query_so_ab_pairs(
     close_dates = sorted({start_mt.date(), end_mt.date()})
     date_sql = "(" + ",".join(f"'{d.isoformat()}'" for d in close_dates) + ")"
 
-    if cross_client_only:
-        cross_client_filter = (
-            "\n         AND Cu.groupsid = Ls.L_groupsid"
-            "\n         AND Cu.userid  != Ls.L_userid"
-        )
-    else:
-        cross_client_filter = ""
+    cross_client_filter = _pair_scope_filter(cross_client_only)
 
     sql = f"""
     WITH losers AS (
@@ -507,36 +556,22 @@ def detect_gap_trade_so(
             len(alerts), pairs_with_ip, pairs_shared, len(unique_dates),
         )
 
-        # Min L-loss filter — applied here because `l_profit_usd` is
-        # already CEN-normalised (raw cents on .cent symbols, raw USD
-        # on standard symbols, divided by 100 when needed). Filtering
-        # in SQL would require duplicating the cent-symbol heuristic.
-        #
-        # IMPORTANT bypass: pairs that share at least 1 IP during the
-        # holding window survive the filter regardless of loss size.
-        # Empirically the strongest collusion patterns we've seen sit
-        # at $3-$5 per leg (small individual trades, coordinated across
-        # the same VPN exit nodes), and a flat USD floor designed to
-        # cut dust would silently drop them. IP overlap is a far higher-
-        # specificity signal than loss magnitude, so it always wins.
+        # Min L-loss filter — see `_passes_dust_floor` for the bypass rules
+        # (shared IP / same client). Applied here (not in SQL) because
+        # `l_profit_usd` is already CEN-normalised — filtering in SQL would
+        # require duplicating the cent-symbol heuristic.
         if min_l_loss_usd > 0:
             before = len(alerts)
-            alerts = [
-                a
-                for a in alerts
-                if abs(a.get("l_profit_usd") or 0) >= min_l_loss_usd
-                or (a.get("shared_ip_count") or 0) > 0
-            ]
-            kept_shared = sum(
+            alerts = [a for a in alerts if _passes_dust_floor(a, min_l_loss_usd)]
+            kept_bypassed = sum(
                 1
                 for a in alerts
                 if abs(a.get("l_profit_usd") or 0) < min_l_loss_usd
-                and (a.get("shared_ip_count") or 0) > 0
             )
             logger.info(
                 "Gap Trade SO: min_l_loss_usd=$%.2f filter dropped %d / %d alerts "
-                "(kept %d shared-IP pairs that bypassed the floor)",
-                min_l_loss_usd, before - len(alerts), before, kept_shared,
+                "(kept %d shared-IP / same-client pairs that bypassed the floor)",
+                min_l_loss_usd, before - len(alerts), before, kept_bypassed,
             )
 
         # Client-level historical net deposit for the L side. We
