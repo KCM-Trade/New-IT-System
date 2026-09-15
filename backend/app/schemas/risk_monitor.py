@@ -176,9 +176,11 @@ class GapTradeSoRuleConfig(BaseModel):
     max_open_diff_sec: int = Field(default=300, ge=1, le=3600)
     min_lot_ratio: float = Field(default=0.5, ge=0.01, le=10.0)
     max_lot_ratio: float = Field(default=2.0, ge=0.01, le=10.0)
-    # Strongly recommended True: AB-arbitrage is canonically cross-client
-    # (different userid, same groupsid). Setting False relaxes that and
-    # produces many same-client noise matches; only flip for investigation.
+    # Strongly recommended True. Since 2026-09-15 the True scope keeps the
+    # two real-world AB forms: same client on two of their own accounts
+    # (userid equal, any group) OR cross-client inside the same groupsid.
+    # Setting False drops the scope filter entirely (any two accounts) and
+    # produces unrelated-stranger noise matches; only flip for investigation.
     cross_client_only: bool = True
     # Minimum absolute USD loss on the L (stop-out) leg required for an
     # alert. Without this floor the rule fires on dust SO events — a single
