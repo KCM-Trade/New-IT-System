@@ -35,7 +35,7 @@ Sammy 原公式：`Intraday Profit / Initial Equity >= 300%`，
 3. **量**：分母含當日入金、門檻 50 時（日終口徑，MT5+MT4）≥100% 357 帳戶日/30 天（日均 12）、≥200% 124、≥300% 79。
    ⚠ 這張表是**日終、淨額口徑**，只能當下界（冷審 F3）。
 4. **原公式對跨日持倉重複計分**（v2 新發現）：昨天開的倉、昨日終浮盈 +100 已在 Initial Equity 裡，今天平在 +150，
-   「當日已平倉盈虧」記 150 而真實當日增量是 50。改用**權益增量**口徑後自動消除（見 §公式 v2）。
+   「當日已平倉盈虧」記 150 而真實當日增量是 50。v2 改用權益增量口徑消除了這一條，但引入「浮虧回補算盈利」的新問題，最終口徑見 §公式 v3。
 
 ### 數據源（已探明，全部現成）
 
@@ -196,7 +196,7 @@ net_7d         = 近 net_window_days 日已平倉 PnL 合計 + 當前全部持�
 ### 前端
 
 新 tab，`useGridColumnPersist` + `ColumnVisibilityMenu` + `useFilterPersist`（key 命名須匹配 `^[A-Z0-9_]+_(GRID_STATE|FILTERS|AGGREGATED|ACTIVE_TAB)_V\d+$`），
-列全顯式 `colId`，`InfoHeader` 解釋公式 v2。匯總卡三張：今日命中帳戶數 / 峰值收益率最高 / 命中帳戶當日盈利合計。config drawer 復用 §9 每規則卡片。
+列全顯式 `colId`，`InfoHeader` 解釋公式 v3。匯總卡三張：今日命中帳戶數 / 峰值收益率最高 / 命中帳戶當日盈利合計。config drawer 復用 §9 每規則卡片。
 `SSE` / `/stats` / CSV 三個端點契約同其他 tab（客戶端 `exportGridAsCsv()`）。
 
 ## 驗證（2026-09-18 實跑，修訂公式，門檻 50/30，日終口徑）
@@ -222,7 +222,7 @@ net_7d         = 近 net_window_days 日已平倉 PnL 合計 + 當前全部持�
 ## 假設 / 待驗證
 
 - [x] 郵件收件人：risk@kcmtrade.com，cc kieran.xiang@kohleservices.com + lawrence.li@kohleservices.com；CS 暫不發（2026-09-18 拍板）
-- [ ] Sammy 對「公式 v2（權益增量口徑）」與「門檻 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
+- [ ] Sammy 對「公式 v3（隔夜倉只算盈利區新增）」與「門檻 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
 - [ ] 「今日日初」從 `mt5_daily` 推導在 DST 切換日的實測（下一次切換 2026-10-25 前後）
 - [ ] MT4 分母緩存後每 tick 實測耗時（目標 < 10s 三台合計）
 - [x] 不做 shadow，兩檔上線即發，人工觀察後再調（2026-09-18 拍板）
