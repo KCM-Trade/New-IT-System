@@ -1,6 +1,6 @@
 ---
 id: OPT-0062
-title: 即日高收益率自動偵測與郵件警報 —— risk-monitor 新規則 Intraday Return（band 131-140）+ detail 表 + 郵件源
+title: 即日高收益率自動偵測與郵件警報 —— risk-monitor 新規則 Intraday Return（band 131-140）+ detail 表 + 郵件源 + 回測腳本
 status: ready
 priority: P1
 area: mixed
@@ -9,228 +9,242 @@ created: 2026-09-17
 related: [[OPT-0046]] [[OPT-0033]] [[OPT-0043]] [[OPT-0021]]
 ---
 
+> **v2（2026-09-18）**：吸收獨立冷審 21 條 finding + 風控 Sammy 第二封回覆（加「近 7 日淨利 ≥ 0」過濾 +
+> 兩項驗證），並用修訂公式實跑了 9/14–9/17 回測與 9/17 全盤清單（結果見 §驗證）。v1 的「方案」段已整體替換；
+> 冷審原文濃縮在 §冷審對照表。**本文件自洽，實施 worker 只讀這一份即可。**
+
 ## 問題
 
-風控（Sammy，2026-09-17 郵件）反映越南客戶用小本金 + 鎖倉 + 階梯加碼在震盪市裡刷出當日
-數倍收益，要求系統實時監控所有活躍帳戶，**當日收益率 ≥ 閾值即發郵件到風控與 CS**。
+風控（Sammy，2026-09-17 郵件）反映越南客戶用小本金 + 鎖倉 + 階梯加碼在震盪市裡刷出當日數倍收益，
+要求系統實時監控所有活躍帳戶，**當日收益率 ≥ 閾值即發郵件到風控與 CS**。
 
-用戶（Kieran）拍板：100% 這檔也要收郵件，但按檔分級發。
+用戶（Kieran）拍板：100% 這檔也要收郵件，按檔分級發。
+Sammy 2026-09-18 回覆：四點修改建議照做；**加過濾「近 7 日累計淨利 ≥ 0」**（排除「當天僅反彈、整體仍虧」的客戶）；
+要求兩項驗證：① 9/14–9/17 在 300% 下必須命中 67044208 / 60006521 / 60011522；② 用新條件跑昨天全盤並匯出清單。
 
 Sammy 原公式：`Intraday Profit / Initial Equity >= 300%`，
-`Initial Equity = 當天開盤 Balance + 開盤時未平倉 Floating`，
-`Intraday Profit = 當日已平倉盈虧 + 當前浮動盈虧`。
+`Initial Equity = 當天開盤 Balance + 開盤時未平倉 Floating`，`Intraday Profit = 當日已平倉盈虧 + 當前浮動盈虧`。
 
-## 背景（本 OPT 之前已做的分析，勿重做）
+## 背景（已做的分析，勿重做）
 
-### 公式核過的三個問題（近 30 天真數據，8/16–9/16，三台服務器）
+### 原公式的問題（近 30 天真數據，8/16–9/16，三台服務器）
 
-1. **分母為零**。當天才入金的帳戶「開盤權益」= 0，公式算不出。MT5 近 30 天有 **532** 個
-   「日初權益 ≤ 0 但當日盈利」的帳戶日；**Sammy 自己舉的例子 67044208 就是其中之一**
-   （9/16 06:58 註冊、07:03 入金 50 USD、當日 88 筆 XAUUSD 賺 478.27）。
-   → 分母改為 **昨日日終權益 + 當日入金**，例子帳戶 = 478/50 = 957%。
-2. **沒地板**。1 USD 賺 3 USD 也是 300%。300% 檔不設地板 MT5 30 天 288 帳戶日，設
-   「初始權益 ≥ 50 USD」後剩 59。
-3. **量**。分母 = 昨日日終權益 + 當日入金、地板 50 USD 時（日終口徑，MT5 + MT4 兩台合計）：
+1. **分母為零**：當天才入金的帳戶開盤權益 = 0。MT5 近 30 天 532 個「日初權益 ≤ 0 但當日盈利」帳戶日，
+   Sammy 舉的 67044208 就是（9/16 06:58 註冊、07:03 入金 50、當日 88 筆 XAUUSD 賺 478.27）。
+2. **沒地板**：300% 檔不設地板 MT5 30 天 288 帳戶日，「初始權益 ≥ 50 USD」後剩 59。
+3. **量**：分母含當日入金、地板 50 時（日終口徑，MT5+MT4）≥100% 357 帳戶日/30 天（日均 12）、≥200% 124、≥300% 79。
+   ⚠ 這張表是**日終、淨額口徑**，只能當下界（冷審 F3）。
+4. **原公式對跨日持倉重複計分**（v2 新發現）：昨天開的倉、昨日終浮盈 +100 已在 Initial Equity 裡，今天平在 +150，
+   「當日已平倉盈虧」記 150 而真實當日增量是 50。改用**權益增量**口徑後自動消除（見 §公式 v2）。
 
-   | 閾值 | 帳戶日 / 30 天 | 日均 | 單日最多 |
-   |---|---|---|---|
-   | ≥100% | 357 | 12 | ~40 |
-   | ≥200% | 124 | 4 | ~18 |
-   | ≥300% | 79 | 2.6 | ~15 |
+### 數據源（已探明，全部現成）
 
-   盤中衝到閾值又回吐的沒算在內，實時量只會更高 → 100% 檔不能逐條發。
-
-### 數據源（已探明，全部現成，無需重建歷史）
-
-| 項 | MT5 (sid 5, `mt5_live`) | MT4 Live / Live2 (sid 1 / 6, `mt4_live` / `mt4_live2`) |
+| 項 | MT5 (sid 5, `mt5_live`) | MT4 Live / Live2 (sid 1 / 6) |
 |---|---|---|
-| 日初權益 | `mt5_users.EquityPrevDay`（現成列，服務器日切自動歸零） | `mt4_daily` 主鍵 (LOGIN, TIME)，取 `TIME < 今日日初` 最近一行的 `EQUITY`；無行 → 0 |
-| 當日已平倉盈虧 | `mt5_deals` 當日 `Entry IN (1,3)`，Profit+Storage+Commission | `mt4_trades` 當日 `CLOSE_TIME`，PROFIT+SWAPS+COMMISSION |
-| 當前浮動 | `mt5_positions` Profit+Storage（現成 `rule_quick_profit_service._query_mt5_floating` / `rule_martingale_service._query_mt5_open_positions`） | `mt4_trades CLOSE_TIME='1970-01-01'`（現成 `_query_mt4_floating` / `_query_mt4_open_positions`） |
-| 當日入金（只算正向） | `mt5_deals Action=2 AND Profit>0` | `mt4_trades CMD=6 AND PROFIT>0` |
+| 昨日日終權益 | `mt5_users.EquityPrevDay`（✅ 冷審抽 14 帳戶與 `mt5_daily.ProfitEquity` 全等） | `mt4_daily` 主鍵 (LOGIN, TIME) 點查 `TIME < 今日日初` 最近一行 `EQUITY`（無 PREVEQUITY 列，只有 PREVBALANCE）；週末無行，「最近一行」自然覆蓋 |
+| 7 日前日終權益 | `mt5_daily` 按 `Datetime`（PK 首列，int 秒）範圍取 | 同上點查 `TIME = D-7 23:59:59`（無行往前找） |
+| 當前權益 | `mt5_users.Balance + Credit` + `mt5_positions` Σ(Profit+Storage) | `mt4_users.BALANCE + CREDIT` + `mt4_trades CLOSE_TIME='1970' Σ(PROFIT+SWAPS)`（現成 `_query_mt4_floating`） |
+| 當日 / 7 日餘額操作 | `mt5_deals Action IN (2,3)`，**按 `Timestamp`（FILETIME，有索引）切日，別用 `Time`**（19.3s vs 0.25s） | `mt4_trades CMD IN (6,7)` 按 `CLOSE_TIME` |
+| 當日成交（行為特徵） | `mt5_deals Action IN (0,1)` 按 `Timestamp` | `mt4_trades CMD IN (0,1)` 按 `OPEN_TIME` |
+| 幣種權威 | `account_enrichment.build_currency_map()`（**檢測前**調） | 同左 |
 
-🔴 **`mt4_daily` 不能按 TIME 範圍掃**：主鍵是 (LOGIN, TIME)，全表掃實測 > 300s 被
-`MAX_EXECUTION_TIME` 殺。必須先圈候選 login 再按主鍵點查。
-`mt5_daily` 主鍵 (Datetime, Login)，按日範圍掃 OK（回測用），但線上直接讀 `mt5_users.EquityPrevDay` 更省。
+🔴 `mt4_daily` 不能按 TIME 範圍掃（全表 > 300s 被殺），只能先圈候選 login 再主鍵點查；實測 425 login 點查 5.37s，
+真實候選 MT4 側 ~800 → 分母**按 (login, trading_day) 進程內緩存**，每天每 login 只查一次。
+🔴 `mt5_daily` 按 `Login` 點查直接超時（PK 首列是 `Datetime`）。
+MT5 `Datetime` = 服務器本地日終 23:59:59 當 UTC 存的 unix 秒；從庫 session tz = `Indian/Antananarivo`（+03:00）。
 
-MT5 `Datetime` 是「服務器本地時間當 UTC 存」的 unix 秒（日終 23:59:59）；
-`mt5_deals.Time` 在從庫是 DATETIME（服務器時間）。從庫 session tz = `Indian/Antananarivo`（+03:00）。
+### 「入金」白名單（冷審 F1，實測 9/11–9/17 MT5 Action=2 Comment 分布）
 
-### 行為特徵（同一批數據上驗過，給 CS 判斷「鎖倉 + 高頻」用）
+正向 `Action=2` 裡混著 **`Balance Adjustment Zero`（64 筆 / $4.02M，單筆可達 $779k，運維批量調帳）**、`Adjustment - *`、
+`Initial balance`（$9.85M，開戶初始）。真入金形態：`DEPOSIT` / `Deposit` / `D- …` / `D-#-…` / `XTHB-Deposit-` / `IT-D #`（內轉入）/
+`IT-Third Party-D` / `IB Wallet Transfer` / `OnefinVA#`。MT4 `CMD=6` 同型（`D-…` / `IT-D` / `IB Wallet Transfer` / `Adjustment - #` / `Balance Adjustment Zero`）。
+**口徑：黑名單排除 `Comment` 以 `Balance Adjustment` / `Adjustment` / `Initial` 開頭者，其餘正向 = 入金**（含內轉入，那是客戶自己的錢）。
+Credit / Bonus 走 `Action=3` / `CMD=7`（7 天 Credit In $92.9k、Bonus In $33.2k；`mt5_users` 1,059 帳戶持 credit $3.2M、`mt4_live` 31 帳戶 $6.31M）。
 
-MT5 近 30 天 ≥100%（地板 50）的 208 個帳戶日：鎖倉占比 ≥30% 的 31 個、
-開倉 ≥30 筆且中位持倉 ≤15 分鐘的 91 個、兩者都滿足 14 個。
-例子帳戶 67044208：88 筆 / 中位持倉 10.5 分鐘 / 多空同時持有時間占 88%。
-9/15 收益 8021% 的 60006521（被黑帳戶案）同族：258 筆 / 82% 鎖倉。
-現有對沖規則（91-100，3 秒內同開多空且完美 1:1）**抓不到**這種「先空、虧了再逐筆補多」，
-所以要新加「鎖倉時長占比」維度。
+### 行為特徵（MT5 近 30 天 ≥100% 的 208 帳戶日）
 
-回測腳本（scratchpad，未入庫，寫進 item 供重跑參考）：`bt_mt5.py` 讀 `mt5_daily`
-`DailyProfit / (EquityPrevDay + max(DailyBalance,0))`；`bt_fxbo.py` 讀
-`fxbackoffice.stats_balances` 相鄰日 `endingEquity` 差 − `stats_transactions` 淨流；
-`lock_profile.py` 讀 `mt5_deals` 掃事件算鎖倉占比。
+鎖倉占比 ≥30% 的 31、開倉 ≥30 筆且中位持倉 ≤15 分鐘的 91、兩者都滿足 14。
+67044208：88 筆 / 中位 10.5 分鐘 / 鎖倉 88%；60006521（9/15，8021%）：258 筆 / 82%。
+現有對沖規則（91-100，3 秒內同開多空且完美 1:1）抓不到「先空、虧了再逐筆補多」。
 
-## 方案（已與用戶對齊 2026-09-17）
+## 公式 v2（實施口徑，SSOT）
+
+以 MT 服務器交易日 D 為單位，對每個候選帳戶：
+
+```
+prev_eq        = 昨日（D-1，週末往前找）日終權益
+dep_in         = D 內真入金（Action=2/CMD=6，Profit>0，Comment 不在黑名單）
+cred_in        = D 內 credit/bonus 入（Action=3/CMD=7，Profit>0）
+net_flow(D)    = D 內全部餘額 + credit 操作的帶號合計（含出金、調帳；調帳單獨記 adj_excluded）
+equity_now     = Balance + Credit + Σ floating
+initial_equity = prev_eq + dep_in + cred_in            （include_deposits_in_base=false 時 = prev_eq）
+intraday_profit= equity_now − prev_eq − net_flow(D)    （= 當日已平倉 + Δ浮動；出金自動加回；跨日持倉不重複計分）
+return_pct     = 100 × intraday_profit / initial_equity
+net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
+觸發 = initial_equity ≥ min_initial_equity_usd
+     ∧ intraday_profit ≥ min_profit_usd
+     ∧ return_pct ≥ min_return_pct
+     ∧ net_7d ≥ min_net_7d_usd
+     ∧ [可選] lock_pct ≥ min_lock_pct ∧ median_hold_min ≤ max_median_hold_min
+```
+
+- 對「當日開、當日平」的目標人群，`intraday_profit` 與 Sammy 的「已平倉 + 當前浮動」數值完全一致；只在跨日持倉時不同（v2 更準）。
+- CEN：比率免換算；三個 USD 地板與手數 ÷100；幣種在檢測前取。
+- `initial_equity ≤ 0` 一律跳過（不再有 ÷0）。
+- 「當天」= MT 服務器交易日。⚠ MT 日界隨 DST（夏 GMT+3 / 冬 GMT+2），`BROKER_TZ_OFFSET` 硬編碼 +03:00 —— 本規則是唯一以日界為口徑的規則，
+  **「今日日初」從 `mt5_daily` 最新 `Datetime` + 1s 推導**（跟隨服務器實際歸零點），MT4 沿用同一時刻；不用 `CURDATE()`。上線前實測一次。
+- 排除：demo/test 組（`sql_helpers.demo_test_filter_sql()`）、MT4 login 7 開頭。⚠ risk-monitor SKILL.md 寫的 `RISK_MONITOR_EXCLUDED_LOGINSIDS` /
+  `excluded_login_sql` **在代碼裡不存在**，只有反向的 `RISK_MONITOR_FORCE_INCLUDE_LOGINSIDS`；那段 skill 文檔順手修掉。
+
+## 方案 v2
 
 ### 規則定位
 
 - 名稱：即日高收益 · Intraday Return。新 tab 放「馬丁」與「Gap Trade」之間。
-- band **131-140**：`INTRADAY_RETURN_RULE_ID_BASE = 131` / `INTRADAY_RETURN_RULE_ID_MAX = 140`，
-  rule_id = 131 + 列表位置。常量放 `routes/risk_monitor.py`（與其他 band 同處）。
-- 粒度：**帳戶級，每 MT 交易日一條**；`symbol` 填當日主力品種。
-- tier：**slow tier**（5 分鐘，與快速獲利同組）。狀態型不是事件型，不走 event-gated。
-  `_is_fast_tier_rule_id` 不動（131-140 自然落 slow 側），但要加測試釘住。
-- 有「立即掃描」（共享 scan-now）。
-- **分檔靠多條規則**（Rule 1 = 100%、Rule 2 = 300%），各自去重、各自觸發，郵件中心按 rule_id 訂閱；
-  不另做 severity。
+- band **131-140**：`INTRADAY_RETURN_RULE_ID_BASE = 131` / `_MAX = 140`，rule_id = 131 + 列表位置，常量放 `routes/risk_monitor.py`。
+- 粒度：帳戶級，每 MT 交易日每規則一條；`symbol` 填當日主力品種。
+- **獨立 job**（照 `_run_rebate_arb_scan` / `_locked_rebate_arb_scan`：同一個 `_scheduler.add_job()`、**自己的 lock 不占 `_scan_lock`**、
+  `INTRADAY_RETURN_INTERVAL_MIN` 默認 5，env 可調、`INTRADAY_RETURN_SCAN_ENABLED` 默認 true、dev compose 關）。
+  不進 slow tier：slow tier 週期是 `scan_interval_min`（默認 10、5–60 UI 可改），且 `BURST_FAST_TIER_ENABLED` off 時只有 `tier="all"`。
+- 仍要把 `(131, 140)` 加進 `_SLOW_TIER_RULE_BANDS` 並把 `_MAX_ALLOCATED_RULE_ID` 130→140（`burst_open_scheduler.py:277-284`），
+  否則 `test_scheduler_tiers.py:488` 的 anti-drift 循環根本不覆蓋新 band。
+- 「立即掃描」按鈕：有，觸發本 job 的 `_locked_*` 入口（不是共享 scan-now）。
+- 分檔靠多條規則（Rule 1 = 100%、Rule 2 = 300%），**高檔命中抑制低檔**（同帳戶同日 132 命中則 131 不再發、已發的 131 在郵件裡標「已升檔」），不另做 severity。
 
-### 規則參數 `IntradayReturnRule`（最多 10 條，`MAX_RULES`）
+### 規則參數 `IntradayReturnRule`（最多 10 條）
 
 | 參數 | 類型 / 範圍 | 默認 | 含義 |
 |---|---|---|---|
 | `name` | str 1-100 | — | 快照進 `rule_label` |
 | `enabled` | bool | true | 單條停車 |
-| `min_return_pct` | float 10–100000 | 100 | `intraday_profit / initial_equity × 100 ≥ 此值` |
-| `min_initial_equity_usd` | float 0–1e6 | 50 | 分母地板（CEN ÷100 後比） |
-| `min_profit_usd` | float 0–1e7 | 100 | 分子地板 |
-| `include_floating` | bool | true | 分子是否含當前浮動（同快速獲利） |
+| `min_return_pct` | float 10–100000 | 100 / 300 | 收益率閾值 |
+| `min_initial_equity_usd` | float 0–1e6 | 50 | 分母地板 |
+| `min_profit_usd` | float 0–1e7 | **30** | 分子地板。⚠ 不能是 100：與地板 50 疊加 = 50 USD 帳戶要 200% 才觸發，100% 檔對目標人群失效 |
+| `min_net_7d_usd` | float −1e7–1e7 | 0 | Sammy 新增：近 N 日淨利 ≥ 此值 |
+| `net_window_days` | int 1–30 | 7 | 上一條的窗口 |
+| `include_deposits_in_base` | bool | true | 分母是否加當日入金 + credit（冷審要求可關） |
+| `min_lock_pct` | float 0–100, nullable | null | 可選：鎖倉占比 ≥（Sammy 的第二個需求「鎖倉 + 高頻」自動篩） |
+| `max_median_hold_min` | float 0–1440, nullable | null | 可選：中位持倉 ≤ |
+| `lock_ratio_floor` | float 0–1 | 0.5 | 鎖倉判定「小邊 ≥ 大邊 × 此值」（v1 拍的 0.5，做成參數） |
 
-`IntradayReturnConfig = {enabled: bool, rules: [...]}`，與 `MartingaleConfig` 同形。
-
-**固定口徑（不做參數，寫進 InfoHeader tooltip + docs）**：
-- 交易日 = MT 服務器日（與 `EquityPrevDay` 歸零時點對齊）。
-- 初始權益 = 昨日日終權益 + 當日入金（正向 balance 操作，含內轉入；**出金不減分母**）。
-  分母 ≤ 0 一律跳過不報（不再有 ÷0）。
-  > 待用戶拍板：`include_deposits_in_base` 做參數還是固定 true。建議固定。
-- 當日盈利 = 當日已平倉 profit+swap+commission + 當前浮動 profit+swap。
-- CEN：比率免換算，兩個 USD 地板 ÷100，手數 ÷100；貨幣權威 `get_account_info_map()`。
-- 排除：demo/test 組（`sql_helpers.demo_test_filter_sql()`）、MT4 login 7 開頭。⚠ risk-monitor SKILL.md 寫的
-  `RISK_MONITOR_EXCLUDED_LOGINSIDS` / `excluded_login_sql` **在代碼裡不存在**（冷審 F8），只有反向的
-  `RISK_MONITOR_FORCE_INCLUDE_LOGINSIDS`；那段 skill 文檔待修。
+**固定不做參數**：分子含浮動（權益增量口徑天然含，改成可關會讓規則在事件型/快照型之間變性、歷史不可比）；交易日邊界；入金黑名單（代碼常量）。
+`IntradayReturnConfig = {enabled, rules}`，與 `MartingaleConfig` 同形。
 
 ### 檢測流程（每 tick，三台服務器各一遍）
 
-1. 候選 = 當日有成交（開或平）的 login ∪ 當前有持倉的 login。
-2. 分母：MT5 讀 `mt5_users.EquityPrevDay`；MT4 對候選按主鍵點查 `mt4_daily`。
-3. 分子：當日已平倉聚合 + 浮動聚合，按 login，只查候選。
-4. 先過兩個地板，再算比率，再逐條規則比閾值。
-5. **只對命中的帳戶**再拉當日成交明細算三個行為特徵（筆數、中位持倉秒、鎖倉占比）。
-   鎖倉占比定義：同品種多空同時持有且小邊 ≥ 大邊一半的時間 ÷ 有持倉的時間。
-6. 去重鍵 `(rule_id, server, login, trading_day)`：每規則每帳戶每交易日一條；
-   重啟從 SQLite 回種當日已發（照 `get_recent_quick_profit_alerts` 的模式），否則重啟整批重發。
+1. 交易日邊界：`mt5_daily` 最新 `Datetime` + 1s（PK 倒序 LIMIT 1）。跨日時清空當日緩存。
+2. 候選 = 當日有成交（開或平）∪ 當前有持倉 ∪ 當日有餘額操作 的 login（實測 9/17：MT5 成交 912 / 持倉 630、MT4_Live 537 / 419、Live2 44 → 約 1,500–1,800）。
+3. 幣種：對候選調 `build_currency_map()`。
+4. 分母：按 (server, login, trading_day) 進程內緩存 `prev_eq` 與 `eq_d7`；首 tick 全量、後續只補新 login。MT5 讀 `EquityPrevDay`（D-7 走 `mt5_daily`），MT4 主鍵點查 `mt4_daily`。
+5. 流水：當日 + 7 日餘額/credit 操作（小表），算 `dep_in / cred_in / net_flow / adj_excluded / withdrawals_out`。
+6. 當前權益：Balance + Credit + Σfloating（現成浮動查詢）。
+7. 先過三個地板（含 7 日淨利），再算比率，再逐條規則比閾值；命中且規則帶可選行為條件時，**只對命中帳戶**拉當日成交算 `trades_today / median_hold / lock_pct / top_symbol`。
+8. 去重：`(rule_id, server, login, trading_day)`。**每 tick 從 SQLite 回種當日已發**（照 `get_rebate_arb_alerted_userids` 寫 `get_intraday_return_alerted_keys(trading_day)`）——
+   `alert_events` 無唯一約束、slow tick 會替換自己的告警段（`burst_open_scheduler.py:669-678`），只靠內存 = 一天 288 封。
+9. 已命中的帳戶後續 tick **UPSERT detail 行**（最新 `return_pct` / 行為特徵 / `peak_return_pct` 取最大），不新增 alert 行、不重發。
+10. 連接自己開，`SET SESSION MAX_EXECUTION_TIME`（db-timeout-guard；`rule_quick_profit_service._get_connection()` 沒釘）。tick 耗時 DEBUG、命中才 INFO（OPT-0058）。
 
 ### 落庫 `alert_intraday_return_detail`（主表 23 列不動，OPT-0008 五步 LEFT JOIN）
 
-`trading_day` · `prev_day_equity` · `deposits_today` · `initial_equity` ·
-`closed_pnl_today` · `floating_pnl` · `intraday_profit` · `return_pct`（觸發時快照，不覆蓋）·
-`trades_today` · `median_hold_sec` · `lock_pct` · `top_symbol`。
+`trading_day` · `prev_day_equity` · `deposits_in` · `credit_in` · `withdrawals_out` · `adj_excluded` · `initial_equity` ·
+`equity_now` · `intraday_profit` · `return_pct` · `peak_return_pct` · `net_7d` · `flag_withdraw_gt_half_deposit`（當日出金 > 入金 × 50%，冷審 F6 規避路徑）·
+`trades_today` · `lots_today` · `median_hold_sec` · `lock_pct` · `top_symbol` · `updated_at`。
 
-主表映射：`order_count` = 當日筆數、`total_lots` = 當日手數、`first_open`/`last_open` = 當日首末成交、
-enrichment 走 `get_account_info_map()`（equity/balance/group/currency/zipcode/net_deposit_hist）。
-`return_pct` 要可排序 → 後端 `SORTABLE_ALERT_COLS` + `_SORT_COL_DB_NAME`、前端 `SORTABLE_COL_IDS`。
+主表映射：`order_count` = 當日筆數、`total_lots` = 當日手數、`first_open`/`last_open` = 當日首末成交、enrichment 走 `get_account_info_map()`。
+`return_pct` / `net_7d` 可排序 → 後端 `SORTABLE_ALERT_COLS` + `_SORT_COL_DB_NAME`、前端 `SORTABLE_COL_IDS`。
+`_ALERT_FROM_CLAUSE` 將是第 9 個 LEFT JOIN，可接受；順手在 follow-up 記「按 band 動態選 JOIN」。
 
 ### 郵件
 
-`MAIL_SOURCES["intraday_return"]`，band (131,140)，realtime。照最新範例 `services/alert_mail/rebate_arb.py`
-（4 個 fetch_* + template_builder + registry entry）。可過濾字段：`return_pct` / `intraday_profit` /
-`initial_equity` / `trades_today` / `lock_pct`。模版按 alert-email-style（英文正文、雙語標題、無 emoji、
-MT/HK 雙時間、CRM 連結）：帳戶信息 + 初始權益拆解 + 當日盈虧拆解 + 收益率 + 三個行為特徵。
-上線 seed 兩條訂閱：風控郵箱訂 131+132、CS 郵箱只訂 132（收件人待用戶給）。
+`MAIL_SOURCES["intraday_return"]`，band (131,140)，realtime（realtime 本來就是每 tick 每訂閱一封 digest，命中合併，配按日去重後 100% 檔一天最多十幾封，不另做匯總層）。
+照 `services/alert_mail/rebate_arb.py`（4 個 fetch_* + template_builder + registry entry）。可過濾字段：`return_pct` / `intraday_profit` / `initial_equity` / `net_7d` / `trades_today` / `lock_pct`。
+模版按 alert-email-style：帳戶信息 + 初始權益拆解（昨日日終 / 入金 / credit）+ 當日盈虧拆解 + 收益率（含峰值）+ 7 日淨利 + 三個行為特徵 + 出金標記 + CRM 連結。
+**上線先 shadow 1–2 週**：不 seed 訂閱、只落庫，用真實 tick 口徑看 100% 檔的量再決定發不發；之後風控郵箱訂 131+132、CS 只訂 132（地址待用戶給）。
+
+### 回測 / 清單腳本（交付物，Sammy 會反覆要）
+
+`backend/scripts/intraday_return_backtest.py`：`--from --to --threshold --floors --net-window` → CSV + 可選郵件。
+原型已在 scratchpad `verify.py`（日終口徑：`mt5_daily` + `mt5_deals` 流水；MT4 走 `mt4_trades` 圈候選 + `mt4_daily` 主鍵點查），
+輸出列 = detail 表列。⚠ 日終口徑是下界，跟線上 tick 口徑（盤中峰值）不同，腳本 docstring 要寫明。
 
 ### 前端
 
-新 tab，`useGridColumnPersist` + `ColumnVisibilityMenu` + `useFilterPersist`（key 命名須匹配
-`^[A-Z0-9_]+_(GRID_STATE|FILTERS|AGGREGATED|ACTIVE_TAB)_V\d+$`），列全顯式 `colId`，
-`InfoHeader` 解釋公式。匯總卡三張：今日命中帳戶數 / 最高收益率 / 命中帳戶當日盈利合計。
-config drawer 復用 page-style-conventions §9 每規則卡片。
+新 tab，`useGridColumnPersist` + `ColumnVisibilityMenu` + `useFilterPersist`（key 命名須匹配 `^[A-Z0-9_]+_(GRID_STATE|FILTERS|AGGREGATED|ACTIVE_TAB)_V\d+$`），
+列全顯式 `colId`，`InfoHeader` 解釋公式 v2。匯總卡三張：今日命中帳戶數 / 峰值收益率最高 / 命中帳戶當日盈利合計。config drawer 復用 §9 每規則卡片。
+`SSE` / `/stats` / CSV 三個端點契約同其他 tab（客戶端 `exportGridAsCsv()`）。
+
+## 驗證（2026-09-18 實跑，修訂公式，地板 50/30，日終口徑）
+
+**① 9/14–9/17 MT5 回測，閾值 300%**：三個重點帳戶全部精準命中，7 日淨利過濾對它們零影響。
+
+| 帳戶 | 日期 | 昨日日終 | 入金 | 初始權益 | 當日盈利 | 收益率 | 7 日淨利 |
+|---|---|---|---|---|---|---|---|
+| 60011522 | 9/14 | 0.19 | 50 | 50.19 | 309.60 | 617% | +309.60 |
+| 60006521 | 9/15 | 0.79 | 75 | 75.79 | 6,079.22 | 8021% | +6,079.22 |
+| 60011522 | 9/15 | 359.79 | 0 | 359.79 | 3,388.25 | 942% | +3,697.85 |
+| 67044208 | 9/16 | 0.00 | 50 | 50.00 | 478.27 | 957% | +478.27 |
+
+四天 300% 總命中 2 / 4 / 3 / 0（7 日過濾後不變）；100% 檔 11 / 7 / 12 / 5 → 過濾後 11 / 7 / 10 / 4。
+
+**② 9/17 全盤（三台）**：≥100% 17 帳戶（MT5 5 / MT4 12）→ 7 日過濾後 13；≥200% 5 → 3；≥300% 2 → 1。
+7 日過濾砍掉的 4 個正是「本週已虧、當天反彈」（如 8612530：當日 +382 / 7 日 −314；8515329：+280 / −723）。
+清單 CSV：scratchpad `intraday_return_2026-09-17.csv`（已發 Kieran 郵箱）。
+兩個 `trades_today=0` 的 MT4 命中（8521502 / 8611807）是純持倉浮動變化 —— 權益增量口徑下的預期行為，郵件裡要能看出來（`trades_today` 列）。
 
 ## 假設 / 待驗證
 
-> 🔴 **2026-09-17 冷審（獨立 Opus agent，零上下文）結論：不能按上面「方案」原樣開工**，先按下方 §冷審 的 8 條必改項修訂方案。
-
-- [ ] `include_deposits_in_base` 固定 true（建議）還是做參數 —— 用戶拍板
 - [ ] 郵件收件人：風控 + CS 具體地址
-- [ ] Sammy 對「分母加當日入金 + 50/100 USD 地板 + 100% 匯總、300% 即發」的回覆（回信草稿已發 Kieran 審）
-- [ ] MT4 候選帳戶 `mt4_daily` 主鍵點查在 slow tick 內的實測耗時（候選預估數百 login）
-- [ ] `mt5_users.EquityPrevDay` 在週一（跨週末）的值是否為週五日終（預期是）
+- [ ] Sammy 對「公式 v2（權益增量口徑）」與「地板 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
+- [ ] 「今日日初」從 `mt5_daily` 推導在 DST 切換日的實測（下一次切換 2026-10-25 前後）
+- [ ] MT4 分母緩存後每 tick 實測耗時（目標 < 10s 三台合計）
+- [ ] shadow 期後 100% 檔是否發郵件（用真實 tick 口徑定）
 
 ## 驗收標準
 
-- [ ] 三台服務器 slow tick 內完成，tick 耗時記 DEBUG、命中才 INFO（OPT-0058 口徑）
-- [ ] 分母 ≤ 0 跳過；兩個地板生效；CEN ÷100；rule_id override guard；同日去重 + 跨日重報；重啟回種
-- [ ] `alert_intraday_return_detail` 落庫 + `/alerts` 拍扁返回 + `return_pct` 服務端排序
-- [ ] 郵件源註冊 + anti-drift 測試 + test-send 可用；realtime 模式下命中即發
-- [ ] 前端 tab 四個 hook 齊全，tsc/vitest 綠；配置 drawer 可增刪規則
-- [ ] 例子帳戶 67044208 的 9/16 數據回放能命中 100% 與 300% 兩條（回放測試以相對時間種子）
-- [ ] 測試種子時間戳全部相對 `datetime.now()`（OPT-0041）
-- [ ] 回寫 risk-monitor skill（references 各文件 + Rule ID 表 131-140）+ docs/features/risk-monitor.md + alert-mail-center skill
+- [ ] 獨立 job + 自有 lock + env 開關與週期；`_SLOW_TIER_RULE_BANDS` 含 (131,140) 且 `_MAX_ALLOCATED_RULE_ID=140`，tier anti-drift 測試覆蓋
+- [ ] 公式 v2 逐項單測：÷0 跳過、三地板、CEN ÷100（檢測前取幣種）、入金黑名單、credit 進分母、出金加回、跨日持倉不重複計分、7 日淨利、可選行為條件
+- [ ] 去重每 tick 回種 + UPSERT detail + `peak_return_pct`；高檔抑制低檔
+- [ ] MT5 切日用 `Timestamp`；MT4 只主鍵點查 `mt4_daily`；分母按日緩存；`MAX_EXECUTION_TIME` 釘住
+- [ ] `alert_intraday_return_detail` 落庫 + `/alerts` 拍扁 + `return_pct` / `net_7d` 服務端排序
+- [ ] 郵件源註冊 + anti-drift + test-send；shadow 期不 seed 訂閱
+- [ ] 前端 tab 四個 hook 齊全，tsc/vitest 綠；drawer 可增刪規則（含可選行為條件與 nullable 顯示）
+- [ ] `backend/scripts/intraday_return_backtest.py` 落地，重跑 §驗證 ① 得到同樣四行
+- [ ] 回放測試：三個重點帳戶各自日期在 300% 命中（種子時間戳相對 `datetime.now()`，OPT-0041）
+- [ ] 回寫 risk-monitor skill（Rule ID 表 131-140、references、修掉不存在的 `excluded_login_sql`）+ docs/features/risk-monitor.md + alert-mail-center skill
+
+## 冷審對照表（2026-09-18 獨立 Opus reviewer，21 條；本會話逐條核對）
+
+| # | finding | 處置（在 v2 哪裡） |
+|---|---|---|
+| F1 🔴 | Action=2 正向含調帳 / Initial balance | §入金白名單（黑名單口徑）+ `adj_excluded` 列 |
+| F2 🔴 | credit / bonus 漏掉 | 分母加 `cred_in`，detail 單列 |
+| F3 🔴 | 回測 ≠ 上線口徑 | shadow 1–2 週；回測腳本 docstring 標「下界」 |
+| F4 🟡 | EquityPrevDay 語義（已核實為真） | — |
+| F5 🟡 | 日界隨 DST | 從 `mt5_daily` 推導日初，不用 CURDATE |
+| F6 🟡 | 出金不減分母可被利用 | `flag_withdraw_gt_half_deposit` 標記 |
+| F7 🔴 | 去重只在重啟回種會每 tick 重發 | 每 tick 回種 + UPSERT |
+| F8 🔴 | `excluded_login_sql` 不存在 | 改 `demo_test_filter_sql()`，修 skill 文檔 |
+| F9 🟡 | tier 常量不動則護欄失效 | 加 (131,140) + 140 |
+| F10 🟡 | slow tier 不是 5 分鐘 | 獨立 job |
+| F11 🟡 | 缺 MAX_EXECUTION_TIME | 自開連接釘超時 |
+| F12 ⚪ | realtime 已是 digest | 不另做匯總層 |
+| F13 🔴 | MT5 切日用 Timestamp | 數據源表 |
+| F14 🟡 | MT4 點查 5.37s/425 + 占 `_scan_lock` | 分母按日緩存 + 自有 lock |
+| F15 🟡 | 行為特徵只算一次 | UPSERT + `peak_return_pct` |
+| F16 ⚪ | 9 個 LEFT JOIN | follow-up |
+| F17 🔴 | CEN 地板差 100 倍 | 檢測前 `build_currency_map()` |
+| F18 🔴 | 兩地板互吃 | `min_profit_usd` 默認 30 |
+| F19 🟡 | 分檔無抑制 | 高檔抑制低檔 |
+| F20 🟡 | 參數/固定反了 | `include_deposits_in_base` / `lock_ratio_floor` 做參數；含浮動固定 |
+| F21 🟡 | AC 缺 shadow / mt5_daily 點查陷阱 / SSE-stats-CSV / 快照型決策 | 已補；快照型漂移對本規則不成立（只關心比率往上、按日去重、回落不重報） |
 
 ## 筆記
 
-- 工期估：後端檢測 + detail + 去重 2 天、郵件源 1 天、前端 2 天、測試部署 1 天 ≈ 6 個工作日；
-  只上郵件不上 tab ≈ 3 天。
-- 走 OPT 是用戶明示（2026-09-17）；按 tracker README 這本屬 net-new feature，先例 OPT-0030/0033/0046 同樣以 OPT 立項。
-- 快速獲利（61-70）形狀最近但它是分鐘窗口 + 絕對金額，不硬改，新開一條。
-- 現有馬丁規則（111）把 `lot_multiplier=1.0`、`min_add_count=3` 即可覆蓋「浮虧下同手數連加 ≥3 次」，
-  不需要在本規則裡重做。
-
-## 冷審 findings（2026-09-17，獨立 reviewer；已逐條核對，✅ = 主會話驗證屬實）
-
-### 開工前必改（🔴）
-
-1. **入金口徑**：`mt5_deals Action=2 AND Profit>0` 不是入金，是所有正向餘額操作。實測近 3 天含
-   `Balance Adjustment Zero` 45 筆 / $3.99M（單筆可達 $779k，9/16 連著 6 個帳戶批量調帳）、`Initial balance`、
-   `IT-D` 內轉、`IB Wallet Transfer`。調帳進分母 = 被清零再入金的帳戶永久隱身（60006521 那類）。
-   → 分母只認真實入金：Comment 白名單 + `fxbackoffice.stats_transactions` 對帳；`Balance Adjustment*` / `Initial balance` 排除並在 detail 打標。
-2. **Credit / Bonus 整條漏掉**：走 `Action=3`（7 天 Credit In $92.9k、Bonus In $33.2k），不進分母但進 equity 與保證金；
-   `mt5_users` 1,059 帳戶持 credit $3.2M，`mt4_live.mt4_users` 31 帳戶 $6.31M。$10k credit + $50 入金 → 分母 50 → 巨額誤報；
-   只拿 credit 沒入金 → 分母 0 被跳過 → 漏報。→ 分母 = prev_equity + 真入金 + 當日新增 credit，detail 單列 credit。
-3. **去重必須每 tick 從 SQLite 回種，不是重啟才回種** ✅（`burst_open_scheduler.py:669-678`：slow tick 用本輪結果**替換**
-   slow 段，上一輪的 slow 告警從 `_latest_result` 消失；快速獲利正因此有 `_build_quick_profit_prev_alerts`）。
-   `alert_events` 無唯一約束。不改 = 同帳戶一天寫 288 行、發 288 封。回種窗口 ≥ 當日已過分鐘數（最壞 1440）。
-4. **CEN 地板差 100 倍** ✅：現有規則在命中後才調 `get_account_info_map()`；本規則的地板在檢測前比，必須先對候選調
-   `account_enrichment.build_currency_map()` 再過地板、算比率。
-5. **兩個地板互相吃掉**：`min_initial_equity_usd=50` + `min_profit_usd=100` ⇒ 初始權益 50 的帳戶要 200% 才觸發，
-   100% 檔對 initial_equity < 100 USD **永不生效**，而目標人群正是 50 USD 起步。→ `min_profit_usd` 默認改 30 左右
-   （或 OR 語義）。⚠ 已發給 Kieran 的回信草稿寫的是 50/100，**轉發 Sammy 前要改**。
-6. **MT5 切日必須用 `Timestamp`（FILETIME，有索引）不能用 `Time`** ✅（現有 `_query_mt5_realized` 就是這樣寫的）：
-   同一天同庫實測 `Time` 19.3s vs `Timestamp` 0.25s，77 倍。交易日起點先轉 FILETIME。
-7. **回測口徑 ≠ 上線口徑**：`bt_mt5.py` 用 `DailyBalance`（淨額）而方案是 gross 入金；`DailyProfit` 是日終、線上是盤中峰值。
-   357/124/79 那張表只能當下界，不能當上線預期。→ 上線先跑 **1–2 週 shadow（只落庫不發信）**，用真實 tick 口徑定 100% 檔是否發信。
-8. **tier 常量要動** ✅：`_SLOW_TIER_RULE_BANDS` 加 `(131, 140)` + `_MAX_ALLOCATED_RULE_ID` 130→140
-   （`burst_open_scheduler.py:277-284`）；不改則 `test_scheduler_tiers.py:488` 的循環根本不覆蓋 131-140，護欄靜默失效。
-
-### 隨規模 / 時間會變問題（🟡）
-
-9. **交易日邊界可能不是固定 +03:00**：本項目已有結論 MT 日界隨 DST（夏 GMT+3 / 冬 GMT+2，錨 Europe/Athens），
-   而 `BROKER_TZ_OFFSET` 硬編碼 +03:00。本規則是唯一以「日界」為口徑的規則，冬令時 00:00–01:00 的成交會歸錯日。
-   → 「今日日初」從 `mt5_daily` 最新 `Datetime`+1s 推導（跟隨服務器實際歸零點），不從 `CURDATE()` 推；上線前實測一次。
-10. **「出金不減分母」可被利用**：入 10,000 → 出 9,950 → 用 50 刷到 150，比率 1%。→ detail 加標記位「當日出金 > 當日入金 × 50%」，
-    回信時要能答 Sammy 這一問。
-11. **slow tier 不是 5 分鐘** ✅：`scan_interval_min` 默認 **10**，範圍 5–60，UI 可改；`BURST_FAST_TIER_ENABLED` off 時走 `tier="all"`。
-    → 要麼獨立 job（照 rebate-arb 的 `REBATE_ARB_INTERVAL_MIN`），要麼文檔寫明跟隨配置。建議獨立 job，順帶不占 `_scan_lock`（見 12）。
-12. **MT4 分母點查實測 5.37s / 425 login**，真實候選 MT4 側 ~800 → 每 tick ~10s，且占共享 `_scan_lock`，每個 slow tick 至少吃掉一個 fast tick。
-    → 分母按 (login, trading_day) 進程內緩存，每 login 每天只查一次；首 tick 全量、後續只補新 login。
-13. **缺 `MAX_EXECUTION_TIME`**：`rule_quick_profit_service._get_connection()` 只有 `read_timeout=60`。新 service 自己開連接並釘超時（db-timeout-guard）。
-14. **行為特徵只在首次命中算一次**：按天去重 ⇒ `lock_pct` / `median_hold_sec` / `return_pct` 整天停在首次觸發瞬間，
-    匯總卡「最高收益率」不是真最高。→ detail 行 UPSERT 最新值 + 加 `peak_return_pct`。
-15. **分檔無抑制**：131 與 132 各自發信，同帳戶同日風控收兩封。→ 高檔命中抑制低檔，或郵件合併。
-16. **參數 / 固定 反了一半**：`include_deposits_in_base` 因 1/2 必須能關 → 做參數；鎖倉判定「小邊 ≥ 大邊一半」是拍的 → 做參數；
-    `include_floating` 改變規則性質（事件型 vs 快照型）→ 應固定。
-17. 候選集實測：今日 MT5 成交 912 / 持倉 630、MT4_Live 成交 537 / 持倉 419、Live2 持倉 44 → 全量約 1,500–1,800 login/tick。
-
-### 可有可無（⚪）
-
-18. realtime 郵件模式本來就是每 tick 每訂閱一封 digest（命中合併），配按日去重後 100% 檔一天最多十幾封 —— 「不能逐條發」的前提不成立，不需另做匯總層。
-19. `_ALERT_FROM_CLAUSE` 將變 9 個 LEFT JOIN，30 天保留期下可控，但該開始考慮按 band 動態選 JOIN。
-20. `mt5_daily` 按 `Login` 點查直接超時（PK 首列是 `Datetime` int 秒），重跑回測的人會踩。
-21. Sammy 問的第二件事（鎖倉 + 高頻自動篩）方案只給了 detail 列沒給判定；既然已算 `lock_pct` / `median_hold_sec`，
-    做成 `IntradayReturnRule` 可選條件 `min_lock_pct` / `max_median_hold_sec` 成本近零。
-
-### reviewer 已核實為真的部分（不用再查）
-
-- `mt5_users.EquityPrevDay == mt5_daily.ProfitEquity(昨日)` 14/14 一致；例子帳戶 9/16 入金 50 / 平倉 88 筆 / closed PnL 478.27 可復現。
-- `mt4_users` 確無 PREVEQUITY；`mt4_daily` 週六無行，「取 TIME < 今日日初最近一行」自然覆蓋週末。
+- 工期：後端檢測 + detail + 去重 + 回測腳本 3 天、郵件源 1 天、前端 2 天、測試部署 1 天 ≈ **7 個工作日**；只上郵件 + 回測腳本 ≈ 3.5 天。
+- 走 OPT 是用戶明示（2026-09-17）；按 tracker README 這本屬 net-new feature，先例 OPT-0030/0033/0046。
+- 快速獲利（61-70）形狀最近但它是分鐘窗口 + 絕對金額，不硬改。
+- 「浮虧下同手數連加 ≥3 次」由現有馬丁規則（111）`lot_multiplier=1.0` + `min_add_count=3` 覆蓋，本規則不重做。
+- 回測腳本原型：scratchpad `verify.py`（本會話）；`bt_mt5.py` / `bt_fxbo.py` / `lock_profile.py` 是 v1 的 30 天回測。
 
 ## 結果
 
