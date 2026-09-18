@@ -271,3 +271,16 @@ def test_alerts_filter_by_trading_day_not_first_hit(temp_db):
     )
     assert by_day == 1
     assert rm_db.intraday_return_stats_extras(since, until)["max_peak_return_pct"] == pytest.approx(957.0)
+
+
+# ── R10 CRM link is the loginSid account page ───────────────────────────
+
+def test_digest_links_account_by_login_sid():
+    from app.services.alert_mail import intraday_return as src
+    alert = {**_alert(login=60009967), "server": "MT5"}
+    _subject, body = src.build_intraday_return_digest_email(
+        [(alert, {"return_pct": 957.0, "initial_equity": 50.0})],
+        subscription={"name": "t", "updated_at": "-"}, sibling_map={},
+    )
+    assert "https://mt4.kohleglobal.com/crm/accounts/5-60009967" in body
+    assert "/admin/accounts/" not in body

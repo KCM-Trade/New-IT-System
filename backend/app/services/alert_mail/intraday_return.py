@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .subject import build_subject
+from ...core.sql_helpers import SID_MAP
 from ...core.risk_monitor_db import (
     fetch_intraday_return_alerts_after,
     fetch_intraday_return_alerts_by_ids,
@@ -34,8 +35,17 @@ from ..rule_intraday_return_service import (
 logger = logging.getLogger(__name__)
 
 _RISK_MONITOR_PAGE_URL = "https://analysis.kohleservices.com/risk-monitor?tab=intraday-return"
-# CRM account page (same deep-link shape the frontend LoginCell uses).
-_CRM_ACCOUNT_URL = "https://mt4.kohleglobal.com/admin/accounts/{login}"
+# CRM account page, keyed by loginSid `{sid}-{login}` (alert-email-style
+# skill: MT accounts link to /crm/accounts/<loginSid>, same as the frontend
+# LoginCell). The earlier /admin/accounts/<login> form was wrong.
+_CRM_ACCOUNT_URL = "https://mt4.kohleglobal.com/crm/accounts/{login_sid}"
+
+
+def _crm_account_url(server: Any, login: Any) -> Optional[str]:
+    sid = SID_MAP.get(str(server or ""))
+    if sid is None or not login:
+        return None
+    return _CRM_ACCOUNT_URL.format(login_sid=f"{sid}-{login}")
 
 
 # ── Field getters (subscription condition evaluation) ───────────────────────
@@ -191,10 +201,10 @@ def _account_section(index: int, alert: Dict[str, Any], match: Dict[str, Any]) -
     esc = lambda v: html.escape(str(v if v not in (None, "") else "-"))
     server = str(alert.get("server") or "-")
     login = alert.get("login")
+    crm_url = _crm_account_url(server, login)
     login_html = (
-        f"<a href=\"{_CRM_ACCOUNT_URL.format(login=login)}\" style=\"color:#2563eb;\">"
-        f"{esc(login)}</a>"
-        if login else "-"
+        f"<a href=\"{crm_url}\" style=\"color:#2563eb;\">{esc(login)}</a>"
+        if crm_url else esc(login)
     )
     currency = str(alert.get("currency") or "USD")
 
