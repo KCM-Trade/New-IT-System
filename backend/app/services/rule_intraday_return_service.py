@@ -641,9 +641,9 @@ def _query_mt5_prev_day(
     login_list = [int(l) for l in logins]
     if not login_list:
         return {}
-    stamps = [
+    stamps = [  # k=0 = yesterday's day-end; see _query_mt4_prev_day
         _mt5_daily_datetime(day_start - timedelta(days=k, seconds=1))
-        for k in range(1, _PREV_DAY_LOOKBACK_DAYS + 1)
+        for k in range(_PREV_DAY_LOOKBACK_DAYS)
     ]
     out: Dict[int, Tuple[int, float, float, float]] = {}
     for chunk in _chunks(login_list, 800):
@@ -769,9 +769,12 @@ def _query_mt4_prev_day(
     login_list = [int(l) for l in logins]
     if not login_list:
         return {}
+    # k=0 is yesterday's day-end (day_start − 1s); k≥1 walks back over a
+    # weekend / holiday. range(1, …) here silently returned D−2's EOD for
+    # every account (2026-09-18 prod: 12/12 first-day alerts were false).
     times = [
         day_start - timedelta(days=k, seconds=1)
-        for k in range(1, _PREV_DAY_LOOKBACK_DAYS + 1)
+        for k in range(_PREV_DAY_LOOKBACK_DAYS)
     ]
     out: Dict[int, Tuple[datetime, float, float, float]] = {}
     for chunk in _chunks(login_list, 800):

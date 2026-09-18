@@ -533,3 +533,66 @@ def test_replay_watch_accounts_hit_300_tier():
         assert a["currency"] == "USD"
         assert a["orders"] == []
         assert a["first_open"] is not None and a["last_open"] is not None
+
+
+# ── previous-day lookup anchors on D−1, not D−2 ───────────────────────
+
+class _RecordingCursor:
+    """Captures the executed SQL parameters and returns the rows given."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+class _RecordingConn:
+    def __init__(self, rows):
+        self.cur = _RecordingCursor(rows)
+
+    def cursor(self):
+        return self.cur
+
+
+def test_mt4_prev_day_queries_yesterday_first_and_prefers_it():
+    """2026-09-18 prod: range(1, N+1) queried D−2..D−5 so every account's
+    base was the day-before-yesterday's EOD (a 3,000 deposit + 1,350 floating
+    on D−1 vanished → 1,322% instead of 8.5%; 12/12 first-day alerts false)."""
+    yesterday_end = DAY_START - timedelta(seconds=1)
+    rows = [
+        {"login": 1, "t": yesterday_end - timedelta(days=1), "eq": 155.56, "bal": 155.56, "credit": 0.0},
+        {"login": 1, "t": yesterday_end, "eq": 4140.56, "bal": 2790.56, "credit": 0.0},
+    ]
+    conn = _RecordingConn(rows)
+    out = svc._query_mt4_prev_day(conn, db_name="mt4_live", day_start=DAY_START, logins=[1])
+    queried_times = [p for p in conn.cur.params if isinstance(p, datetime)]
+    assert queried_times[0] == yesterday_end, "first candidate must be D−1 23:59:59"
+    assert len(queried_times) == svc._PREV_DAY_LOOKBACK_DAYS
+    assert all(t < DAY_START for t in queried_times)
+    assert out[1] == (4140.56, 2790.56, 0.0, yesterday_end)
+
+
+def test_mt5_prev_day_queries_yesterday_first_and_prefers_it():
+    yesterday_end = DAY_START - timedelta(seconds=1)
+    stamp = svc._mt5_daily_datetime
+    rows = [
+        {"dt": stamp(yesterday_end - timedelta(days=1)), "login": 1, "eq": 1.0, "bal": 1.0, "credit": 0.0},
+        {"dt": stamp(yesterday_end), "login": 1, "eq": 2271.82, "bal": 2271.82, "credit": 0.0},
+    ]
+    conn = _RecordingConn(rows)
+    out = svc._query_mt5_prev_day(conn, day_start=DAY_START, logins=[1])
+    stamps = [p for p in conn.cur.params if isinstance(p, int) and p > 10**9]
+    assert stamps[0] == stamp(yesterday_end)
+    assert len(stamps) == svc._PREV_DAY_LOOKBACK_DAYS
+    assert out[1] == (2271.82, 2271.82, 0.0, yesterday_end)

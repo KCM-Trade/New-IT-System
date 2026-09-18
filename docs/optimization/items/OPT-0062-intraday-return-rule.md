@@ -327,3 +327,5 @@ v3 專門修的兩個案例，按驗收標準逐條核對：
 9. 課件（Hook 2）：`BEGIN IMMEDIATE` 跨進程去重 + DST 墻鐘 vs FILETIME 是新概念，可補。
 
 **同日 hotfix**：`6c96344` MT 墻鐘改美國 DST 日程 tzinfo；`9606ece` 郵件 CRM 連結改 `/crm/accounts/{sid}-{login}`（首封真實 digest 裡用戶發現原來是 `/admin/accounts/{login}`）。
+
+**同日第三個 hotfix（🔴 首日 12/12 告警全誤報）**：`_query_mt4_prev_day` / `_query_mt5_prev_day` 的候選日終用 `range(1, N+1)`，k=1 已是 `day_start − 1d − 1s` = **前天** 23:59:59，昨天從不在候選裡 → 每個賬戶的基準都是 D−2 EOD，昨日入金與浮盈全部消失（8613868：9/17 入 3,000 + 浮盈 1,350 沒進 base → 郵件 1,322%，正確 8.5%）。按正確 D−1 重算首日 12 條最高 71.8%，無一過 100% 檔；用戶拍板不補更正郵件。修法 `range(_PREV_DAY_LOOKBACK_DAYS)`（k=0 才是昨天）+ 兩個回歸測試（第一個候選必須是 `day_start − 1s`）。回測腳本用 `day − k` 再拼 `23:59:59`，沒有此 bug，四行回歸基準仍有效。附帶：舊代碼下 settle 邏輯的 `row_end == expected_end` 永遠不成立（expected 不在候選裡），修後才真正生效。教訓：`_prepare_server` 無單測（follow-up 7）正是這條漏網的地方——SQL 參數組裝本身也要有斷言。
