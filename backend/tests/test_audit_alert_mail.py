@@ -273,7 +273,8 @@ def test_update_of_an_unknown_subscription_writes_nothing(client, sid):
 def test_delete_keeps_the_only_surviving_copy_of_the_subscription(client, sid):
     r = client.delete("/api/v1/alert-mail/subscriptions/1", headers=_auth(sid))
     assert r.status_code == 200
-    assert rm_db.load_mail_subscriptions() == []  # business row is gone
+    # OPT-0062 seeds two intraday_return rows too — scope the check to hedge.
+    assert rm_db.load_mail_subscriptions(module="hedge_open") == []  # business row is gone
 
     rows = _audit_rows("alert_mail.subscription.delete")
     assert len(rows) == 1

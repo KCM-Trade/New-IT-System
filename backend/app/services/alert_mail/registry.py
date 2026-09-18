@@ -41,7 +41,8 @@ Registry entry contract (every key required unless noted):
                     id: the 30-day retention purge would delete a pinned
                     row and break test-send forever
 
-v2 registered only `hedge_open`; OPT-0046 added `rebate_arb` (rule 121-130).
+v2 registered only `hedge_open`; OPT-0046 added `rebate_arb` (rule 121-130);
+OPT-0062 added `intraday_return` (rule 131-140).
 The structure is ready for the remaining risk-monitor tabs + fund-flow (one
 entry each, follow-up).
 """
@@ -76,6 +77,8 @@ from ..alert_mail_dispatcher import (
 # file stays the registry, not a template dump). Safe import order: the
 # module only pulls from core.risk_monitor_db + rule_rebate_arb_service.
 from .rebate_arb import SOURCE as _REBATE_ARB_SOURCE
+# OPT-0062: intraday-return source (rule 131-140), same module layout.
+from .intraday_return import SOURCE as _INTRADAY_RETURN_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +174,8 @@ MAIL_SOURCES: Dict[str, Dict[str, Any]] = {
     },
     # OPT-0046: 返佣套利 rule band 121-130 (see services/alert_mail/rebate_arb.py)
     "rebate_arb": _REBATE_ARB_SOURCE,
+    # OPT-0062: 即日高收益 rule band 131-140 (see services/alert_mail/intraday_return.py)
+    "intraday_return": _INTRADAY_RETURN_SOURCE,
 }
 
 

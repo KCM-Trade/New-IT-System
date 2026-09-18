@@ -484,7 +484,16 @@ def _login_sid(alert: Dict[str, Any]) -> str:
 
 
 def _alert_day_utc(alert: Dict[str, Any]) -> Optional[str]:
-    """UTC calendar day (YYYY-MM-DD) the hedge window falls on."""
+    """Calendar day (YYYY-MM-DD) used for the same-day sibling lookup.
+
+    Sources whose rows carry their own day key (intraday_return.trading_day,
+    gap-trade / rebate-arb window_date — all MT trading days) use it, because
+    their fetch_for_day filters on that column; a UTC date derived from
+    first_open would miss siblings whose first open fell in MT 00:00-03:00.
+    Hedge (no day column) keeps the UTC day of the window start."""
+    day_key = alert.get("trading_day") or alert.get("window_date")
+    if day_key:
+        return str(day_key)[:10]
     raw = alert.get("window_start") or alert.get("first_open") or alert.get("scanned_at")
     if not raw:
         return None

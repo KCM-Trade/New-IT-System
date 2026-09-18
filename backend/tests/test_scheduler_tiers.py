@@ -466,7 +466,7 @@ def test_is_fast_tier_rule_id_boundary():
     slow tier owns qoc/qp/hedge (51-100). Gap Trade (71-90) is never cached, so
     it falls on the slow side. Locks the cache-merge boundary."""
     fast = [1, 50, 101, 110, 111, 120]
-    slow = [51, 60, 61, 70, 71, 90, 91, 100]
+    slow = [51, 60, 61, 70, 71, 90, 91, 100, 121, 130, 131, 140]
     for rid in fast:
         assert bs._is_fast_tier_rule_id(rid) is True, f"{rid} should be fast"
     for rid in slow:
@@ -500,6 +500,9 @@ def test_tier_ownership_partitions_all_bands():
     assert not bs._is_fast_tier_rule_id(51)   # quick-oc → slow
     assert not bs._is_fast_tier_rule_id(61)   # quick-profit → slow
     assert not bs._is_fast_tier_rule_id(91)   # hedge → slow
+    assert not bs._is_fast_tier_rule_id(121)  # rebate-arb → slow (never cached)
+    assert not bs._is_fast_tier_rule_id(131)  # intraday-return → slow (never cached)
+    assert bs._MAX_ALLOCATED_RULE_ID == 140
 
 
 # ── lock + flag check on fast scan ────────────────────────────────────────

@@ -122,9 +122,12 @@ def test_sources_registry(client):
     assert r.status_code == 200
     body = r.json()
     _assert_list_envelope(body)
-    # hedge_open (OPT-0042/43) + rebate_arb (OPT-0046)
-    assert body["total"] == 2
-    assert {s["module"] for s in body["data"]} == {"hedge_open", "rebate_arb"}
+    # hedge_open (OPT-0042/43) + rebate_arb (OPT-0046) + intraday_return (OPT-0062)
+    assert body["total"] == 3
+    assert {s["module"] for s in body["data"]} == {"hedge_open", "rebate_arb", "intraday_return"}
+    ir = next(s for s in body["data"] if s["module"] == "intraday_return")
+    assert ir["rule_id_range"] == [131, 140]
+    assert ir["rules"][0]["id"] == 131
     ra = next(s for s in body["data"] if s["module"] == "rebate_arb")
     assert ra["rule_id_range"] == [121, 130]
     assert ra["rules"][0]["id"] == 121
@@ -148,8 +151,10 @@ def test_list_subscriptions_seed_row_legacy_conditions_verbatim(client):
     assert r.status_code == 200
     body = r.json()
     _assert_list_envelope(body)
-    assert body["total"] == 1
-    sub = body["data"][0]
+    # hedge seed (id=1) + the two OPT-0062 intraday_return seeds
+    assert body["total"] == 3
+    sub = next(s for s in body["data"] if s["module"] == "hedge_open")
+    assert sub["id"] == 1
     assert sub["name"] == "批量对冲刷佣"
     assert sub["module"] == "hedge_open"
     assert sub["mail_to"] == KIERAN
@@ -167,8 +172,10 @@ def test_list_subscriptions_filters(client, sent_mail):
     client.post("/api/v1/alert-mail/subscriptions", headers=DEVICE,
                 json=_valid_payload(enabled=False))
     r = client.get("/api/v1/alert-mail/subscriptions?enabled_only=true")
-    assert r.json()["total"] == 1  # only the enabled seed
+    assert r.json()["total"] == 3  # the 3 enabled seeds, not the disabled new row
     r = client.get("/api/v1/alert-mail/subscriptions?module=hedge_open")
+    assert r.json()["total"] == 2
+    r = client.get("/api/v1/alert-mail/subscriptions?module=intraday_return")
     assert r.json()["total"] == 2
     r = client.get("/api/v1/alert-mail/subscriptions?module=nope")
     assert r.json()["total"] == 0
@@ -183,7 +190,8 @@ def test_create_subscription_roundtrip(client):
     body = r.json()
     assert set(body) == {"data", "statistics"}
     sub = body["data"]
-    assert sub["id"] == 2
+    new_id = sub["id"]
+    assert new_id == 4  # after the 3 seeded rows (hedge + 2 intraday_return)
     assert sub["rule_ids"] == [91]
     assert sub["conditions"]["logic"] == "and"
     assert len(sub["conditions"]["conditions"]) == 2
@@ -193,7 +201,7 @@ def test_create_subscription_roundtrip(client):
 
     # Round-trips through the list endpoint identically.
     listed = client.get("/api/v1/alert-mail/subscriptions").json()["data"]
-    assert any(s["id"] == 2 and s["conditions"] == sub["conditions"] for s in listed)
+    assert any(s["id"] == new_id and s["conditions"] == sub["conditions"] for s in listed)
 
 
 def test_create_empty_rule_ids_normalizes_to_null(client):
@@ -350,7 +358,8 @@ def test_delete_removes_sub_and_cursor_keeps_outbox(client):
     assert r.status_code == 200
     assert r.json()["data"] == {"deleted": True, "id": 1}
 
-    assert rm_db.load_mail_subscriptions() == []
+    # OPT-0062 seeds two intraday_return rows too — scope the check to hedge.
+    assert rm_db.load_mail_subscriptions(module="hedge_open") == []
     assert rm_db.get_mail_dispatch_cursor(1) == 0  # cursor row gone
     assert rm_db.get_mail_outbox_row(outbox_id) is not None  # audit kept
     # JOIN now reports the subscription as deleted.

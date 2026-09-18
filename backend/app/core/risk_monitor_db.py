@@ -19,6 +19,7 @@ import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,9 @@ SORTABLE_ALERT_COLS: frozenset[str] = frozenset({
     # Rebate Arbitrage columns (rule 121-130, OPT-0046)
     "rebate_30d", "total_pl_30d", "combined_30d", "ratio_5m", "ratio_10m",
     "hold_geo_mean_sec", "trading_net_deposit", "ib_withdrawal",
+    # Intraday Return columns (rule 131-140, OPT-0062)
+    "return_pct", "peak_return_pct", "intraday_profit", "initial_equity",
+    "net_7d", "trades_today", "lock_pct", "trading_day",
     # Frontend alias for the `account_group` DB column. We map it in
     # `_resolve_alert_order` so the API stays consistent with the
     # field name the React component already uses.
@@ -118,6 +122,15 @@ _SORT_COL_DB_NAME: dict[str, str] = {
     # (a row only ever writes one of them, so COALESCE is exact).
     "client_userid":              "COALESCE(gp.client_userid, ra.client_userid)",
     "contributing_account_count": "COALESCE(gp.contributing_account_count, ra.contributing_account_count)",
+    # Intraday Return detail (rule 131-140, OPT-0062)
+    "return_pct":      "ir.return_pct",
+    "peak_return_pct": "ir.peak_return_pct",
+    "intraday_profit": "ir.intraday_profit",
+    "initial_equity":  "ir.initial_equity",
+    "net_7d":          "ir.net_7d",
+    "trades_today":    "ir.trades_today",
+    "lock_pct":        "ir.lock_pct",
+    "trading_day":     "ir.trading_day",
     "profit_ratio":               "gp.profit_ratio",
     "triggered_by":               "gp.triggered_by",
     # window_date lives on three detail tables (one row only writes one)
@@ -526,6 +539,67 @@ CREATE TABLE IF NOT EXISTS alert_rebate_arb_detail (
 CREATE INDEX IF NOT EXISTS idx_rebate_arb_window
     ON alert_rebate_arb_detail(window_date, client_userid);
 
+-- Intraday Return (即日高收益, rule_id 131-140, OPT-0062) config + rules.
+-- Rule ids are positional (131 + sort_order). Money thresholds are USD
+-- (CEN accounts are compared after ÷100); *_pct are percentages.
+CREATE TABLE IF NOT EXISTS intraday_return_config (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    updated_at  DATETIME
+);
+INSERT OR IGNORE INTO intraday_return_config (id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS intraday_return_rules (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                      TEXT    NOT NULL DEFAULT '',
+    enabled                   INTEGER NOT NULL DEFAULT 1,
+    min_return_pct            REAL    NOT NULL DEFAULT 100.0,
+    min_initial_equity_usd    REAL    NOT NULL DEFAULT 50.0,
+    min_profit_usd            REAL    NOT NULL DEFAULT 30.0,
+    min_net_7d_usd            REAL    NOT NULL DEFAULT 0.0,
+    net_window_days           INTEGER NOT NULL DEFAULT 7,
+    include_deposits_in_base  INTEGER NOT NULL DEFAULT 1,
+    min_lock_pct              REAL,               -- NULL = not applied
+    max_median_hold_min       REAL,               -- NULL = not applied
+    lock_ratio_min            REAL    NOT NULL DEFAULT 0.5,
+    sort_order                INTEGER NOT NULL DEFAULT 0
+);
+
+-- Detail table for Intraday Return (rule_id 131-140). One row per
+-- (rule, server, login, trading_day); later ticks UPDATE the row in place
+-- (peak_return_pct keeps the intraday high-water mark) instead of inserting
+-- another alert. All money columns are USD (CEN already /100).
+CREATE TABLE IF NOT EXISTS alert_intraday_return_detail (
+    id                            INTEGER PRIMARY KEY,   -- = alert_events.id (1:1)
+    trading_day                   TEXT,     -- "YYYY-MM-DD" MT trading day (dedup key)
+    prev_day_equity               REAL,     -- yesterday's EOD equity
+    deposits_in                   REAL,     -- real deposits today (denylist applied)
+    credit_in                     REAL,     -- credit / bonus in today
+    withdrawals_out               REAL,     -- real withdrawals today (positive number)
+    adj_excluded                  REAL,     -- ops adjustments excluded from the base (signed)
+    initial_equity                REAL,     -- prev_day_equity + deposits_in + credit_in
+    equity_now                    REAL,     -- balance + credit + all floating at scan time
+    same_day_pnl                  REAL,     -- positions opened today: realized + floating
+    carried_float0                REAL,     -- overnight positions' floating at yesterday EOD
+    carried_now                   REAL,     -- overnight positions: realized today + floating now
+    carried_gain                  REAL,     -- max(carried_now,0) - max(carried_float0,0)
+    intraday_profit               REAL,     -- same_day_pnl + carried_gain
+    return_pct                    REAL,     -- 100 * intraday_profit / initial_equity (latest tick)
+    peak_return_pct               REAL,     -- max return_pct seen today
+    net_7d                        REAL,     -- realized_7d + floating_all_now
+    realized_7d                   REAL,     -- closed P&L over the rule's window (incl. today)
+    floating_all_now              REAL,     -- floating of every open position now
+    flag_withdraw_gt_half_deposit INTEGER,  -- 1 when withdrawals_out > deposits_in * 0.5
+    trades_today                  INTEGER,  -- positions opened today
+    lots_today                    REAL,     -- lots opened today (std-lot equivalent)
+    median_hold_sec               INTEGER,  -- median hold of today's closed round-trips
+    lock_pct                      REAL,     -- % of active time with both sides held
+    top_symbol                    TEXT,
+    updated_at                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_intraday_return_day
+    ON alert_intraday_return_detail(trading_day);
+
 -- OPT-0047 case-engine sync cursor (single row). Tracks the highest
 -- alert_events.id whose rule-121-130 signal has been upserted into the
 -- cloud-PG case layer. The cursor only advances after a SUCCESSFUL PG
@@ -705,6 +779,40 @@ INSERT INTO martingale_rules
 VALUES ('默认马丁检测', 1, 0.0, 1.0, 1, 0);
 """
 
+# OPT-0062 seed rules: the two tiers the risk desk asked for (100% must also
+# mail — user decision 2026-09-18). Thresholds 50 / 30 USD: a 100 USD profit
+# gate would need 200% on a 50 USD account and silently disable the 100% tier
+# for the very population the rule targets.
+_SEED_INTRADAY_RETURN_RULES_SQL = """
+INSERT INTO intraday_return_rules
+    (name, enabled, min_return_pct, min_initial_equity_usd, min_profit_usd,
+     min_net_7d_usd, net_window_days, include_deposits_in_base,
+     min_lock_pct, max_median_hold_min, lock_ratio_min, sort_order)
+VALUES
+    ('即日收益 ≥100%', 1, 100.0, 50.0, 30.0, 0.0, 7, 1, NULL, NULL, 0.5, 0),
+    ('即日收益 ≥300%', 1, 300.0, 50.0, 30.0, 0.0, 7, 1, NULL, NULL, 0.5, 1);
+"""
+
+# OPT-0062 seed subscriptions: one realtime digest per tier, risk desk only
+# (CS deliberately NOT included yet — user decision 2026-09-18; add via the
+# /risk-alert-mail UI once the volume has been watched for a while).
+# cooldown 0: an escalation from 131 to 132 on the same login must not be
+# held back behind the lower tier's digest.
+_SEED_INTRADAY_RETURN_MAIL_SQL = """
+INSERT INTO mail_subscriptions
+    (name, module, rule_ids, conditions_json, mail_to, mail_cc,
+     mode, cooldown_min, digest_time, enabled, updated_at, updated_by)
+VALUES
+    ('即日高收益 ≥100%', 'intraday_return', '[131]', '{}',
+     'risk@kcmtrade.com',
+     'kieran.xiang@kohleservices.com,lawrence.li@kohleservices.com',
+     'realtime', 0, NULL, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'OPT-0062 seed'),
+    ('即日高收益 ≥300%', 'intraday_return', '[132]', '{}',
+     'risk@kcmtrade.com',
+     'kieran.xiang@kohleservices.com,lawrence.li@kohleservices.com',
+     'realtime', 0, NULL, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'OPT-0062 seed');
+"""
+
 # OPT-0042 seed subscription: hedge-open wash-commission mail alert.
 # Conditions (A OR B; thresholds lowered 2026-07-14 after a 21-day backtest
 # showed the original 10/5+1 tier only fired on the 2026-07-03 whale event —
@@ -764,6 +872,9 @@ def init_risk_monitor_db() -> None:
         mg_count = conn.execute("SELECT COUNT(*) FROM martingale_rules").fetchone()[0]
         if mg_count == 0:
             conn.execute(_SEED_MARTINGALE_RULE_SQL)
+        ir_count = conn.execute("SELECT COUNT(*) FROM intraday_return_rules").fetchone()[0]
+        if ir_count == 0:
+            conn.execute(_SEED_INTRADAY_RETURN_RULES_SQL)
         # OPT-0042: seed the hedge-open mail subscription once. Guarded by a
         # module count (not table count) so a future v2 subscription for
         # another module doesn't suppress this one and vice versa.
@@ -772,6 +883,13 @@ def init_risk_monitor_db() -> None:
         ).fetchone()[0]
         if mail_sub_count == 0:
             conn.execute(_SEED_MAIL_SUBSCRIPTION_SQL)
+        # OPT-0062: seed the two intraday-return tier subscriptions once
+        # (module-scoped count, same rationale as above).
+        ir_mail_count = conn.execute(
+            "SELECT COUNT(*) FROM mail_subscriptions WHERE module = 'intraday_return'"
+        ).fetchone()[0]
+        if ir_mail_count == 0:
+            conn.execute(_SEED_INTRADAY_RETURN_MAIL_SQL)
         # OPT-0042: initialize the dispatch cursor at the CURRENT
         # alert_events high-water mark for every subscription that has no
         # cursor row yet (fresh seed above, or an existing subscription
@@ -787,7 +905,8 @@ def init_risk_monitor_db() -> None:
             """
         )
         if (count == 0 or quick_count == 0 or qp_count == 0 or ho_count == 0
-                or la_count == 0 or mg_count == 0 or mail_sub_count == 0):
+                or la_count == 0 or mg_count == 0 or mail_sub_count == 0
+                or ir_count == 0 or ir_mail_count == 0):
             conn.commit()
 
         # Lightweight column migrations for installations created before
@@ -1619,6 +1738,83 @@ def save_martingale_config(enabled: bool, rules: list[dict]) -> None:
             )
 
 
+def load_intraday_return_config() -> dict[str, Any]:
+    """Read Intraday Return enabled flag + rules (OPT-0062).
+
+    NULL enabled → True; nullable optional knobs (min_lock_pct /
+    max_median_hold_min) stay None so the UI shows "not applied".
+    """
+    with get_risk_monitor_db() as conn:
+        cfg_row = conn.execute(
+            "SELECT enabled FROM intraday_return_config WHERE id = 1"
+        ).fetchone()
+        if not cfg_row:
+            enabled = True
+        else:
+            raw = cfg_row["enabled"]
+            enabled = True if raw is None else bool(raw)
+
+        rule_rows = conn.execute(
+            "SELECT id, name, enabled, min_return_pct, min_initial_equity_usd, "
+            "min_profit_usd, min_net_7d_usd, net_window_days, "
+            "include_deposits_in_base, min_lock_pct, max_median_hold_min, "
+            "lock_ratio_min FROM intraday_return_rules ORDER BY sort_order, id"
+        ).fetchall()
+        rules: list[dict[str, Any]] = []
+        for r in rule_rows:
+            d = dict(r)
+            d["enabled"] = True if d.get("enabled") is None else bool(d["enabled"])
+            d["include_deposits_in_base"] = (
+                True if d.get("include_deposits_in_base") is None
+                else bool(d["include_deposits_in_base"])
+            )
+            rules.append(d)
+
+    return {"enabled": enabled, "rules": rules}
+
+
+def save_intraday_return_config(enabled: bool, rules: list[dict]) -> None:
+    """Overwrite Intraday Return enabled flag + rules atomically. Rule ids are
+    positional (131 + sort_order)."""
+    def _opt(v: Any) -> float | None:
+        if v is None or v == "":
+            return None
+        return float(v)
+
+    with get_risk_monitor_db() as conn:
+        conn.execute(
+            "UPDATE intraday_return_config SET enabled = ?, "
+            "updated_at = datetime('now') WHERE id = 1",
+            (1 if enabled else 0,),
+        )
+        conn.execute("DELETE FROM intraday_return_rules")
+        conn.execute(
+            "DELETE FROM sqlite_sequence WHERE name = 'intraday_return_rules'"
+        )
+        for i, r in enumerate(rules):
+            conn.execute(
+                "INSERT INTO intraday_return_rules "
+                "(name, enabled, min_return_pct, min_initial_equity_usd, "
+                "min_profit_usd, min_net_7d_usd, net_window_days, "
+                "include_deposits_in_base, min_lock_pct, max_median_hold_min, "
+                "lock_ratio_min, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(r.get("name", "")).strip(),
+                    1 if r.get("enabled", True) else 0,
+                    float(r.get("min_return_pct", 100.0) or 0.0),
+                    float(r.get("min_initial_equity_usd", 50.0) or 0.0),
+                    float(r.get("min_profit_usd", 30.0) or 0.0),
+                    float(r.get("min_net_7d_usd", 0.0) or 0.0),
+                    int(r.get("net_window_days", 7) or 7),
+                    1 if r.get("include_deposits_in_base", True) else 0,
+                    _opt(r.get("min_lock_pct")),
+                    _opt(r.get("max_median_hold_min")),
+                    float(r.get("lock_ratio_min", 0.5) or 0.5),
+                    i,
+                ),
+            )
+
+
 # ── Leverage Abuse streak state (D2 sustained-N-scans tier) ────────────
 # Owned solely by rule_leverage_abuse_service. The service reads the whole
 # state at the top of a scan, computes the next state (increment streaks for
@@ -1903,13 +2099,38 @@ def append_scan_and_events(
     the batch if needed. Also purges rows older than the retention window
     from both tables so the DB stays small.
     """
+    with get_risk_monitor_db() as conn:
+        return _append_scan_and_events_conn(
+            conn,
+            scanned_at=scanned_at,
+            scan_interval_min=scan_interval_min,
+            accounts_scanned=accounts_scanned,
+            suspicious_count=suspicious_count,
+            scan_time_ms=scan_time_ms,
+            alerts=alerts,
+        )
+
+
+def _append_scan_and_events_conn(
+    conn: sqlite3.Connection,
+    *,
+    scanned_at: str,
+    scan_interval_min: int,
+    accounts_scanned: int,
+    suspicious_count: int,
+    scan_time_ms: int,
+    alerts: list[dict],
+) -> int:
+    """Body of append_scan_and_events on a caller-owned connection, so a
+    caller can wrap it in one transaction with other writes (OPT-0062
+    persist_intraday_return_tick needs check-and-insert to be atomic)."""
     common_placeholders = ", ".join(["?"] * len(_COMMON_INSERT_COLS))
     common_insert_sql = (
         f"INSERT INTO alert_events ({', '.join(_COMMON_INSERT_COLS)}) "
         f"VALUES ({common_placeholders})"
     )
 
-    with get_risk_monitor_db() as conn:
+    if True:
         cursor = conn.execute(
             "INSERT INTO scan_history "
             "(scanned_at, scan_interval_min, accounts_scanned, "
@@ -2001,6 +2222,15 @@ def append_scan_and_events(
                     _REBATE_ARB_INSERT_SQL,
                     (event_id, *(alert.get(c) for c in _REBATE_ARB_DETAIL_COLS)),
                 )
+            elif 131 <= rule_id <= 140:
+                detail = dict(alert)
+                detail.setdefault("updated_at", scanned_at)
+                if detail.get("peak_return_pct") is None:
+                    detail["peak_return_pct"] = detail.get("return_pct")
+                conn.execute(
+                    _INTRADAY_RETURN_INSERT_SQL,
+                    (event_id, *(detail.get(c) for c in _INTRADAY_RETURN_DETAIL_COLS)),
+                )
 
         # Retention purge. Detail tables get cleaned via ON DELETE-style
         # cascade in spirit: we delete from alert_events and from each
@@ -2017,6 +2247,7 @@ def append_scan_and_events(
             "alert_leverage_abuse_detail",
             "alert_martingale_detail",
             "alert_rebate_arb_detail",
+            "alert_intraday_return_detail",
         ):
             conn.execute(
                 f"DELETE FROM {detail_table} "
@@ -2226,7 +2457,26 @@ def _escape_like(text: str) -> str:
 _ALERT_TIME_FIELDS: dict[str, str] = {
     "scanned_at":  "ae.scanned_at",
     "window_date": "COALESCE(gso.window_date, gp.window_date, ra.window_date)",
+    # Intraday Return (OPT-0062): rows are keyed by MT trading day and UPDATED
+    # all day, so "最近 4 小时" must select by the day the row belongs to, not
+    # by the first-hit scanned_at (a 09:00 first hit still climbing at 15:00
+    # would otherwise drop out of the default view). The ISO bounds are
+    # converted to MT calendar dates in _build_alert_filters.
+    "trading_day": "ir.trading_day",
 }
+
+
+def _iso_to_mt_date(value: str) -> str:
+    """UTC ISO bound → 'YYYY-MM-DD' in the MT server wall clock (DST-aware)."""
+    from ..services.rule_intraday_return_service import MT_SERVER_TZ
+    s = str(value).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return str(value)[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MT_SERVER_TZ).date().isoformat()
 
 
 def _build_alert_filters(
@@ -2259,8 +2509,14 @@ def _build_alert_filters(
         raise ValueError(
             f"time_field must be one of {sorted(_ALERT_TIME_FIELDS)}, got {time_field!r}"
         )
-    where = [f"{time_col} >= ?", f"{time_col} < ?"]
-    params: list[Any] = [since, until]
+    if time_field == "trading_day":
+        # Calendar-day inclusion: both bounds collapse to MT dates and the
+        # upper bound is inclusive (an ISO instant inside day D means D).
+        where = [f"{time_col} >= ?", f"{time_col} <= ?"]
+        params: list[Any] = [_iso_to_mt_date(since), _iso_to_mt_date(until)]
+    else:
+        where = [f"{time_col} >= ?", f"{time_col} < ?"]
+        params = [since, until]
 
     if server:
         where.append("ae.server = ?")
@@ -2363,6 +2619,19 @@ _MARTINGALE_DETAIL_COLS: tuple[str, ...] = (
     "floating_pnl", "add_count",
 )
 
+# Intraday Return (rule 131-140, OPT-0062). `updated_at` is stamped by the
+# writer; the UPSERT path (`update_intraday_return_details`) refreshes every
+# non-key column and keeps peak_return_pct as a high-water mark.
+_INTRADAY_RETURN_DETAIL_COLS: tuple[str, ...] = (
+    "trading_day", "prev_day_equity", "deposits_in", "credit_in",
+    "withdrawals_out", "adj_excluded", "initial_equity", "equity_now",
+    "same_day_pnl", "carried_float0", "carried_now", "carried_gain",
+    "intraday_profit", "return_pct", "peak_return_pct", "net_7d",
+    "realized_7d", "floating_all_now", "flag_withdraw_gt_half_deposit",
+    "trades_today", "lots_today", "median_hold_sec", "lock_pct", "top_symbol",
+    "updated_at",
+)
+
 _REBATE_ARB_DETAIL_COLS: tuple[str, ...] = (
     "client_userid", "client_name",
     "rebate_30d", "total_pl_30d", "combined_30d",
@@ -2388,6 +2657,7 @@ _HEDGE_OPEN_INSERT_SQL = _build_detail_insert_sql("alert_hedge_open_detail", _HE
 _LEVERAGE_ABUSE_INSERT_SQL = _build_detail_insert_sql("alert_leverage_abuse_detail", _LEVERAGE_ABUSE_DETAIL_COLS)
 _MARTINGALE_INSERT_SQL = _build_detail_insert_sql("alert_martingale_detail", _MARTINGALE_DETAIL_COLS)
 _REBATE_ARB_INSERT_SQL = _build_detail_insert_sql("alert_rebate_arb_detail", _REBATE_ARB_DETAIL_COLS)
+_INTRADAY_RETURN_INSERT_SQL = _build_detail_insert_sql("alert_intraday_return_detail", _INTRADAY_RETURN_DETAIL_COLS)
 
 
 # Unified SELECT with 4 LEFT JOINs — used by every reader so the API-facing
@@ -2442,6 +2712,14 @@ _ALERT_SELECT_SQL = """
     ra.ratio_5m, ra.ratio_10m, ra.hold_geo_mean_sec,
     ra.trading_net_deposit, ra.ib_withdrawal, ra.wallet_login_sids,
 
+    ir.trading_day, ir.prev_day_equity, ir.deposits_in, ir.credit_in,
+    ir.withdrawals_out, ir.adj_excluded, ir.initial_equity, ir.equity_now,
+    ir.same_day_pnl, ir.carried_float0, ir.carried_now, ir.carried_gain,
+    ir.intraday_profit, ir.return_pct, ir.peak_return_pct, ir.net_7d,
+    ir.realized_7d, ir.floating_all_now, ir.flag_withdraw_gt_half_deposit,
+    ir.trades_today, ir.lots_today, ir.median_hold_sec, ir.lock_pct,
+    ir.top_symbol, ir.updated_at AS detail_updated_at,
+
     COALESCE(gso.window_date, gp.window_date, ra.window_date) AS window_date
 """
 
@@ -2455,6 +2733,7 @@ LEFT JOIN alert_hedge_open_detail    ho  ON ho.id  = ae.id
 LEFT JOIN alert_leverage_abuse_detail la ON la.id  = ae.id
 LEFT JOIN alert_martingale_detail    mg  ON mg.id  = ae.id
 LEFT JOIN alert_rebate_arb_detail    ra  ON ra.id  = ae.id
+LEFT JOIN alert_intraday_return_detail ir ON ir.id = ae.id
 """
 
 
@@ -3607,6 +3886,298 @@ def fetch_recent_rebate_arb_alerts(limit: int = 500) -> list[dict[str, Any]]:
             (int(limit),),
         ).fetchall()
     return _rebate_arb_mail_rows_to_dicts(rows)
+
+
+# ── Intraday Return (rule 131-140, OPT-0062) helpers ────────
+
+def get_intraday_return_alerted_keys(
+    trading_day: str,
+) -> dict[tuple[str, int], dict[int, int]]:
+    """{(server, login): {rule_id: alert_events.id}} already written for one
+    MT trading day.
+
+    The durable half of the (rule, server, login, trading_day) dedup — the
+    scheduler re-seeds from here EVERY tick (alert_events has no unique
+    constraint and the in-memory cache alone would re-fire every 5 min).
+    """
+    with get_risk_monitor_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT ae.id, ae.rule_id, ae.server, ae.login
+            FROM alert_intraday_return_detail ir
+            JOIN alert_events ae ON ae.id = ir.id
+            WHERE ir.trading_day = ? AND ae.rule_id BETWEEN 131 AND 140
+            """,
+            (str(trading_day),),
+        ).fetchall()
+    out: dict[tuple[str, int], dict[int, int]] = {}
+    for r in rows:
+        key = (str(r["server"]), int(r["login"]))
+        out.setdefault(key, {})[int(r["rule_id"])] = int(r["id"])
+    return out
+
+
+# Detail columns refreshed on every re-hit. `trading_day` is the dedup key
+# and never changes; `peak_return_pct` is handled as MAX() in the statement.
+_INTRADAY_RETURN_UPDATE_COLS: tuple[str, ...] = tuple(
+    c for c in _INTRADAY_RETURN_DETAIL_COLS
+    if c not in ("trading_day", "peak_return_pct", "updated_at")
+)
+
+
+def update_intraday_return_details(updates: list[dict[str, Any]], *, updated_at: str) -> int:
+    """UPSERT-refresh existing intraday-return rows with this tick's metrics.
+
+    Each update dict carries ``alert_id`` plus the detail columns. The
+    alert_events row's display fields (equity / balance / order_count /
+    total_lots / symbol / last_open) are refreshed too so the grid shows the
+    latest state; ``scanned_at`` / ``first_open`` stay as first written.
+    Returns the number of rows touched.
+    """
+    if not updates:
+        return 0
+    with get_risk_monitor_db() as conn:
+        return _update_intraday_return_details_conn(conn, updates, updated_at=updated_at)
+
+
+def _alerted_keys_conn(conn: sqlite3.Connection, trading_day: str) -> dict[tuple[str, int], dict[int, int]]:
+    rows = conn.execute(
+        """
+        SELECT ae.id, ae.rule_id, ae.server, ae.login
+        FROM alert_intraday_return_detail ir
+        JOIN alert_events ae ON ae.id = ir.id
+        WHERE ir.trading_day = ? AND ae.rule_id BETWEEN 131 AND 140
+        """,
+        (str(trading_day),),
+    ).fetchall()
+    out: dict[tuple[str, int], dict[int, int]] = {}
+    for r in rows:
+        out.setdefault((str(r["server"]), int(r["login"])), {})[int(r["rule_id"])] = int(r["id"])
+    return out
+
+
+def persist_intraday_return_tick(
+    *,
+    scanned_at: str,
+    scan_interval_min: int,
+    accounts_scanned: int,
+    scan_time_ms: int,
+    alerts: list[dict[str, Any]],
+    updates: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Write one intraday-return tick atomically: re-check the per-day dedup
+    keys INSIDE a write transaction, insert only rows that are still new,
+    turn the rest into in-place updates, apply the updates.
+
+    Why here and not in the scanner: the scheduled tick runs in the elected
+    scheduler worker while /scan-now lands on any of the 4 uvicorn workers.
+    Both read the same "already alerted" snapshot, so without a database-
+    level check both would INSERT the same (rule, server, login, day) and
+    mail it twice. ``BEGIN IMMEDIATE`` takes the SQLite write lock first, so
+    the second writer sees the first writer's row.
+
+    Returns {"inserted": n, "refreshed": n, "demoted": n} (demoted = alerts
+    that turned out to exist already and were applied as updates).
+    """
+    inserted = refreshed = demoted = 0
+    with get_risk_monitor_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        by_day: dict[str, dict[tuple[str, int], dict[int, int]]] = {}
+        fresh: list[dict[str, Any]] = []
+        demote: list[dict[str, Any]] = []
+        for a in alerts:
+            day = str(a.get("trading_day") or "")
+            if day not in by_day:
+                by_day[day] = _alerted_keys_conn(conn, day)
+            existing = by_day[day].get((str(a.get("server")), int(a.get("login") or 0)), {})
+            rid = int(a.get("rule_id") or 0)
+            if rid in existing:
+                demote.append({"alert_id": existing[rid], **a})
+            else:
+                fresh.append(a)
+        if fresh:
+            _append_scan_and_events_conn(
+                conn,
+                scanned_at=scanned_at,
+                scan_interval_min=scan_interval_min,
+                accounts_scanned=accounts_scanned,
+                suspicious_count=len(fresh),
+                scan_time_ms=scan_time_ms,
+                alerts=fresh,
+            )
+            inserted = len(fresh)
+        all_updates = list(updates) + demote
+        demoted = len(demote)
+        if all_updates:
+            refreshed = _update_intraday_return_details_conn(
+                conn, all_updates, updated_at=scanned_at,
+            )
+    return {"inserted": inserted, "refreshed": refreshed, "demoted": demoted}
+
+
+def _update_intraday_return_details_conn(
+    conn: sqlite3.Connection, updates: list[dict[str, Any]], *, updated_at: str
+) -> int:
+    sets = ", ".join(f"{c} = ?" for c in _INTRADAY_RETURN_UPDATE_COLS)
+    detail_sql = (
+        f"UPDATE alert_intraday_return_detail SET {sets}, "
+        "peak_return_pct = MAX(COALESCE(peak_return_pct, 0), COALESCE(?, 0)), "
+        "updated_at = ? WHERE id = ?"
+    )
+    event_sql = (
+        "UPDATE alert_events SET equity = ?, balance = ?, order_count = ?, "
+        "total_lots = ?, symbol = ?, last_open = COALESCE(?, last_open) WHERE id = ?"
+    )
+    touched = 0
+    if True:
+        for u in updates:
+            alert_id = int(u["alert_id"])
+            cur = conn.execute(
+                detail_sql,
+                (
+                    *(u.get(c) for c in _INTRADAY_RETURN_UPDATE_COLS),
+                    u.get("return_pct"), updated_at, alert_id,
+                ),
+            )
+            touched += int(cur.rowcount or 0)
+            conn.execute(
+                event_sql,
+                (
+                    u.get("equity"), u.get("balance"),
+                    int(u.get("order_count") or 0), float(u.get("total_lots") or 0.0),
+                    str(u.get("symbol") or ""), u.get("last_open"), alert_id,
+                ),
+            )
+    return touched
+
+
+def intraday_return_stats_extras(
+    since: str,
+    until: str,
+    server: str | None = None,
+    login: int | None = None,
+    zipcode: str | None = None,
+    *,
+    time_field: str = "trading_day",
+) -> dict[str, Any]:
+    """Summary-card extras for the intraday-return tab over the same filter
+    as /stats: highest peak return and the sum of today's profit over the
+    matched alerts (one row per account per day per tier, so the sum counts
+    an account once per tier it reached)."""
+    where_sql, params = _build_alert_filters(
+        since, until, server, login, None, None, 131, 140, zipcode,
+        time_field=time_field,
+    )
+    with get_risk_monitor_db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT MAX(ir.peak_return_pct) AS max_peak_return_pct,
+                   SUM(ir.intraday_profit) AS sum_intraday_profit
+            {_ALERT_FROM_CLAUSE}
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+    return {
+        "max_peak_return_pct": float(row["max_peak_return_pct"]) if row and row["max_peak_return_pct"] is not None else None,
+        "sum_intraday_profit": round(float(row["sum_intraday_profit"]), 2) if row and row["sum_intraday_profit"] is not None else None,
+    }
+
+
+# Mail-source fetchers (alert-mail-center registry contract). Same 4-function
+# family as hedge_open / rebate_arb: cursor pull / by-ids / same-day siblings
+# / recent. Row shape == the unified reader's (account_group aliased to group).
+_INTRADAY_RETURN_MAIL_SELECT_SQL = """
+    ae.id, ae.scanned_at, ae.rule_id, ae.rule_label, ae.server, ae.login,
+    ae.symbol, ae.order_count, ae.total_lots, ae.first_open, ae.last_open,
+    ae.equity, ae.balance, ae.account_group, ae.currency, ae.zipcode,
+    ae.net_deposit_hist, ae.user_id,
+    ir.trading_day, ir.prev_day_equity, ir.deposits_in, ir.credit_in,
+    ir.withdrawals_out, ir.adj_excluded, ir.initial_equity, ir.equity_now,
+    ir.same_day_pnl, ir.carried_float0, ir.carried_now, ir.carried_gain,
+    ir.intraday_profit, ir.return_pct, ir.peak_return_pct, ir.net_7d,
+    ir.realized_7d, ir.floating_all_now, ir.flag_withdraw_gt_half_deposit,
+    ir.trades_today, ir.lots_today, ir.median_hold_sec, ir.lock_pct,
+    ir.top_symbol, ir.updated_at AS detail_updated_at
+"""
+_INTRADAY_RETURN_MAIL_FROM_CLAUSE = """
+FROM alert_events ae
+JOIN alert_intraday_return_detail ir ON ir.id = ae.id
+"""
+
+
+def _intraday_return_mail_rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["group"] = d.pop("account_group", None)
+        out.append(d)
+    return out
+
+
+def fetch_intraday_return_alerts_after(
+    last_alert_id: int, limit: int = 500
+) -> list[dict[str, Any]]:
+    """Intraday-return alerts (rule 131-140) with id strictly above the cursor, asc."""
+    with get_risk_monitor_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_INTRADAY_RETURN_MAIL_SELECT_SQL}
+            {_INTRADAY_RETURN_MAIL_FROM_CLAUSE}
+            WHERE ae.id > ? AND ae.rule_id BETWEEN 131 AND 140
+            ORDER BY ae.id
+            LIMIT ?
+            """,
+            (int(last_alert_id), int(limit)),
+        ).fetchall()
+    return _intraday_return_mail_rows_to_dicts(rows)
+
+
+def fetch_intraday_return_alerts_by_ids(ids: list[int]) -> list[dict[str, Any]]:
+    if not ids:
+        return []
+    placeholders = ",".join(["?"] * len(ids))
+    with get_risk_monitor_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_INTRADAY_RETURN_MAIL_SELECT_SQL}
+            {_INTRADAY_RETURN_MAIL_FROM_CLAUSE}
+            WHERE ae.id IN ({placeholders})
+            """,
+            [int(i) for i in ids],
+        ).fetchall()
+    return _intraday_return_mail_rows_to_dicts(rows)
+
+
+def fetch_intraday_return_alerts_for_day(day: str) -> list[dict[str, Any]]:
+    """All intraday-return alerts for one MT trading day (sibling lookup)."""
+    with get_risk_monitor_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_INTRADAY_RETURN_MAIL_SELECT_SQL}
+            {_INTRADAY_RETURN_MAIL_FROM_CLAUSE}
+            WHERE ae.rule_id BETWEEN 131 AND 140 AND ir.trading_day = ?
+            ORDER BY ae.id
+            """,
+            (str(day),),
+        ).fetchall()
+    return _intraday_return_mail_rows_to_dicts(rows)
+
+
+def fetch_recent_intraday_return_alerts(limit: int = 500) -> list[dict[str, Any]]:
+    """Most recent intraday-return alerts, newest first (test-send scan)."""
+    with get_risk_monitor_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_INTRADAY_RETURN_MAIL_SELECT_SQL}
+            {_INTRADAY_RETURN_MAIL_FROM_CLAUSE}
+            WHERE ae.rule_id BETWEEN 131 AND 140
+            ORDER BY ae.id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return _intraday_return_mail_rows_to_dicts(rows)
 
 
 # ── Mail center CRUD helpers (OPT-0043, /api/v1/alert-mail) ─

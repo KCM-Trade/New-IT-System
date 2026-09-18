@@ -85,7 +85,7 @@ import { DateRange } from "react-day-picker";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { useGridColumnPersist } from "@/hooks/useGridColumnPersist";
+import { GRID_STORAGE_KEYS, useGridColumnPersist } from "@/hooks/useGridColumnPersist";
 import { ColumnVisibilityInline } from "@/components/ColumnVisibilityMenu";
 import type { UseGridColumnPersistResult } from "@/hooks/useGridColumnPersist";
 import { useFilterPersist, readFilterState } from "@/hooks/useFilterPersist";
@@ -304,6 +304,39 @@ interface AlertEvent {
   floating_pnl?: number | null;
   /** Number of adds beyond the anchor. */
   add_count?: number | null;
+  // ── Intraday Return detail (rule_id 131-140, OPT-0062). NULL on other rule rows. ──
+  /** MT trading day "YYYY-MM-DD" (dedup key with rule/server/login). */
+  trading_day?: string | null;
+  prev_day_equity?: number | null;
+  deposits_in?: number | null;
+  credit_in?: number | null;
+  withdrawals_out?: number | null;
+  adj_excluded?: number | null;
+  /** prev_day_equity + deposits_in + credit_in (the denominator). */
+  initial_equity?: number | null;
+  equity_now?: number | null;
+  /** Positions opened today: realized + floating, counted in full. */
+  same_day_pnl?: number | null;
+  carried_float0?: number | null;
+  carried_now?: number | null;
+  /** max(carried_now, 0) − max(carried_float0, 0). */
+  carried_gain?: number | null;
+  /** same_day_pnl + carried_gain (the numerator). */
+  intraday_profit?: number | null;
+  return_pct?: number | null;
+  peak_return_pct?: number | null;
+  /** realized_7d + floating_all_now. */
+  net_7d?: number | null;
+  realized_7d?: number | null;
+  floating_all_now?: number | null;
+  /** 1 when today's withdrawals exceed 50% of today's deposits. */
+  flag_withdraw_gt_half_deposit?: number | null;
+  trades_today?: number | null;
+  lots_today?: number | null;
+  median_hold_sec?: number | null;
+  lock_pct?: number | null;
+  top_symbol?: string | null;
+  detail_updated_at?: string | null;
 }
 
 interface AlertsResponse {
@@ -365,6 +398,15 @@ const SORTABLE_COL_IDS = new Set<string>([
   "lot_ratio_mg",
   "floating_pnl",
   "add_count",
+  // Intraday Return detail columns (OPT-0062)
+  "return_pct",
+  "peak_return_pct",
+  "intraday_profit",
+  "initial_equity",
+  "net_7d",
+  "trades_today",
+  "lock_pct",
+  "trading_day",
 ]);
 
 /** Sortable columns for the hedge-open aggregated view. Mirrors backend
@@ -409,6 +451,9 @@ const LEVERAGE_ABUSE_RULE_ID_BASE = 101;
 /** Backend `MARTINGALE_RULE_ID_MIN` — Martingale rule_ids are 111 … 120. */
 const MARTINGALE_RULE_ID_BASE = 111;
 
+/** Backend `INTRADAY_RETURN_RULE_ID_MIN` — Intraday Return rule_ids are 131 … 140. */
+const INTRADAY_RETURN_RULE_ID_BASE = 131;
+
 /** Per-rule summary cards (批量下单 / 快开快平); cycles if more rules than colors. */
 const RULE_SUMMARY_CARD_STYLES: { dot: string; value: string }[] = [
   { dot: "bg-violet-500", value: "text-violet-600 dark:text-violet-400" },
@@ -429,6 +474,9 @@ interface AlertsStats {
   event_count: number;
   servers: string[];
   by_rule?: QuickRuleBreakdownItem[] | null;
+  /** Intraday-return /stats extras (OPT-0062); absent on other tabs. */
+  max_peak_return_pct?: number | null;
+  sum_intraday_profit?: number | null;
 }
 
 interface BurstOpenRule {
@@ -566,6 +614,51 @@ interface MartingaleConfig {
   rules: MartingaleRule[];
 }
 
+/** Intraday Return (即日高收益, rule_id 131-140, OPT-0062). Per MT trading day:
+ *  return_pct = intraday_profit / initial_equity × 100 (formula v3). Each rule is
+ *  one tier; the highest matched tier suppresses the lower ones per account/day. */
+interface IntradayReturnRule {
+  id?: number;
+  name: string;
+  enabled: boolean;
+  /** 收益率門檻 (%). */
+  min_return_pct: number;
+  /** 初始權益門檻 (USD, CEN ÷100). */
+  min_initial_equity_usd: number;
+  /** 當日盈利門檻 (USD). */
+  min_profit_usd: number;
+  /** 近 N 日淨利門檻 (USD). */
+  min_net_7d_usd: number;
+  /** N for the net-profit window. */
+  net_window_days: number;
+  /** Denominator includes today's deposits + credit. */
+  include_deposits_in_base: boolean;
+  /** Optional: lock share ≥ % (null = not applied). */
+  min_lock_pct: number | null;
+  /** Optional: median hold ≤ minutes (null = not applied). */
+  max_median_hold_min: number | null;
+  /** Lock detection: smaller side ≥ larger side × this ratio. */
+  lock_ratio_min: number;
+}
+
+interface IntradayReturnConfig {
+  enabled: boolean;
+  rules: IntradayReturnRule[];
+}
+
+const DEFAULT_INTRADAY_RETURN_RULE: Omit<IntradayReturnRule, "name"> = {
+  enabled: true,
+  min_return_pct: 100,
+  min_initial_equity_usd: 50,
+  min_profit_usd: 30,
+  min_net_7d_usd: 0,
+  net_window_days: 7,
+  include_deposits_in_base: true,
+  min_lock_pct: null,
+  max_median_hold_min: null,
+  lock_ratio_min: 0.5,
+};
+
 /** One row in the per-loginsid aggregated view (hedge-open tab only).
  *  Folds multiple `AlertEvent` rows sharing `(server, login)` into a
  *  single summary so multi-day filters don't repeat the same account. */
@@ -669,6 +762,33 @@ function normalizeMartingaleConfig(c: MartingaleConfig): MartingaleConfig {
         (r.enabled as unknown) === false || (r.enabled as unknown) === 0
           ? false
           : true,
+    })),
+  };
+}
+
+function normalizeIntradayReturnConfig(
+  c: IntradayReturnConfig,
+): IntradayReturnConfig {
+  const v = c.enabled as unknown;
+  const optNum = (x: unknown): number | null =>
+    x === null || x === undefined || x === "" ? null : Number(x);
+  return {
+    ...c,
+    enabled: v === false || v === 0 ? false : true,
+    rules: (c.rules || []).map((r) => ({
+      ...DEFAULT_INTRADAY_RETURN_RULE,
+      ...r,
+      enabled:
+        (r.enabled as unknown) === false || (r.enabled as unknown) === 0
+          ? false
+          : true,
+      include_deposits_in_base:
+        (r.include_deposits_in_base as unknown) === false ||
+        (r.include_deposits_in_base as unknown) === 0
+          ? false
+          : true,
+      min_lock_pct: optNum(r.min_lock_pct),
+      max_median_hold_min: optNum(r.max_median_hold_min),
     })),
   };
 }
@@ -1300,6 +1420,7 @@ const RISK_MONITOR_TABS = [
   "hedge-open",
   "leverage-abuse",
   "martingale",
+  "intraday-return",
   "gap-trade",
 ] as const;
 type RiskMonitorTab = (typeof RISK_MONITOR_TABS)[number];
@@ -1315,6 +1436,7 @@ const RISK_MONITOR_TAB_LABELS: Record<RiskMonitorTab, string> = {
   "hedge-open": "对冲刷单",
   "leverage-abuse": "滥用杠杆",
   martingale: "马丁策略",
+  "intraday-return": "即日高收益",
   "gap-trade": "Gap Trade",
 };
 
@@ -1359,6 +1481,7 @@ const RISK_MONITOR_QUICK_PROFIT_FILTERS_KEY = "RISK_MONITOR_QUICK_PROFIT_FILTERS
 const RISK_MONITOR_HEDGE_OPEN_FILTERS_KEY = "RISK_MONITOR_HEDGE_OPEN_FILTERS_V1";
 const RISK_MONITOR_LEVERAGE_ABUSE_FILTERS_KEY = "RISK_MONITOR_LEVERAGE_ABUSE_FILTERS_V1";
 const RISK_MONITOR_MARTINGALE_FILTERS_KEY = "RISK_MONITOR_MARTINGALE_FILTERS_V1";
+const RISK_MONITOR_INTRADAY_RETURN_FILTERS_KEY = "RISK_MONITOR_INTRADAY_RETURN_FILTERS_V1";
 const RISK_MONITOR_GAP_TRADE_FILTERS_KEY = "RISK_MONITOR_GAP_TRADE_FILTERS_V1";
 
 type StandardTabFilters = {
@@ -1624,6 +1747,9 @@ export default function RiskMonitor() {
         </TabsContent>
         <TabsContent value="martingale" forceMount>
           <MartingaleTab active={activeTab === "martingale"} />
+        </TabsContent>
+        <TabsContent value="intraday-return" forceMount>
+          <IntradayReturnTab active={activeTab === "intraday-return"} />
         </TabsContent>
         <TabsContent value="gap-trade" forceMount>
           <GapTradeTab active={activeTab === "gap-trade"} />
@@ -8858,6 +8984,1243 @@ function MartingaleConfigDrawer({
   );
 }
 
+// ── Intraday Return Tab (即日高收益, rule_id 131-140, OPT-0062) ──────────
+// Per MT trading day: return_pct = intraday_profit / initial_equity × 100
+// (formula v3 — see docs/optimization/items/OPT-0062-intraday-return-rule.md).
+// One alert per (rule, server, login, trading_day); later ticks refresh the
+// row in place (peak_return_pct = intraday high-water mark). The backend job
+// runs on its own 5-min cadence (INTRADAY_RETURN_INTERVAL_MIN), independent
+// of burst-open's scan_interval_min, so the auto-refresh here is fixed.
+
+const INTRADAY_RETURN_REFRESH_MS = 5 * 60_000;
+
+function fmtPct(v: number | null | undefined, digits = 0): string {
+  if (v === null || v === undefined) return "—";
+  return `${v.toFixed(digits)}%`;
+}
+
+function fmtHoldMin(sec: number | null | undefined): string {
+  if (sec === null || sec === undefined) return "—";
+  return `${(sec / 60).toFixed(1)} 分`;
+}
+
+/** Right-aligned signed money cell (red < 0, green > 0). */
+function signedMoneyCell(p: { value: number | null | undefined }) {
+  const v = p.value;
+  if (v === null || v === undefined) return "—";
+  return (
+    <span
+      className={
+        v < 0
+          ? "text-red-600 dark:text-red-400"
+          : v > 0
+            ? "text-emerald-600 dark:text-emerald-400"
+            : ""
+      }
+    >
+      {fmtCurrency(v)}
+    </span>
+  );
+}
+
+function IntradayReturnTab({ active }: { active: boolean }) {
+  const { theme } = useTheme();
+  const isDarkMode = theme === "dark";
+  const isMobile = useIsMobile();
+  const { store: remarksStore, openEditor: openRemarkEditor } =
+    useRemarkContext();
+  const gridStyle = useGridThemeStyle(isDarkMode);
+  const columnPersist = useGridColumnPersist(
+    GRID_STORAGE_KEYS.RISK_MONITOR_INTRADAY_RETURN,
+  );
+
+  const persistedFilters = useMemo(
+    () =>
+      readFilterState(
+        RISK_MONITOR_INTRADAY_RETURN_FILTERS_KEY,
+        DEFAULT_STANDARD_FILTERS,
+      ),
+    [],
+  );
+
+  const [rangePreset, setRangePreset] = useState<RangePresetKey>(
+    persistedFilters.rangePreset,
+  );
+  const [customRange, setCustomRange] = useState<DateRange | undefined>();
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+
+  const [alerts, setAlerts] = useState<AlertEvent[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [stats, setStats] = useState<AlertsStats>({
+    suspicious_count: 0,
+    event_count: 0,
+    servers: [],
+  });
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [scanningNow, setScanningNow] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const [lastScan, setLastScan] = useState<{
+    scanned_at: string;
+    scan_time_ms: number;
+    trading_day: string | null;
+  } | null>(null);
+  const [config, setConfig] = useState<IntradayReturnConfig | null>(null);
+  const [editConfig, setEditConfig] = useState<IntradayReturnConfig | null>(
+    null,
+  );
+  const [configOpen, setConfigOpen] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+
+  const [ruleFilter, setRuleFilter] = useState<string>(persistedFilters.ruleFilter);
+  const [pageIndex, setPageIndex] = useState(0);
+  const pageSize = isMobile ? 20 : 50;
+  const [sortBy, setSortBy] = useState<string>("scanned_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [serverFilter, setServerFilter] = useState(persistedFilters.serverFilter);
+  const [loginInput, setLoginInput] = useState("");
+  const [loginQuery, setLoginQuery] = useState("");
+  const [zipcodeInput, setZipcodeInput] = useState("");
+  const [zipcodeQuery, setZipcodeQuery] = useState("");
+
+  useFilterPersist(
+    RISK_MONITOR_INTRADAY_RETURN_FILTERS_KEY,
+    DEFAULT_STANDARD_FILTERS,
+    { rangePreset, ruleFilter, serverFilter },
+    { skipFields: rangePreset === "custom" ? ["rangePreset"] : [] },
+  );
+
+  useEffect(() => {
+    const trimmed = loginInput.trim();
+    const t = setTimeout(
+      () => setLoginQuery(/^\d+$/.test(trimmed) ? trimmed : ""),
+      300,
+    );
+    return () => clearTimeout(t);
+  }, [loginInput]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setZipcodeQuery(zipcodeInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [zipcodeInput]);
+
+  useEffect(() => {
+    if (ruleFilter === "all" || !config?.rules?.length) return;
+    const n = Number.parseInt(ruleFilter, 10);
+    const maxRid = INTRADAY_RETURN_RULE_ID_BASE + config.rules.length - 1;
+    if (Number.isNaN(n) || n < INTRADAY_RETURN_RULE_ID_BASE || n > maxRid) {
+      setRuleFilter("all");
+    }
+  }, [config?.rules, ruleFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const effectiveRange = useMemo(
+    () => buildRangeIso(rangePreset, customRange),
+    [rangePreset, customRange],
+  );
+
+  const buildStatsFilterQs = useCallback(
+    (range: { since: string; until: string }) => {
+      const qs = new URLSearchParams({ since: range.since, until: range.until });
+      if (serverFilter !== "all") qs.set("server", serverFilter);
+      if (loginQuery) qs.set("login", loginQuery);
+      if (zipcodeQuery) qs.set("zipcode", zipcodeQuery);
+      return qs;
+    },
+    [serverFilter, loginQuery, zipcodeQuery],
+  );
+
+  const buildTableFilterQs = useCallback(
+    (range: { since: string; until: string }) => {
+      const qs = buildStatsFilterQs(range);
+      if (ruleFilter !== "all") qs.set("rule_id", ruleFilter);
+      return qs;
+    },
+    [buildStatsFilterQs, ruleFilter],
+  );
+
+  const fetchConfig = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/v1/risk-monitor/intraday-return/config");
+      if (res.ok) {
+        const raw = (await res.json()) as IntradayReturnConfig;
+        setConfig(normalizeIntradayReturnConfig(raw));
+      }
+    } catch (err) {
+      console.error("Failed to load intraday-return config:", err);
+    }
+  }, []);
+
+  const fetchAlerts = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!effectiveRange) return;
+      setLoading(true);
+      try {
+        const statsQs = buildStatsFilterQs(effectiveRange);
+        const tableQs = buildTableFilterQs(effectiveRange);
+        const alertsQs = new URLSearchParams(tableQs);
+        alertsQs.set("page", String(pageIndex + 1));
+        alertsQs.set("page_size", String(pageSize));
+        alertsQs.set("sort_by", sortBy);
+        alertsQs.set("sort_order", sortOrder);
+
+        const [alertsRes, statsRes] = await Promise.all([
+          apiFetch(
+            `/api/v1/risk-monitor/intraday-return/alerts?${alertsQs}`,
+            { signal },
+          ),
+          apiFetch(
+            `/api/v1/risk-monitor/intraday-return/alerts/stats?${statsQs}`,
+            { signal },
+          ),
+        ]);
+        if (alertsRes.ok) {
+          const json: AlertsResponse = await alertsRes.json();
+          setAlerts(json.entries);
+          setTotalCount(json.total);
+        }
+        if (statsRes.ok) {
+          const json: AlertsStats = await statsRes.json();
+          setStats(json);
+        }
+        setLastRefresh(
+          new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          }),
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Intraday-return alerts fetch failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      effectiveRange,
+      buildStatsFilterQs,
+      buildTableFilterQs,
+      pageIndex,
+      pageSize,
+      sortBy,
+      sortOrder,
+    ],
+  );
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [
+    effectiveRange?.since,
+    effectiveRange?.until,
+    serverFilter,
+    loginQuery,
+    zipcodeQuery,
+    ruleFilter,
+    pageSize,
+    sortBy,
+    sortOrder,
+  ]);
+
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    fetchAlerts(controller.signal);
+    fetchConfig();
+
+    if (rangePreset !== "custom") {
+      // Poll only while someone is looking (OPT-0058 follow-up): a hidden
+      // tab skips the tick, and switching back refreshes immediately so the
+      // viewer never waits a whole period for fresh data.
+      const timer = setInterval(() => {
+        if (document.visibilityState !== "visible") return;
+        fetchAlerts();
+      }, INTRADAY_RETURN_REFRESH_MS);
+      const onVisible = () => {
+        if (document.visibilityState === "visible") fetchAlerts();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      return () => {
+        controller.abort();
+        clearInterval(timer);
+        document.removeEventListener("visibilitychange", onVisible);
+      };
+    }
+    return () => controller.abort();
+  }, [active, fetchAlerts, fetchConfig, rangePreset]);
+
+  const handleExportCsv = async () => {
+    if (!effectiveRange || exporting) return;
+    setExporting(true);
+    try {
+      const stamp = `${fmtFilenameStamp(effectiveRange.since)}_to_${fmtFilenameStamp(effectiveRange.until)}`;
+      await exportGridAsCsv({
+        api: columnPersist.gridApiRef.current,
+        alertsPath: "/api/v1/risk-monitor/intraday-return/alerts",
+        filterQs: buildTableFilterQs(effectiveRange),
+        sortBy,
+        sortOrder,
+        total: totalCount,
+        currentRows: alerts,
+        fileName: `risk-monitor-intraday-return_${stamp}.csv`,
+      });
+    } catch (err) {
+      console.error("Intraday-return CSV export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleScanNow = async () => {
+    setScanningNow(true);
+    try {
+      const res = await apiFetch(
+        "/api/v1/risk-monitor/intraday-return/scan-now",
+        { method: "POST" },
+      );
+      if (res.ok) {
+        const json = (await res.json()) as {
+          scanned_at: string;
+          scan_time_ms: number;
+          trading_day: string | null;
+        };
+        setLastScan({
+          scanned_at: json.scanned_at,
+          scan_time_ms: json.scan_time_ms,
+          trading_day: json.trading_day,
+        });
+        setPageIndex(0);
+        await fetchAlerts();
+      }
+    } catch (err) {
+      console.error("Intraday-return scan-now failed:", err);
+    } finally {
+      setScanningNow(false);
+    }
+  };
+
+  const handleSortChanged = useCallback((e: SortChangedEvent) => {
+    const activeCol = e.api.getColumnState().find((c) => c.sort);
+    const nextSortBy =
+      activeCol?.colId && SORTABLE_COL_IDS.has(activeCol.colId)
+        ? activeCol.colId
+        : "scanned_at";
+    const nextSortOrder: "asc" | "desc" =
+      activeCol?.sort === "asc" ? "asc" : "desc";
+    setSortBy(nextSortBy);
+    setSortOrder(nextSortOrder);
+    // Same 3rd-click fallback as the other account-level tabs (OPT-0039 Phase 2).
+    if (!activeCol) {
+      e.api.applyColumnState({
+        state: [{ colId: "scanned_at", sort: "desc" }],
+        defaultState: { sort: null },
+      });
+    }
+  }, []);
+
+  const handleSaveConfig = async () => {
+    if (!editConfig) return;
+    setSavingConfig(true);
+    try {
+      const res = await apiFetch(
+        "/api/v1/risk-monitor/intraday-return/config",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(editConfig),
+        },
+      );
+      if (res.ok) {
+        const saved = (await res.json()) as IntradayReturnConfig;
+        setConfig(normalizeIntradayReturnConfig(saved));
+        setEditConfig(null);
+        setConfigOpen(false);
+      }
+    } catch (err) {
+      console.error("Failed to save intraday-return config:", err);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const columnDefs: ColDef<AlertEvent>[] = useMemo(() => {
+    const money = (
+      headerName: string,
+      field: keyof AlertEvent & string,
+      width: number,
+      tooltip?: string,
+      signed = false,
+    ): ColDef<AlertEvent> => ({
+      headerName,
+      field,
+      colId: field,
+      width,
+      cellClass: "ag-right-aligned-cell",
+      filter: "agNumberColumnFilter",
+      ...(signed
+        ? { cellRenderer: signedMoneyCell }
+        : {
+            valueFormatter: (p: { value: number | null | undefined }) =>
+              p.value == null ? "—" : fmtCurrency(p.value),
+          }),
+      ...(tooltip
+        ? { headerComponent: InfoHeader, headerComponentParams: { tooltip } }
+        : {}),
+    });
+    return [
+      {
+        headerName: "规则",
+        field: "rule_label",
+        colId: "rule_label",
+        width: 170,
+        pinned: "left",
+      },
+      {
+        headerName: "发现时间 (MT)",
+        field: "scanned_at",
+        colId: "scanned_at",
+        width: 165,
+        sort: "desc",
+        valueFormatter: (p) => fmtTime(p.value),
+      },
+      {
+        headerName: "交易日",
+        field: "trading_day",
+        colId: "trading_day",
+        width: 110,
+        cellRenderer: (p: { value: string | null }) => p.value || "—",
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip:
+            "MT 服務器交易日（由 mt5_daily 最新日終 +1s 推導，隨服務器 DST 歸零點走）。同一帳戶同一交易日每條規則只發一次，後續掃描原地更新本行。時間範圍篩選按交易日（不是首次發現時間）。",
+        },
+      },
+      {
+        headerName: "更新时间 (MT)",
+        field: "detail_updated_at",
+        colId: "detail_updated_at",
+        width: 165,
+        valueFormatter: (p) => (p.value ? fmtTime(p.value) : "—"),
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip:
+            "本行最近一次被掃描更新的時間。收益率 / 當日盈利 / 行為特徵都是這一刻的值；「發現時間」是首次命中。",
+        },
+      },
+      { headerName: "服务器", field: "server", colId: "server", width: 110 },
+      {
+        headerName: "Zipcode",
+        field: "zipcode",
+        colId: "zipcode",
+        width: 110,
+        cellRenderer: (p: { value: string | null }) => p.value || "—",
+      },
+      {
+        headerName: "账户",
+        field: "login",
+        colId: "login",
+        width: 110,
+        cellRenderer: LoginCell,
+      },
+      { headerName: "币种", field: "currency", colId: "currency", width: 80 },
+      {
+        headerName: "主力品种",
+        field: "top_symbol",
+        colId: "top_symbol",
+        width: 110,
+        cellRenderer: (p: { value: string | null }) => p.value || "—",
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: "當天開倉筆數最多的品種（無當日開倉時取全部持倉）。",
+        },
+      },
+      {
+        headerName: "收益率",
+        field: "return_pct",
+        colId: "return_pct",
+        width: 110,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        cellRenderer: (p: { value: number | null }) => {
+          const v = p.value;
+          if (v === null || v === undefined) return "—";
+          return (
+            <span
+              className={cn(
+                "font-bold",
+                v >= 300
+                  ? "text-red-600 dark:text-red-400"
+                  : v >= 100
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "",
+              )}
+            >
+              {fmtPct(v)}
+            </span>
+          );
+        },
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip:
+            "收益率 = 當日盈利 / 初始權益 × 100。初始權益 = 昨日日終權益 + 當日真入金 + credit；當日盈利 = 當天開的倉全算（已平 + 浮動）+ 隔夜倉 max(現在,0) − max(昨日終浮動,0)。顯示最近一次掃描的值。",
+        },
+      },
+      {
+        headerName: "峰值",
+        field: "peak_return_pct",
+        colId: "peak_return_pct",
+        width: 100,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => fmtPct(p.value),
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: "本交易日各次掃描裡收益率的最高值（帳戶回落後仍保留）。",
+        },
+      },
+      money(
+        "当日盈利",
+        "intraday_profit",
+        120,
+        "同日倉盈虧 + 隔夜倉增量（USD，CEN 已 ÷100）。",
+        true,
+      ),
+      money(
+        "初始權益",
+        "initial_equity",
+        110,
+        "昨日日終權益 + 當日真入金 + 當日 credit/bonus（規則可關掉入金部分）。運維調帳（Balance Adjustment / Initial balance）不算入金。",
+      ),
+      money("昨日日終", "prev_day_equity", 110, "昨日（週末往前找最近一天）日終權益。"),
+      money("当日入金", "deposits_in", 100),
+      money("Credit 入", "credit_in", 100),
+      {
+        headerName: "当日出金",
+        field: "withdrawals_out",
+        colId: "withdrawals_out",
+        width: 120,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        cellRenderer: (p: {
+          value: number | null;
+          data?: AlertEvent;
+        }) => {
+          const v = p.value;
+          const flagged = p.data?.flag_withdraw_gt_half_deposit === 1;
+          return (
+            <span>
+              {v == null ? "—" : fmtCurrency(v)}
+              {flagged && (
+                <span
+                  className="ml-1 text-red-600 dark:text-red-400 font-semibold"
+                  title="當日出金 > 入金 × 50%"
+                >
+                  ⚠
+                </span>
+              )}
+            </span>
+          );
+        },
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: "當日真出金。標 ⚠ = 當日出金 > 入金 × 50%（入金→獲利→先提走大半的規避路徑）。",
+        },
+      },
+      money(
+        "7日淨利",
+        "net_7d",
+        110,
+        "近 7 日已平倉盈虧 + 當前全部持倉浮動（規則窗口可調）。整體仍虧的帳戶過不了門檻。",
+        true,
+      ),
+      money(
+        "同日倉盈虧",
+        "same_day_pnl",
+        110,
+        "當天開的倉：已平（PROFIT+SWAPS+COMMISSION）+ 仍持有的當前浮動，全算。",
+        true,
+      ),
+      money(
+        "隔夜倉增量",
+        "carried_gain",
+        110,
+        "隔夜倉今天在盈利區新增的部分 = max(隔夜倉現值, 0) − max(昨日終浮動, 0)。浮虧回補 = 0；昨天已計入初始權益的浮盈不重複算。",
+        true,
+      ),
+      money("當前權益", "equity_now", 110, "掃描時 Balance + Credit + 全部浮動。"),
+      {
+        headerName: "當日筆數",
+        field: "trades_today",
+        colId: "trades_today",
+        width: 95,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => (p.value == null ? "—" : String(p.value)),
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: "當天開倉的持倉筆數。0 = 純隔夜倉浮動變化。",
+        },
+      },
+      {
+        headerName: "當日手數",
+        field: "lots_today",
+        colId: "lots_today",
+        width: 95,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => (p.value == null ? "—" : p.value.toFixed(2)),
+      },
+      {
+        headerName: "中位持倉",
+        field: "median_hold_sec",
+        colId: "median_hold_sec",
+        width: 100,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => fmtHoldMin(p.value),
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: "當天開且當天平的倉位持有時間中位數。",
+        },
+      },
+      {
+        headerName: "鎖倉占比",
+        field: "lock_pct",
+        colId: "lock_pct",
+        width: 100,
+        cellClass: "ag-right-aligned-cell",
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => fmtPct(p.value),
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip:
+            "當天有持倉的時間裡，同品種同時持有多空且小邊 ≥ 大邊 × 鎖倉判定比例的時間占比。",
+        },
+      },
+      { headerName: "账户组", field: "group", colId: "group", width: 160 },
+      netDepositColDef(),
+      remarkColDef<AlertEvent>({
+        remarksRef: remarksStore.remarksRef,
+        onEdit: openRemarkEditor,
+      }),
+    ];
+    // Stable deps only — NO `remarksStore.remarks` (Map identity churns and
+    // would reset persisted column layout); see MartingaleTab.
+  }, [openRemarkEditor, remarksStore.remarksRef]);
+
+  useRefreshRemarkColumn(remarksStore.remarks, columnPersist.gridApiRef);
+
+  const rangeLabel =
+    rangePreset === "custom" && customRange?.from
+      ? customRange.to
+        ? `${format(customRange.from, "yyyy-MM-dd")} ~ ${format(customRange.to, "yyyy-MM-dd")}`
+        : format(customRange.from, "yyyy-MM-dd")
+      : (RANGE_PRESETS.find((p) => p.key === rangePreset)?.label ??
+        "最近 4 小时");
+
+  const ruleDesc = (rule: IntradayReturnRule): string => {
+    const parts = [
+      `收益率 ≥ ${Number(rule.min_return_pct.toFixed(2))}%`,
+      `初始權益 ≥ $${rule.min_initial_equity_usd}`,
+      `盈利 ≥ $${rule.min_profit_usd}`,
+      `${rule.net_window_days}日淨利 ≥ $${rule.min_net_7d_usd}`,
+    ];
+    if (rule.min_lock_pct != null) parts.push(`鎖倉 ≥ ${rule.min_lock_pct}%`);
+    if (rule.max_median_hold_min != null)
+      parts.push(`中位持倉 ≤ ${rule.max_median_hold_min} 分`);
+    return parts.join(" · ");
+  };
+
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className={RISK_MONITOR_HEADER_ROW}>
+        <div className="min-w-0">
+          <p className="text-sm text-muted-foreground">
+            按 MT 交易日檢測「當日收益率 = 當日盈利 / 初始權益」的小本金暴利帳戶（即日高收益，公式 v3）
+          </p>
+          <p className="text-sm text-muted-foreground">
+            当前范围:{" "}
+            <span className="font-medium text-foreground">{rangeLabel}</span>
+            {lastRefresh && ` · 上次刷新 ${lastRefresh}`}
+            {lastScan &&
+              ` · 最近手动扫描 ${fmtTime(lastScan.scanned_at)} · 耗时 ${lastScan.scan_time_ms}ms` +
+                (lastScan.trading_day ? ` · 交易日 ${lastScan.trading_day}` : "")}
+            {" · 每 5 分钟自动扫描"}
+          </p>
+        </div>
+        <div className={RISK_MONITOR_HEADER_ACTIONS}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            disabled={exporting || totalCount === 0}
+          >
+            <Download
+              className={cn("h-4 w-4 mr-1.5", exporting && "animate-spin")}
+            />
+            {exporting ? "导出中..." : "导出 CSV"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setEditConfig(
+                config
+                  ? normalizeIntradayReturnConfig(
+                      JSON.parse(JSON.stringify(config)) as IntradayReturnConfig,
+                    )
+                  : {
+                      enabled: true,
+                      rules: [
+                        { name: "即日收益 ≥100%", ...DEFAULT_INTRADAY_RETURN_RULE },
+                        {
+                          name: "即日收益 ≥300%",
+                          ...DEFAULT_INTRADAY_RETURN_RULE,
+                          min_return_pct: 300,
+                        },
+                      ],
+                    },
+              );
+              setConfigOpen(true);
+            }}
+          >
+            <Settings2 className="h-4 w-4 mr-1.5" />
+            设置
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid w-full gap-1.5 sm:gap-2 grid-cols-1 sm:grid-cols-3">
+        <SummaryCard
+          label="命中帳戶數"
+          description="當前範圍內去重帳戶"
+          value={stats.suspicious_count}
+          dotColor="bg-violet-500"
+          textColor="text-violet-600 dark:text-violet-400"
+        />
+        <SummaryCard
+          label="峰值收益率最高"
+          description="範圍內單帳戶單日最高峰值"
+          value={stats.max_peak_return_pct ?? 0}
+          valueText={fmtPct(stats.max_peak_return_pct)}
+          dotColor="bg-rose-500"
+          textColor="text-rose-600 dark:text-rose-400"
+        />
+        <SummaryCard
+          label="命中帳戶當日盈利合計"
+          description="範圍內告警行的當日盈利求和（同帳戶命中多檔會重複計）"
+          value={stats.sum_intraday_profit ?? 0}
+          valueText={
+            stats.sum_intraday_profit == null
+              ? "—"
+              : fmtCurrency(stats.sum_intraday_profit)
+          }
+          dotColor="bg-emerald-500"
+          textColor="text-emerald-600 dark:text-emerald-400"
+        />
+      </div>
+
+      {config && config.rules.length > 0 ? (
+        <div className="grid w-full gap-1.5 sm:gap-2 grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+          {config.rules.map((rule, idx) => {
+            const ruleId = INTRADAY_RETURN_RULE_ID_BASE + idx;
+            const br = stats.by_rule?.find((b) => b.rule_id === ruleId);
+            const nAcc = br?.account_count ?? 0;
+            const nEvt = br?.event_count ?? 0;
+            const st =
+              RULE_SUMMARY_CARD_STYLES[idx % RULE_SUMMARY_CARD_STYLES.length];
+            return (
+              <SummaryCard
+                key={rule.id ?? `ir-rule-${idx}`}
+                compact
+                label={`Rule ${idx + 1} · 去重账户`}
+                value={nAcc}
+                description={`告警 ${nEvt} 条 · ${ruleDesc(rule)}`}
+                dotColor={st.dot}
+                textColor={st.value}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <Card className="border-dashed">
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            {config && config.rules.length === 0
+              ? "请先在「设置」中添加至少一条规则。"
+              : "正在加载规则…"}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex flex-col gap-2 w-full sm:flex-row sm:flex-wrap sm:items-stretch sm:gap-3 max-w-full">
+        <Select value={ruleFilter} onValueChange={setRuleFilter}>
+          <SelectTrigger
+            className="w-full min-w-0 h-9 sm:w-40 sm:shrink-0"
+            aria-label="按规则筛选"
+          >
+            <SelectValue placeholder="规则" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部规则</SelectItem>
+            {config?.rules.map((_, idx) => (
+              <SelectItem
+                key={INTRADAY_RETURN_RULE_ID_BASE + idx}
+                value={String(INTRADAY_RETURN_RULE_ID_BASE + idx)}
+              >
+                Rule {idx + 1}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={rangePreset}
+          onValueChange={(v) => {
+            setRangePreset(v as RangePresetKey);
+            if (v === "custom" && !customRange?.from) setDatePickerOpen(true);
+          }}
+        >
+          <SelectTrigger className="w-full min-w-0 h-9 sm:w-40 sm:shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {RANGE_PRESETS.map((p) => (
+              <SelectItem key={p.key} value={p.key}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {rangePreset === "custom" && (
+          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                className="w-full min-w-0 sm:w-40 h-9 justify-start text-left font-normal shrink-0 overflow-hidden"
+              >
+                <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {customRange?.from
+                    ? customRange.to
+                      ? `${format(customRange.from, "yyyy-MM-dd")} ~ ${format(customRange.to, "yyyy-MM-dd")}`
+                      : format(customRange.from, "yyyy-MM-dd")
+                    : "选择日期范围"}
+                </span>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                initialFocus
+                mode="range"
+                defaultMonth={customRange?.from}
+                selected={customRange}
+                onSelect={setCustomRange}
+                numberOfMonths={2}
+                disabled={{
+                  before: new Date(
+                    Date.now() - RETENTION_DAYS * 24 * 3600 * 1000,
+                  ),
+                }}
+              />
+            </PopoverContent>
+          </Popover>
+        )}
+
+        <Select value={serverFilter} onValueChange={setServerFilter}>
+          <SelectTrigger className="w-full min-w-0 h-9 sm:w-40 sm:shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部服务器</SelectItem>
+            <SelectItem value="MT4_Live">MT4 Live</SelectItem>
+            <SelectItem value="MT4_Live2">MT4 Live2</SelectItem>
+            <SelectItem value="MT5">MT5</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <div className="relative w-full min-w-0 sm:w-44 sm:shrink-0">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="搜索 zipcode（模糊）"
+            value={zipcodeInput}
+            onChange={(e) => setZipcodeInput(e.target.value)}
+            className="pl-8 h-9"
+          />
+        </div>
+        <div className="relative w-full min-w-0 sm:w-44 sm:shrink-0">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="搜索账户号（精确）"
+            value={loginInput}
+            onChange={(e) => setLoginInput(e.target.value)}
+            className="pl-8 h-9"
+            inputMode="numeric"
+          />
+        </div>
+        <span className="text-sm text-muted-foreground sm:ml-auto sm:shrink-0 py-1.5">
+          {loading ? "加载中..." : `共 ${totalCount} 条告警`}
+        </span>
+      </div>
+
+      <div
+        className={cn(
+          "risk-monitor-theme h-[calc(100vh-540px)] min-h-[400px] w-full",
+          isDarkMode ? "ag-theme-quartz-dark" : "ag-theme-quartz",
+        )}
+        style={gridStyle}
+      >
+        <AgGridReact<AlertEvent>
+          rowData={alerts}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          gridOptions={{ theme: "legacy", enableBrowserTooltips: true }}
+          animateRows={false}
+          enableCellTextSelection
+          suppressCellFocus
+          sortingOrder={["desc", "asc", null]}
+          onSortChanged={(e) => {
+            if (!columnPersist.isApplying()) handleSortChanged(e);
+            columnPersist.gridEventProps.onSortChanged();
+          }}
+          onGridReady={columnPersist.gridEventProps.onGridReady}
+          onColumnMoved={columnPersist.gridEventProps.onColumnMoved}
+          onColumnVisible={columnPersist.gridEventProps.onColumnVisible}
+          onColumnPinned={columnPersist.gridEventProps.onColumnPinned}
+          onColumnResized={columnPersist.gridEventProps.onColumnResized}
+          getRowId={(p) => `evt-${p.data.id}`}
+        />
+      </div>
+
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-muted-foreground">
+              {totalCount === 0
+                ? "暂无数据"
+                : isMobile
+                  ? `共 ${totalCount} 条`
+                  : `第 ${pageIndex * pageSize + 1}-${Math.min((pageIndex + 1) * pageSize, totalCount)} 条 / 共 ${totalCount} 条`}
+            </div>
+            <div className="flex items-center flex-wrap gap-2">
+              {!isMobile && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPageIndex(0)}
+                  disabled={pageIndex === 0 || loading}
+                >
+                  首页
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPageIndex(Math.max(0, pageIndex - 1))}
+                disabled={pageIndex === 0 || loading}
+              >
+                上一页
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                第 {pageIndex + 1} / {totalPages} 页
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setPageIndex(Math.min(totalPages - 1, pageIndex + 1))
+                }
+                disabled={pageIndex >= totalPages - 1 || loading}
+              >
+                下一页
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPageIndex(totalPages - 1)}
+                disabled={pageIndex >= totalPages - 1 || loading}
+              >
+                {isMobile ? "最后" : "末页"}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <IntradayReturnConfigDrawer
+        open={configOpen}
+        onOpenChange={setConfigOpen}
+        config={editConfig}
+        setConfig={setEditConfig}
+        onSave={handleSaveConfig}
+        saving={savingConfig}
+        columnGroups={[
+          {
+            persist: columnPersist,
+            columnDefs: columnDefs as ColDef<unknown>[],
+          },
+        ]}
+        manualActions={[
+          {
+            label: "立即扫描",
+            runningLabel: "扫描中...",
+            onClick: handleScanNow,
+            running: scanningNow,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function IntradayReturnConfigDrawer({
+  open,
+  onOpenChange,
+  config,
+  setConfig,
+  onSave,
+  saving,
+  columnGroups,
+  manualActions,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  config: IntradayReturnConfig | null;
+  setConfig: (c: IntradayReturnConfig | null) => void;
+  onSave: () => void;
+  saving: boolean;
+  columnGroups: ColumnSettingGroup[];
+  manualActions: ManualAction[];
+}) {
+  const isMobile = useIsMobile();
+  if (!config) return null;
+
+  const updateRule = (idx: number, patch: Partial<IntradayReturnRule>) => {
+    const rules = [...config.rules];
+    rules[idx] = { ...rules[idx], ...patch };
+    setConfig({ ...config, rules });
+  };
+
+  const addRule = () => {
+    if (config.rules.length >= 10) return;
+    setConfig({
+      ...config,
+      rules: [
+        ...config.rules,
+        { name: `规则 ${config.rules.length + 1}`, ...DEFAULT_INTRADAY_RETURN_RULE },
+      ],
+    });
+  };
+
+  const removeRule = (idx: number) => {
+    if (config.rules.length <= 1) return;
+    setConfig({ ...config, rules: config.rules.filter((_, i) => i !== idx) });
+  };
+
+  /** Optional numeric knob: empty input → null (not applied). */
+  const optNum = (raw: string): number | null => {
+    const t = raw.trim();
+    if (t === "") return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const numField = (
+    idx: number,
+    rule: IntradayReturnRule,
+    key:
+      | "min_return_pct"
+      | "min_initial_equity_usd"
+      | "min_profit_usd"
+      | "min_net_7d_usd"
+      | "net_window_days"
+      | "lock_ratio_min",
+    label: string,
+    attrs: { min?: number; max?: number; step?: number },
+    fallback: number,
+  ) => (
+    <div className="space-y-1">
+      <label className="text-xs text-muted-foreground">{label}</label>
+      <Input
+        type="number"
+        min={attrs.min}
+        max={attrs.max}
+        step={attrs.step}
+        value={rule[key]}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          updateRule(idx, {
+            [key]: Number.isFinite(n) && e.target.value !== "" ? n : fallback,
+          } as Partial<IntradayReturnRule>);
+        }}
+      />
+    </div>
+  );
+
+  return (
+    <Drawer
+      open={open}
+      onOpenChange={onOpenChange}
+      direction={isMobile ? "bottom" : "right"}
+    >
+      <DrawerContent
+        className={cn(
+          isMobile
+            ? "max-h-[85vh]"
+            : "ml-auto h-full w-[560px] max-w-[90vw] rounded-l-xl rounded-r-none",
+        )}
+      >
+        <DrawerHeader className="border-b px-6">
+          <DrawerTitle>设置</DrawerTitle>
+        </DrawerHeader>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">启用规则</h3>
+              <Checkbox
+                checked={config.enabled}
+                onCheckedChange={(v) =>
+                  setConfig({ ...config, enabled: v === true })
+                }
+              />
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">
+              关闭后仅停止新告警扫描，不影响历史告警展示。
+            </p>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  检测规则（最多 10 条，每条一檔；同帳戶同日命中多檔只發最高檔）
+                </label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addRule}
+                  disabled={config.rules.length >= 10}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" />
+                  添加规则
+                </Button>
+              </div>
+
+              {config.rules.map((rule, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-lg border p-4 space-y-3 bg-muted/30"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <Input
+                      className="font-medium max-w-sm"
+                      value={rule.name}
+                      onChange={(e) => updateRule(idx, { name: e.target.value })}
+                      placeholder="规则名（例：即日收益 ≥300%）"
+                      maxLength={100}
+                    />
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1 text-sm whitespace-nowrap">
+                        <Checkbox
+                          checked={rule.enabled}
+                          onCheckedChange={(v) =>
+                            updateRule(idx, { enabled: !!v })
+                          }
+                        />
+                        启用
+                      </label>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => removeRule(idx)}
+                        disabled={config.rules.length <= 1}
+                        aria-label="删除"
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {numField(idx, rule, "min_return_pct", "收益率門檻 (%)", { min: 10, max: 100000, step: 50 }, 100)}
+                    {numField(idx, rule, "min_initial_equity_usd", "初始權益門檻 (USD)", { min: 0, max: 1000000, step: 10 }, 50)}
+                    {numField(idx, rule, "min_profit_usd", "當日盈利門檻 (USD)", { min: 0, max: 10000000, step: 10 }, 30)}
+                    {numField(idx, rule, "min_net_7d_usd", "近 N 日淨利門檻 (USD)", { min: -10000000, max: 10000000, step: 10 }, 0)}
+                    {numField(idx, rule, "net_window_days", "N 日窗口 (天)", { min: 1, max: 30, step: 1 }, 7)}
+                    {numField(idx, rule, "lock_ratio_min", "鎖倉判定比例 (0-1)", { min: 0, max: 1, step: 0.1 }, 0.5)}
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        鎖倉占比 ≥ % (可選，留空不啟用)
+                      </label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={5}
+                        value={rule.min_lock_pct ?? ""}
+                        onChange={(e) =>
+                          updateRule(idx, { min_lock_pct: optNum(e.target.value) })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">
+                        中位持倉 ≤ 分鐘 (可選，留空不啟用)
+                      </label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={1440}
+                        step={1}
+                        value={rule.max_median_hold_min ?? ""}
+                        onChange={(e) =>
+                          updateRule(idx, {
+                            max_median_hold_min: optNum(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <label className="col-span-2 flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={rule.include_deposits_in_base}
+                        onCheckedChange={(v) =>
+                          updateRule(idx, { include_deposits_in_base: v === true })
+                        }
+                      />
+                      分母含當日入金 + credit（關掉則分母 = 昨日日終權益）
+                    </label>
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                公式 v3：收益率 = 當日盈利 / 初始權益 × 100，按 MT 交易日計。
+                初始權益 = 昨日日終權益 + 當日真入金 + credit（運維調帳不算）；
+                當日盈利 = 當天開的倉全算（已平 + 浮動）+ 隔夜倉 max(現在, 0) − max(昨日終浮動, 0)
+                ——扛單浮虧回補記 0、昨天已計入的浮盈不重複算。近 N 日淨利 = 近 N 日已平倉 + 當前全部浮動。
+                四個門檻（初始權益 / 當日盈利 / 收益率 / 淨利）全過才告警；鎖倉占比與中位持倉為可選附加條件。
+                CEN 帳戶金額與手數已 ÷100，比率免換算。
+              </p>
+            </div>
+          </section>
+
+          <UnifiedSettingsExtras
+            columnGroups={columnGroups}
+            manualActions={manualActions}
+          />
+        </div>
+
+        <div className="border-t p-4 flex justify-end gap-2">
+          <DrawerClose asChild>
+            <Button variant="outline">取消</Button>
+          </DrawerClose>
+          <Button onClick={onSave} disabled={saving}>
+            <Save className="h-4 w-4 mr-1.5" />
+            {saving ? "保存中..." : "保存规则"}
+          </Button>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 // ── Gap Trade Tab ─────────────────────────────────────────
 // Rule 71 = SO + AB pair (双账户配对 + IP 共享高亮)
 // Rule 81 = per-client window profit (单客户聚合)
@@ -10745,6 +12108,8 @@ function SummaryCard({
   textColor,
   /** Tighter padding and type scale — used for 快开快平 per-rule cards. */
   compact = false,
+  /** Pre-formatted display text (e.g. "957%" / "$1,234.00"); overrides `value`. */
+  valueText,
 }: {
   label: string;
   description?: string;
@@ -10752,6 +12117,7 @@ function SummaryCard({
   dotColor: string;
   textColor: string;
   compact?: boolean;
+  valueText?: string;
 }) {
   // Card root in `components/ui/card.tsx` defaults to `py-6 gap-6`. With only
   // CardContent as child, `py-6` still adds large empty bands top/bottom — override.
@@ -10778,7 +12144,7 @@ function SummaryCard({
                   textColor,
                 )}
               >
-                {value.toLocaleString()}
+                {valueText ?? value.toLocaleString()}
               </p>
             </div>
             {description && (
@@ -10806,7 +12172,7 @@ function SummaryCard({
                 textColor,
               )}
             >
-              {value.toLocaleString()}
+              {valueText ?? value.toLocaleString()}
             </p>
             {description && (
               <p className="text-xs text-muted-foreground mt-1">

@@ -10,6 +10,7 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | Commit | 标题 |
 |------|----|--------|------|
+| 2026-09-18 | [OPT-0062](./items/OPT-0062-intraday-return-rule.md) | — | 即日高收益 Intraday Return 规则（band 131-140）：公式 v3（隔夜仓 max(now,0)−max(昨日终,0)，7 日净利过滤，门槛 50/30）+ 独立 5 分钟 job + 每 tick 回种去重 & 原子 UPSERT + detail 表 + 邮件源（seed 131/132 → risk@）+ 前端 tab + 回测脚本（四行重点账户全中）；冷审两轮 21+12 条，二轮 4 🔴 7 🟡 全部当场修 |
 | 2026-09-04 | [OPT-0060](./items/OPT-0060-client-return-mdd.md) | — | Client Return Rate 加 MDD 5 窗口列：TWR（R1 修正递推+三条件 re-base+G1-G5）按 loginSid 建序列客户取 MAX；夜间作业形态 B（0061 老查询不动 + PK 序流式 22.6M 行 120s 零 filesort）；换表 client_metrics_snapshot + H1 staging 原子换名 + 跨进程刷新锁；三客户独立对账 <0.1pp；冷审 10 条修 7 |
 | 2026-08-31 | [OPT-0061](./items/OPT-0061-client-return-floating-inclusive.md) | — | Client Return Rate 加「含浮动收益率+扛单率」两列（修 ROACE 扛单盲区）+ profit_hist 口径收窄 sid 1/5/6 非 demo（540 客户差>$1,000）；SQLite v2 表 + 刷新 SQL 两级聚合 48s + timeout hint；冷审 F1/F2 当场修、F3/F4 live-with |
 | 2026-07-22 | [OPT-0054](./items/OPT-0054-open-positions-ttl-cache.md) | — | open-positions 加 30s Redis TTL 缓存 + singleflight（N viewer 不再 ×N 打 PG），含冷审 4 项硬化 |
