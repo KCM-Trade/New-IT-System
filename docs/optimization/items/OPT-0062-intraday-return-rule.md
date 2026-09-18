@@ -31,8 +31,8 @@ Sammy 原公式：`Intraday Profit / Initial Equity >= 300%`，
 
 1. **分母為零**：當天才入金的帳戶開盤權益 = 0。MT5 近 30 天 532 個「日初權益 ≤ 0 但當日盈利」帳戶日，
    Sammy 舉的 67044208 就是（9/16 06:58 註冊、07:03 入金 50、當日 88 筆 XAUUSD 賺 478.27）。
-2. **沒地板**：300% 檔不設地板 MT5 30 天 288 帳戶日，「初始權益 ≥ 50 USD」後剩 59。
-3. **量**：分母含當日入金、地板 50 時（日終口徑，MT5+MT4）≥100% 357 帳戶日/30 天（日均 12）、≥200% 124、≥300% 79。
+2. **沒有最低門檻**：300% 檔不設門檻 MT5 30 天 288 帳戶日，「初始權益 ≥ 50 USD」後剩 59。
+3. **量**：分母含當日入金、門檻 50 時（日終口徑，MT5+MT4）≥100% 357 帳戶日/30 天（日均 12）、≥200% 124、≥300% 79。
    ⚠ 這張表是**日終、淨額口徑**，只能當下界（冷審 F3）。
 4. **原公式對跨日持倉重複計分**（v2 新發現）：昨天開的倉、昨日終浮盈 +100 已在 Initial Equity 裡，今天平在 +150，
    「當日已平倉盈虧」記 150 而真實當日增量是 50。改用**權益增量**口徑後自動消除（見 §公式 v2）。
@@ -89,7 +89,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 ```
 
 - 對「當日開、當日平」的目標人群，`intraday_profit` 與 Sammy 的「已平倉 + 當前浮動」數值完全一致；只在跨日持倉時不同（v2 更準）。
-- CEN：比率免換算；三個 USD 地板與手數 ÷100；幣種在檢測前取。
+- CEN：比率免換算；三個 USD 門檻與手數 ÷100；幣種在檢測前取。
 - `initial_equity ≤ 0` 一律跳過（不再有 ÷0）。
 - 「當天」= MT 服務器交易日。⚠ MT 日界隨 DST（夏 GMT+3 / 冬 GMT+2），`BROKER_TZ_OFFSET` 硬編碼 +03:00 —— 本規則是唯一以日界為口徑的規則，
   **「今日日初」從 `mt5_daily` 最新 `Datetime` + 1s 推導**（跟隨服務器實際歸零點），MT4 沿用同一時刻；不用 `CURDATE()`。上線前實測一次。
@@ -118,8 +118,8 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 | `name` | str 1-100 | — | 快照進 `rule_label` |
 | `enabled` | bool | true | 單條停車 |
 | `min_return_pct` | float 10–100000 | 100 / 300 | 收益率閾值 |
-| `min_initial_equity_usd` | float 0–1e6 | 50 | 分母地板 |
-| `min_profit_usd` | float 0–1e7 | **30** | 分子地板。⚠ 不能是 100：與地板 50 疊加 = 50 USD 帳戶要 200% 才觸發，100% 檔對目標人群失效 |
+| `min_initial_equity_usd` | float 0–1e6 | 50 | 分母門檻 |
+| `min_profit_usd` | float 0–1e7 | **30** | 分子門檻。⚠ 不能是 100：與門檻 50 疊加 = 50 USD 帳戶要 200% 才觸發，100% 檔對目標人群失效 |
 | `min_net_7d_usd` | float −1e7–1e7 | 0 | Sammy 新增：近 N 日淨利 ≥ 此值 |
 | `net_window_days` | int 1–30 | 7 | 上一條的窗口 |
 | `include_deposits_in_base` | bool | true | 分母是否加當日入金 + credit（冷審要求可關） |
@@ -138,7 +138,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 4. 分母：按 (server, login, trading_day) 進程內緩存 `prev_eq` 與 `eq_d7`；首 tick 全量、後續只補新 login。MT5 讀 `EquityPrevDay`（D-7 走 `mt5_daily`），MT4 主鍵點查 `mt4_daily`。
 5. 流水：當日 + 7 日餘額/credit 操作（小表），算 `dep_in / cred_in / net_flow / adj_excluded / withdrawals_out`。
 6. 當前權益：Balance + Credit + Σfloating（現成浮動查詢）。
-7. 先過三個地板（含 7 日淨利），再算比率，再逐條規則比閾值；命中且規則帶可選行為條件時，**只對命中帳戶**拉當日成交算 `trades_today / median_hold / lock_pct / top_symbol`。
+7. 先過三個門檻（含 7 日淨利），再算比率，再逐條規則比閾值；命中且規則帶可選行為條件時，**只對命中帳戶**拉當日成交算 `trades_today / median_hold / lock_pct / top_symbol`。
 8. 去重：`(rule_id, server, login, trading_day)`。**每 tick 從 SQLite 回種當日已發**（照 `get_rebate_arb_alerted_userids` 寫 `get_intraday_return_alerted_keys(trading_day)`）——
    `alert_events` 無唯一約束、slow tick 會替換自己的告警段（`burst_open_scheduler.py:669-678`），只靠內存 = 一天 288 封。
 9. 已命中的帳戶後續 tick **UPSERT detail 行**（最新 `return_pct` / 行為特徵 / `peak_return_pct` 取最大），不新增 alert 行、不重發。
@@ -173,7 +173,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 列全顯式 `colId`，`InfoHeader` 解釋公式 v2。匯總卡三張：今日命中帳戶數 / 峰值收益率最高 / 命中帳戶當日盈利合計。config drawer 復用 §9 每規則卡片。
 `SSE` / `/stats` / CSV 三個端點契約同其他 tab（客戶端 `exportGridAsCsv()`）。
 
-## 驗證（2026-09-18 實跑，修訂公式，地板 50/30，日終口徑）
+## 驗證（2026-09-18 實跑，修訂公式，門檻 50/30，日終口徑）
 
 **① 9/14–9/17 MT5 回測，閾值 300%**：三個重點帳戶全部精準命中，7 日淨利過濾對它們零影響。
 
@@ -194,7 +194,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 ## 假設 / 待驗證
 
 - [ ] 郵件收件人：風控 + CS 具體地址
-- [ ] Sammy 對「公式 v2（權益增量口徑）」與「地板 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
+- [ ] Sammy 對「公式 v2（權益增量口徑）」與「門檻 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
 - [ ] 「今日日初」從 `mt5_daily` 推導在 DST 切換日的實測（下一次切換 2026-10-25 前後）
 - [ ] MT4 分母緩存後每 tick 實測耗時（目標 < 10s 三台合計）
 - [ ] shadow 期後 100% 檔是否發郵件（用真實 tick 口徑定）
@@ -202,7 +202,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 ## 驗收標準
 
 - [ ] 獨立 job + 自有 lock + env 開關與週期；`_SLOW_TIER_RULE_BANDS` 含 (131,140) 且 `_MAX_ALLOCATED_RULE_ID=140`，tier anti-drift 測試覆蓋
-- [ ] 公式 v2 逐項單測：÷0 跳過、三地板、CEN ÷100（檢測前取幣種）、入金黑名單、credit 進分母、出金加回、跨日持倉不重複計分、7 日淨利、可選行為條件
+- [ ] 公式 v2 逐項單測：÷0 跳過、三門檻、CEN ÷100（檢測前取幣種）、入金黑名單、credit 進分母、出金加回、跨日持倉不重複計分、7 日淨利、可選行為條件
 - [ ] 去重每 tick 回種 + UPSERT detail + `peak_return_pct`；高檔抑制低檔
 - [ ] MT5 切日用 `Timestamp`；MT4 只主鍵點查 `mt4_daily`；分母按日緩存；`MAX_EXECUTION_TIME` 釘住
 - [ ] `alert_intraday_return_detail` 落庫 + `/alerts` 拍扁 + `return_pct` / `net_7d` 服務端排序
@@ -232,8 +232,8 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 | F14 🟡 | MT4 點查 5.37s/425 + 占 `_scan_lock` | 分母按日緩存 + 自有 lock |
 | F15 🟡 | 行為特徵只算一次 | UPSERT + `peak_return_pct` |
 | F16 ⚪ | 9 個 LEFT JOIN | follow-up |
-| F17 🔴 | CEN 地板差 100 倍 | 檢測前 `build_currency_map()` |
-| F18 🔴 | 兩地板互吃 | `min_profit_usd` 默認 30 |
+| F17 🔴 | CEN 門檻差 100 倍 | 檢測前 `build_currency_map()` |
+| F18 🔴 | 兩個門檻互相抵消 | `min_profit_usd` 默認 30 |
 | F19 🟡 | 分檔無抑制 | 高檔抑制低檔 |
 | F20 🟡 | 參數/固定反了 | `include_deposits_in_base` / `lock_ratio_floor` 做參數；含浮動固定 |
 | F21 🟡 | AC 缺 shadow / mt5_daily 點查陷阱 / SSE-stats-CSV / 快照型決策 | 已補；快照型漂移對本規則不成立（只關心比率往上、按日去重、回落不重報） |
