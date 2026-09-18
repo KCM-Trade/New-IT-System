@@ -132,8 +132,18 @@ def test_filetime_follows_mt_wall_clock_dst():
     summer_utc = (ft(summer) // 10_000_000) - 11644473600
     assert winter_utc == int(datetime(NOW_UTC.year, 1, 14, 22, 0, tzinfo=timezone.utc).timestamp())
     assert summer_utc == int(datetime(NOW_UTC.year, 7, 14, 21, 0, tzinfo=timezone.utc).timestamp())
-    # round trip through the helper pair
+    # US schedule, not EU: 2026-03-10 is already +3 (EU would still be +2
+    # until 03-29); 2025-10-28 is still +3 (EU switched on 10-26).
+    mar = datetime(2026, 3, 10, 0, 0, 0)
+    assert (ft(mar) // 10_000_000) - 11644473600 == int(datetime(2026, 3, 9, 21, 0, tzinfo=timezone.utc).timestamp())
+    oct_ = datetime(2025, 10, 28, 0, 0, 0)
+    assert (ft(oct_) // 10_000_000) - 11644473600 == int(datetime(2025, 10, 27, 21, 0, tzinfo=timezone.utc).timestamp())
+    nov = datetime(2025, 11, 4, 0, 0, 0)
+    assert (ft(nov) // 10_000_000) - 11644473600 == int(datetime(2025, 11, 3, 22, 0, tzinfo=timezone.utc).timestamp())
+    # round trip through the helper pair (both seasons) + astimezone works
     assert svc._utc_to_local(svc._local_to_utc(winter)) == winter
+    assert svc._utc_to_local(svc._local_to_utc(mar)) == mar
+    assert datetime(2026, 3, 9, 21, 0, tzinfo=timezone.utc).astimezone(MT_SERVER_TZ).replace(tzinfo=None) == mar
 
 
 # ── R4 cross-process dedup in the persist layer ─────────────────────────

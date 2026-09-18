@@ -283,7 +283,7 @@ v3 專門修的兩個案例，按驗收標準逐條核對：
 |---|---|---|
 | R1 🔴 | 132 在冊後回落到 150% 會新開 131 行 + 發「≥100%」郵件 | **當場修**：只有比在冊最高檔更高的檔才算新命中（`test_decay_from_higher_tier_does_not_open_lower_tier_row`） |
 | R2 🔴 | 昨日行缺失被當 (0,0,0) 緩存一整天 | **當場修**：MT5 回落 `mt5_users.EquityPrevDay/BalancePrevDay`；日初 60 分鐘內不緩存舊行；單台缺失 > 20% → 該服務器跳過 + ERROR |
-| R3 🔴 | `_filetime` 硬編碼 +03:00，MT 墻鐘冬季是 +2 | **當場修**：實測 1 月 deals 差 +3600 → `MT_SERVER_TZ = Europe/Athens`（`test_filetime_follows_mt_wall_clock_dst`）。⚠ 回測腳本 SQL 側仍用 session +3（follow-up） |
+| R3 🔴 | `_filetime` 硬編碼 +03:00，MT 墻鐘冬季是 +2 | **當場修**：實測 1 月 deals 差 +3600 → 先改 `Europe/Athens`，文檔回寫時再探 03-10 / 10-28 / 11-04 發現切換點是**美國 DST 日程**（與 KCM `mt_server_utc_offset_hours` 同）→ 自定義 tzinfo `_MTServerTZ`（`test_filetime_follows_mt_wall_clock_dst` 釘四個日期）。⚠ 回測腳本 SQL 側仍用 session +3（follow-up） |
 | R4 🔴 | scan-now 落在別的 uvicorn worker，與 scheduled tick 各插一行各發一封 | **當場修**：`persist_intraday_return_tick()` 在 `BEGIN IMMEDIATE` 內再查當日鍵、撞上的降級成 update（`test_persist_tick_demotes_duplicate_alert_to_update`）。rebate-arb 同型洞未修（follow-up） |
 | R5 🟡 | `mt5_daily` 停更 → 「今天」變成兩天 | **當場修**：日初比現在舊 > 26h → tick `skipped` + ERROR |
 | R6 🟡 | 帳戶不再匹配時行凍在最後匹配值 | **當場修**：在冊行不論匹配與否都刷新 |
@@ -308,7 +308,7 @@ v3 專門修的兩個案例，按驗收標準逐條核對：
 **交付 vs 驗收標準**：全部 ✅ ——獨立 job + 自有 lock + env 開關（`INTRADAY_RETURN_SCAN_ENABLED` / `_INTERVAL_MIN`）；tier 護欄 `(131,140)` + `_MAX_ALLOCATED_RULE_ID=140`；公式 v3 五場景 + 三門檻 + CEN + 黑名單 + credit + 7 日淨利 + 可選行為條件逐條單測；每 tick 回種 + UPSERT + `peak_return_pct` + 高檔抑制低檔（含回落抑制，二輪冷審 R1）；MT5 `Timestamp` 切日 / `mt4_daily` 只點查 / 分母按日緩存 / `MAX_EXECUTION_TIME`；detail 表 + 拍扁 + 服務端排序；郵件源 + seed 兩條訂閱；前端 tab 四 hook；`intraday_return_backtest.py` 重跑 §驗證 ① 四行全中、8611807 不出現、8521502 只到 100% 檔；回放測試；skill / docs 回寫（順帶修掉不存在的 `excluded_login_sql`）。
 
 **與計畫的偏差**：
-- 交易日換算改用 `Europe/Athens` 而非 `BROKER_TZ_OFFSET`（實測 1 月 MT 墻鐘 +2）；CLAUDE.md 的「UTC+3 no DST」對本規則不成立（memory 已有同結論）。
+- 交易日換算改用美國 DST 日程的自定義 tzinfo `MT_SERVER_TZ`（+2/+3，3 月第 2 週日 → 11 月第 1 週日）而非 `BROKER_TZ_OFFSET`；CLAUDE.md 的「UTC+3 no DST」已改寫。合併時曾短暫用 `Europe/Athens`，同日文檔回寫階段探到 03-10 / 10-28 都已是 +3 才改正（hotfix 同日部署）。
 - 落庫改成 `persist_intraday_return_tick()` 原子 check-and-insert（scan-now 跨 worker 競態），不是「append + update 兩步」。
 - `/alerts` `/stats` `/export` 按 `trading_day` 篩選而非 `scanned_at`；前端多一列「更新時間」。
 - 9/14 300% 命中數是 2 不是預估的 1（67043694 純當日交易，v2/v3 同值）。
@@ -322,6 +322,6 @@ v3 專門修的兩個案例，按驗收標準逐條核對：
 4. `_ALERT_FROM_CLAUSE` 第 9 個 LEFT JOIN；按 band 動態選 JOIN（一輪 F16）。
 5. `RiskMonitor.tsx` 12k 行，`IntradayReturnTab` 是 `MartingaleTab` 的複製；第 9 條規則前抽共用 hook。
 6. MT4 部分平倉（新 ticket）與 MT5 Entry=2 反手仍會多算一筆 `trades_today`。
-7. `_prepare_server` 的 SQL 組裝無單測；DST 切換日（2026-10-25）上線後實測一次。
+7. `_prepare_server` 的 SQL 組裝無單測；DST 切換日（**2026-11-01**，美國日程）前後各實測一次。
 8. Sammy 對公式 v3 與門檻 50/30 的確認仍待；量級看一周後再決定 CS 是否收、100% 檔是否關（郵件中心 UI 操作）。
 9. 課件（Hook 2）：`BEGIN IMMEDIATE` 跨進程去重 + DST 墻鐘 vs FILETIME 是新概念，可補。

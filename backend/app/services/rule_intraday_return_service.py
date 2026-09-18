@@ -66,9 +66,8 @@ import logging
 import statistics
 import time
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
-from zoneinfo import ZoneInfo
 
 import pymysql
 
@@ -120,15 +119,47 @@ _WITHDRAW_FLAG_RATIO = 0.5
 _PREV_DAY_LOOKBACK_DAYS = 4
 
 # MT server wall clock. NOT the fixed +03:00 the rest of risk-monitor uses:
-# the servers follow EU DST (GMT+3 in summer, GMT+2 in winter — probed
-# 2026-09-18: a January mt5_deals row has Timestamp − UNIX_TIMESTAMP(Time as
-# +03:00) = +3600, July/September rows 0). This rule is the only one that
-# converts a wall-clock DAY boundary into MT5 FILETIME instants, so a fixed
-# offset would leak the last winter hour of D-1 into D (those closes are
-# already inside prev_eq → double counted). Europe/Athens matches the observed
-# switch dates; mt5_daily.Datetime is "wall-time day end taken as UTC" and is
-# unaffected.
-MT_SERVER_TZ = ZoneInfo("Europe/Athens")
+# the servers switch GMT+2 ↔ GMT+3 on the **US** DST schedule (2nd Sunday of
+# March → 1st Sunday of November), the same rule the KCM pipeline encodes in
+# `src/config.py::mt_server_utc_offset_hours`. Probed 2026-09-18 on mt5_deals
+# (Timestamp − UNIX_TIMESTAMP(Time as +03:00)): 2026-03-10 → 0 (already +3,
+# before the EU switch on 03-29), 2025-10-28 → 0 (still +3, after the EU
+# switch on 10-26), 2025-11-04 → +3600 (winter). So neither a fixed offset
+# nor Europe/Athens is right — a fixed offset leaks the last winter hour of
+# D-1 into D (those closes are already inside prev_eq → double counted), and
+# Athens is off by one hour for ~2 weeks twice a year. mt5_daily.Datetime is
+# "wall-time day end taken as UTC" and is unaffected.
+class _MTServerTZ(tzinfo):
+    """GMT+2 standard / GMT+3 daylight on the US DST calendar."""
+
+    _STD = timedelta(hours=2)
+    _DST = timedelta(hours=1)
+
+    @staticmethod
+    def _nth_sunday(year: int, month: int, n: int) -> date:
+        first = date(year, month, 1)
+        first_sunday = first + timedelta(days=(6 - first.weekday()) % 7)
+        return first_sunday + timedelta(weeks=n - 1)
+
+    def _is_dst(self, local_day: date) -> bool:
+        start = self._nth_sunday(local_day.year, 3, 2)
+        end = self._nth_sunday(local_day.year, 11, 1)
+        return start <= local_day < end
+
+    def utcoffset(self, dt):  # dt is MT wall time
+        return self._STD + (self._DST if dt is not None and self._is_dst(dt.date()) else timedelta(0))
+
+    def dst(self, dt):
+        return self._DST if dt is not None and self._is_dst(dt.date()) else timedelta(0)
+
+    def tzname(self, dt):
+        return "MT+3" if dt is not None and self._is_dst(dt.date()) else "MT+2"
+
+    def __repr__(self) -> str:
+        return "MTServerTZ(US-DST, +2/+3)"
+
+
+MT_SERVER_TZ = _MTServerTZ()
 
 # Sanity bound on the derived day start: mt5_daily is written every day
 # (weekends included, probed 2026-09-18), so "today" is never more than ~24h
