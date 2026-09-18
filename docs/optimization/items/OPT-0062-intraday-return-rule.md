@@ -125,7 +125,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 | `include_deposits_in_base` | bool | true | 分母是否加當日入金 + credit（冷審要求可關） |
 | `min_lock_pct` | float 0–100, nullable | null | 可選：鎖倉占比 ≥（Sammy 的第二個需求「鎖倉 + 高頻」自動篩） |
 | `max_median_hold_min` | float 0–1440, nullable | null | 可選：中位持倉 ≤ |
-| `lock_ratio_floor` | float 0–1 | 0.5 | 鎖倉判定「小邊 ≥ 大邊 × 此值」（v1 拍的 0.5，做成參數） |
+| `lock_ratio_min` | float 0–1 | 0.5 | 鎖倉判定「小邊 ≥ 大邊 × 此值」（v1 拍的 0.5，做成參數） |
 
 **固定不做參數**：分子含浮動（權益增量口徑天然含，改成可關會讓規則在事件型/快照型之間變性、歷史不可比）；交易日邊界；入金黑名單（代碼常量）。
 `IntradayReturnConfig = {enabled, rules}`，與 `MartingaleConfig` 同形。
@@ -235,7 +235,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 | F17 🔴 | CEN 門檻差 100 倍 | 檢測前 `build_currency_map()` |
 | F18 🔴 | 兩個門檻互相抵消 | `min_profit_usd` 默認 30 |
 | F19 🟡 | 分檔無抑制 | 高檔抑制低檔 |
-| F20 🟡 | 參數/固定反了 | `include_deposits_in_base` / `lock_ratio_floor` 做參數；含浮動固定 |
+| F20 🟡 | 參數/固定反了 | `include_deposits_in_base` / `lock_ratio_min` 做參數；含浮動固定 |
 | F21 🟡 | AC 缺 shadow / mt5_daily 點查陷阱 / SSE-stats-CSV / 快照型決策 | 已補；快照型漂移對本規則不成立（只關心比率往上、按日去重、回落不重報） |
 
 ## 筆記
