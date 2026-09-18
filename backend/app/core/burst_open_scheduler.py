@@ -47,6 +47,21 @@ GAP_TRADE_INTRADAY_END_HKT = (7, 5)
 # covers both the "daily baseline" and the "10-min tick" tiers.
 REBATE_ARB_JOB_ID = "rebate_arb_scan"
 REBATE_ARB_INTERVAL_MIN = 10
+# OPT-0062: Intraday Return (rule 131-140) — independent interval job with its
+# own lock (never enters _latest_result / the tier cache; writes straight to
+# alert_events like rebate-arb). Cadence via INTRADAY_RETURN_INTERVAL_MIN.
+INTRADAY_RETURN_JOB_ID = "intraday_return_scan"
+INTRADAY_RETURN_DEFAULT_INTERVAL_MIN = 5
+
+
+def _intraday_return_interval_min() -> int:
+    """INTRADAY_RETURN_INTERVAL_MIN env (minutes); garbage / ≤0 → default 5."""
+    raw = os.getenv("INTRADAY_RETURN_INTERVAL_MIN", "")
+    try:
+        val = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return INTRADAY_RETURN_DEFAULT_INTERVAL_MIN
+    return val if val > 0 else INTRADAY_RETURN_DEFAULT_INTERVAL_MIN
 
 _scheduler: BackgroundScheduler | None = None
 _latest_result: dict[str, Any] | None = None
@@ -108,6 +123,9 @@ _GAP_TRADE_FINAL_LOCK_TIMEOUT_SEC = 300
 # per day) must never block the 60s fast tick or the gap-trade jobs. Writes
 # go to the same alert_events table but a disjoint rule_id band (121-130).
 _rebate_arb_lock = threading.Lock()
+# OPT-0062: independent lock for the intraday-return job — its MT4 daily
+# point lookups (~5s on a cold day) must never hold up the 60s fast tick.
+_intraday_return_lock = threading.Lock()
 
 # ── Cross-worker shared latest result (Redis mirror) ──────────────────────
 # Prod runs 4 uvicorn workers, but the flock election in app/main.py lets
@@ -275,13 +293,14 @@ def _fast_tier_enabled() -> bool:
 # allocated range is [1, _MAX_ALLOCATED_RULE_ID]; bump that too. The invariant
 # test `test_tier_ownership_partitions_all_bands` fails until all three agree.
 _FAST_TIER_RULE_BANDS: tuple[tuple[int, int], ...] = ((1, 50), (101, 120))
-# Rebate Arbitrage (121-130, OPT-0046) never enters the _latest_result cache —
-# its 10-min job writes straight to alert_events like Gap Trade (71-90). It is
-# classified on the slow side so the tier-partition invariant holds; the
-# classification is a no-op in practice (same as gap trade).
-_SLOW_TIER_RULE_BANDS: tuple[tuple[int, int], ...] = ((51, 100), (121, 130))
-# Highest rule_id any band currently reaches (rebate-arb tops out at 130).
-_MAX_ALLOCATED_RULE_ID = 130
+# Rebate Arbitrage (121-130, OPT-0046) and Intraday Return (131-140,
+# OPT-0062) never enter the _latest_result cache — their interval jobs write
+# straight to alert_events like Gap Trade (71-90). They are classified on the
+# slow side so the tier-partition invariant holds; the classification is a
+# no-op in practice (same as gap trade).
+_SLOW_TIER_RULE_BANDS: tuple[tuple[int, int], ...] = ((51, 100), (121, 130), (131, 140))
+# Highest rule_id any band currently reaches (intraday-return tops out at 140).
+_MAX_ALLOCATED_RULE_ID = 140
 
 
 def _is_fast_tier_rule_id(rule_id: Any) -> bool:
@@ -1240,6 +1259,108 @@ def trigger_rebate_arb_scan_now() -> None:
         _run_rebate_arb_scan()
 
 
+def _run_intraday_return_scan() -> dict[str, Any] | None:
+    """One Intraday Return tick (OPT-0062, rule 131-140).
+
+    Dedup is re-seeded from SQLite EVERY tick (alert_events has no unique
+    constraint, so in-memory dedup alone would re-fire every 5 min). New
+    tier hits are inserted through append_scan_and_events; accounts already
+    on file for the trading day get their detail row refreshed in place
+    (peak_return_pct = high-water mark) without a new alert or mail.
+    Returns the scan result dict (or None when disabled / failed) so the
+    manual scan-now route can echo the outcome.
+    """
+    from ..core.config import get_settings
+    from ..core.risk_monitor_db import (
+        get_intraday_return_alerted_keys,
+        load_intraday_return_config,
+        persist_intraday_return_tick,
+    )
+    from ..services.rule_intraday_return_service import scan_intraday_return
+
+    try:
+        cfg = load_intraday_return_config()
+        if not cfg.get("enabled", True):
+            logger.debug("Intraday-return scan skipped: disabled in config")
+            return None
+        settings = get_settings()
+        result = scan_intraday_return(
+            settings,
+            rules=cfg.get("rules") or [],
+            alerted_keys_fetcher=get_intraday_return_alerted_keys,
+        )
+        if result.get("status") == "skipped":
+            # The service already logged WHY at ERROR; nothing was written.
+            return result
+        if result.get("servers_failed"):
+            logger.error(
+                "Intraday-return tick ran PARTIAL — collection failed for %s "
+                "(their accounts were not evaluated this tick)",
+                ", ".join(result["servers_failed"]),
+            )
+        alerts = result["alerts"]
+        updates = result.get("updates") or []
+        if alerts:
+            _backfill_alert_user_ids(settings, alerts)
+        # Atomic check-and-insert (cross-process safe: /scan-now may run on
+        # another uvicorn worker than the scheduler owner).
+        written = persist_intraday_return_tick(
+            scanned_at=result["scanned_at"],
+            scan_interval_min=_intraday_return_interval_min(),
+            accounts_scanned=int(result.get("accounts_evaluated") or 0),
+            scan_time_ms=int(result.get("scan_time_ms") or 0),
+            alerts=alerts,
+            updates=updates,
+        )
+        alerts = alerts[: written["inserted"]] if written["inserted"] < len(alerts) else alerts
+        result["alerts_inserted"] = written["inserted"]
+        result["updates_applied"] = written["refreshed"]
+        refreshed = written["refreshed"]
+        now = datetime.now(timezone.utc)
+        msg = (
+            "Intraday-return scan persisted %d alert(s), refreshed %d, trading day %s "
+            "(%d accounts, %dms)"
+        )
+        args = (
+            len(alerts), refreshed, result.get("trading_day"),
+            int(result.get("accounts_evaluated") or 0),
+            int(result.get("scan_time_ms") or 0),
+        )
+        # OPT-0058: INFO only when the tick produced new alerts, else DEBUG
+        # plus one INFO per hour as a liveness beat.
+        if _should_log_scan_complete("intraday_return", len(alerts), now):
+            logger.info(msg, *args)
+        else:
+            logger.debug(msg, *args)
+        return result
+    except Exception:
+        logger.error("Intraday-return scan failed", exc_info=True)
+        return None
+
+
+def _locked_intraday_return_scan() -> None:
+    """Intraday-return tick with non-blocking skip (5-min cadence self-heals).
+    A single collision is expected behaviour → DEBUG, not INFO (OPT-0058)."""
+    acquired = _intraday_return_lock.acquire(blocking=False)
+    if not acquired:
+        logger.debug("Intraday-return: previous tick still running, skipping")
+        return
+    try:
+        _run_intraday_return_scan()
+    finally:
+        _intraday_return_lock.release()
+
+
+def trigger_intraday_return_scan_now() -> dict[str, Any] | None:
+    """Fire one deterministic intraday-return scan (manual button / dev).
+
+    Blocking acquire — mirrors trigger_rebate_arb_scan_now. Results land in
+    alert_events (rule 131-140), not in a cached snapshot.
+    """
+    with _intraday_return_lock:
+        return _run_intraday_return_scan()
+
+
 def start_burst_scheduler() -> None:
     """Start the background scheduler. Runs first scan immediately on startup."""
     global _scheduler, _startup_scan_thread
@@ -1357,6 +1478,26 @@ def start_burst_scheduler() -> None:
             "Rebate Arbitrage scanner started: every %d minutes "
             "(daily baseline rebuilt lazily on MT-day rollover)",
             REBATE_ARB_INTERVAL_MIN,
+        )
+    # OPT-0062 Intraday Return: N-min interval job (rule 131-140). Same
+    # opt-out env gate shape (dev compose sets it false — dev shares the
+    # SQLite with prod). The per-day denominator cache is rebuilt inside the
+    # service on MT-day rollover; a lock collision skips the tick.
+    if os.getenv("INTRADAY_RETURN_SCAN_ENABLED", "true").lower() != "false":
+        ir_interval = _intraday_return_interval_min()
+        _scheduler.add_job(
+            _locked_intraday_return_scan,
+            IntervalTrigger(minutes=ir_interval),
+            id=INTRADAY_RETURN_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=60,
+            coalesce=True,
+            max_instances=1,
+        )
+        logger.info(
+            "Intraday Return scanner started: every %d minutes "
+            "(per-day denominator cache, dedup re-seeded from SQLite each tick)",
+            ir_interval,
         )
     _scheduler.start()
     logger.info("Burst scanner started: every %d minutes", interval_min)

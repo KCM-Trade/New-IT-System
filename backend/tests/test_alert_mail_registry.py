@@ -138,8 +138,11 @@ def test_get_source_unknown_module_is_none():
 
 def test_list_source_descriptors_shape(temp_db):
     descriptors = registry.list_source_descriptors()
-    # hedge_open (OPT-0042/43) + rebate_arb (OPT-0046)
-    assert {x["module"] for x in descriptors} == {"hedge_open", "rebate_arb"}
+    # hedge_open (OPT-0042/43) + rebate_arb (OPT-0046) + intraday_return (OPT-0062)
+    assert {x["module"] for x in descriptors} == {"hedge_open", "rebate_arb", "intraday_return"}
+    ir = next(x for x in descriptors if x["module"] == "intraday_return")
+    assert ir["rule_id_range"] == [131, 140]
+    assert [r["id"] for r in ir["rules"]] == [131, 132]  # two seeded tiers
     d = next(x for x in descriptors if x["module"] == "hedge_open")
     assert d["module"] == "hedge_open"
     assert d["rule_id_range"] == [91, 100]

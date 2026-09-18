@@ -162,6 +162,62 @@ class MartingaleConfig(BaseModel):
     rules: List[MartingaleRule] = []
 
 
+# ── Intraday Return (即日高收益, rule_ids 131-140, OPT-0062) ──
+# Same-day return on initial equity (formula v3, SSOT in the OPT-0062 item).
+# Up to 10 tiers; rule_id = 131 + list position. Higher min_return_pct tiers
+# suppress lower ones for the same account on the same MT trading day.
+
+class IntradayReturnRule(BaseModel):
+    id: Optional[int] = None
+    # Free-text rule name, snapshot into AlertEvent.rule_label at trigger time.
+    name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+    # Return threshold (%): 100 = doubled the initial equity, 300 = 4x.
+    min_return_pct: float = Field(default=100.0, ge=10.0, le=100_000.0)
+    # Denominator 门槛 (USD, CEN ÷100): initial equity below this is never
+    # evaluated — kills the "deposited 5 USD, made 20" noise.
+    min_initial_equity_usd: float = Field(default=50.0, ge=0.0, le=1_000_000.0)
+    # Numerator 门槛 (USD). ⚠ Keep well below the equity 门槛: 100 here with
+    # 50 above means a 50 USD account needs 200% before the 100% tier fires.
+    min_profit_usd: float = Field(default=30.0, ge=0.0, le=10_000_000.0)
+    # Rolling net P&L (closed over net_window_days + all current floating)
+    # must be at least this — excludes "lost all week, bounced today".
+    min_net_7d_usd: float = Field(default=0.0, ge=-10_000_000.0, le=10_000_000.0)
+    net_window_days: int = Field(default=7, ge=1, le=30)
+    # Whether today's deposits + credit join the denominator (True) or the
+    # base is yesterday's EOD equity only (False).
+    include_deposits_in_base: bool = True
+    # Optional behaviour gates — None = not applied.
+    min_lock_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_median_hold_min: Optional[float] = Field(default=None, ge=0.0, le=1440.0)
+    # A symbol counts as "locked" when min(buy, sell) ≥ max(buy, sell) × this.
+    lock_ratio_min: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class IntradayReturnConfig(BaseModel):
+    enabled: bool = True
+    rules: List[IntradayReturnRule] = []
+
+
+class IntradayReturnScanNowResponse(BaseModel):
+    """Outcome of a manual /intraday-return/scan-now (no cached snapshot —
+    alerts land in alert_events like the scheduled tick)."""
+    alerts: int = 0
+    updates: int = 0
+    accounts_evaluated: int = 0
+    trading_day: Optional[str] = None
+    scan_time_ms: int = 0
+    scanned_at: str = ""
+    # "ok" = every server evaluated; "partial" = collection failed on the
+    # servers listed in servers_failed (their accounts were NOT evaluated);
+    # "skipped" = nothing evaluated, see skipped_reason (stale mt5_daily day
+    # boundary or currency lookup failure). Never report a skipped/partial
+    # tick as a clean success (CLAUDE.md "skipped ≠ success").
+    status: str = "ok"
+    servers_failed: List[str] = []
+    skipped_reason: Optional[str] = None
+
+
 # ── Gap Trade (rule_ids 71-90) ────────────────────────────
 # Two sub-detectors share one config + scheduled scan window (MT 00:00–02:00
 # Mon–Fri). Sub-detector A finds Stop-out trades and pairs them with a
@@ -427,6 +483,35 @@ class AlertEvent(BaseModel):
     lot_ratio_mg: Optional[float] = None              # new_lots / anchor_lots
     floating_pnl: Optional[float] = None              # USD (CEN ÷100); <0 = loss
     add_count: Optional[int] = None
+    # ── Intraday Return extras (rule_ids 131-140, OPT-0062) ──
+    # Formula v3 breakdown frozen per (rule, server, login, trading_day) and
+    # refreshed in place on later ticks (peak_return_pct = intraday high-water
+    # mark). All money USD (CEN ÷100); *_pct are percentages.
+    trading_day: Optional[str] = None                 # "YYYY-MM-DD" MT trading day
+    prev_day_equity: Optional[float] = None
+    deposits_in: Optional[float] = None
+    credit_in: Optional[float] = None
+    withdrawals_out: Optional[float] = None
+    adj_excluded: Optional[float] = None
+    initial_equity: Optional[float] = None            # prev_day_equity + deposits_in + credit_in
+    equity_now: Optional[float] = None
+    same_day_pnl: Optional[float] = None              # positions opened today, realized + floating
+    carried_float0: Optional[float] = None            # overnight floating at yesterday EOD
+    carried_now: Optional[float] = None               # overnight: realized today + floating now
+    carried_gain: Optional[float] = None              # max(carried_now,0) − max(carried_float0,0)
+    intraday_profit: Optional[float] = None           # same_day_pnl + carried_gain
+    return_pct: Optional[float] = None                # latest tick
+    peak_return_pct: Optional[float] = None           # max seen today
+    net_7d: Optional[float] = None                    # realized_7d + floating_all_now
+    realized_7d: Optional[float] = None
+    floating_all_now: Optional[float] = None
+    flag_withdraw_gt_half_deposit: Optional[int] = None
+    trades_today: Optional[int] = None
+    lots_today: Optional[float] = None
+    median_hold_sec: Optional[int] = None
+    lock_pct: Optional[float] = None
+    top_symbol: Optional[str] = None
+    detail_updated_at: Optional[str] = None
 
 
 class AlertsResponse(BaseModel):
@@ -456,6 +541,10 @@ class AlertsStats(BaseModel):
     servers: List[str] = []     # servers touched in range
     # When present (quick-open-close /stats), one entry per rule_id with hits in range.
     by_rule: Optional[List[QuickRuleBreakdownItem]] = None
+    # Intraday Return /stats only (OPT-0062): summary-card extras over the
+    # same filter — highest intraday peak and the sum of matched profit.
+    max_peak_return_pct: Optional[float] = None
+    sum_intraday_profit: Optional[float] = None
 
 
 class HedgeOpenAggregatedRow(BaseModel):

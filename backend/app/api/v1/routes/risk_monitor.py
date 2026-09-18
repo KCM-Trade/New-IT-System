@@ -42,6 +42,7 @@ from ....core.audit import Auditor, get_auditor, history_author
 from ....core.burst_open_scheduler import (
     get_latest_result,
     reschedule_burst,
+    trigger_intraday_return_scan_now,
     trigger_scan_now,
 )
 from ....core.risk_monitor_db import (
@@ -49,9 +50,11 @@ from ....core.risk_monitor_db import (
     aggregate_hedge_open_by_login,
     alert_events_stats,
     get_alerts_by_ids,
+    intraday_return_stats_extras,
     load_config,
     load_gap_trade_config,
     load_hedge_open_config,
+    load_intraday_return_config,
     load_leverage_abuse_config,
     load_martingale_config,
     load_quick_open_close_config,
@@ -60,11 +63,16 @@ from ....core.risk_monitor_db import (
     save_config,
     save_gap_trade_config,
     save_hedge_open_config,
+    save_intraday_return_config,
     save_leverage_abuse_config,
     save_martingale_config,
     save_quick_open_close_config,
     save_quick_profit_config,
     stream_alert_events,
+)
+from ....services.rule_intraday_return_service import (
+    INTRADAY_RETURN_RULE_ID_BASE,
+    INTRADAY_RETURN_RULE_ID_MAX,
 )
 from ....services.rule_quick_open_close_service import QUICK_RULE_ID_BASE
 from ....services.rule_quick_profit_service import (
@@ -94,6 +102,8 @@ from ....schemas.risk_monitor import (
     HedgeOpenAggregatedResponse,
     HedgeOpenAggregatedRow,
     HedgeOpenConfig,
+    IntradayReturnConfig,
+    IntradayReturnScanNowResponse,
     LeverageAbuseConfig,
     MartingaleConfig,
     QuickOpenCloseConfig,
@@ -158,6 +168,11 @@ LEVERAGE_ABUSE_RULE_ID_MAX = 110
 # for the floating loss + lot ladder.
 MARTINGALE_RULE_ID_MIN = 111
 MARTINGALE_RULE_ID_MAX = 120
+# Intraday Return (即日高收益, OPT-0062): 131-140, 10-slot band. rule_id =
+# 131 + list position (two seeded tiers: 131 = 100%, 132 = 300%). Independent
+# interval job; alerts UPSERT per (rule, server, login, trading_day).
+INTRADAY_RETURN_RULE_ID_MIN = INTRADAY_RETURN_RULE_ID_BASE
+INTRADAY_RETURN_RULE_ID_MAX_ID = INTRADAY_RETURN_RULE_ID_MAX
 
 # Default look-back window when the frontend omits `since`.
 # Aligns with the "最近 4 小时" default on the page.
@@ -2668,6 +2683,319 @@ async def martingale_alerts_export(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="internal error while exporting martingale alerts",
+        ) from exc
+
+
+# ── Intraday Return (即日高收益, rule 131-140, OPT-0062) ─────
+
+_INTRADAY_RETURN_CSV_HEADER = [
+    "rule_label",
+    "scanned_at",
+    "trading_day",
+    "server",
+    "zipcode",
+    "login",
+    "currency",
+    "top_symbol",
+    "initial_equity",
+    "prev_day_equity",
+    "deposits_in",
+    "credit_in",
+    "intraday_profit",
+    "return_pct",
+    "peak_return_pct",
+    "net_7d",
+    "same_day_pnl",
+    "carried_gain",
+    "equity_now",
+    "trades_today",
+    "lots_today",
+    "median_hold_sec",
+    "lock_pct",
+    "withdrawals_out",
+    "flag_withdraw_gt_half_deposit",
+    "group",
+    "net_deposit_hist",
+    "rule_id",
+]
+
+
+def _csv_row_from_intraday_return(entry: dict) -> list:
+    def _opt(key: str) -> Any:
+        v = entry.get(key)
+        return "" if v is None else v
+    return [
+        entry.get("rule_label", ""),
+        entry.get("scanned_at", ""),
+        _opt("trading_day"),
+        entry.get("server", ""),
+        entry.get("zipcode") or "",
+        entry.get("login", ""),
+        entry.get("currency") or "",
+        entry.get("top_symbol") or entry.get("symbol") or "",
+        _opt("initial_equity"),
+        _opt("prev_day_equity"),
+        _opt("deposits_in"),
+        _opt("credit_in"),
+        _opt("intraday_profit"),
+        _opt("return_pct"),
+        _opt("peak_return_pct"),
+        _opt("net_7d"),
+        _opt("same_day_pnl"),
+        _opt("carried_gain"),
+        _opt("equity_now"),
+        _opt("trades_today"),
+        _opt("lots_today"),
+        _opt("median_hold_sec"),
+        _opt("lock_pct"),
+        _opt("withdrawals_out"),
+        _opt("flag_withdraw_gt_half_deposit"),
+        entry.get("group") or "",
+        _opt("net_deposit_hist"),
+        entry.get("rule_id", ""),
+    ]
+
+
+@router.get("/intraday-return/config", response_model=IntradayReturnConfig)
+async def intraday_return_get_config():
+    try:
+        cfg = load_intraday_return_config()
+        return IntradayReturnConfig(**cfg)
+    except Exception as exc:
+        logger.error("Failed to read intraday-return config: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while reading intraday-return config",
+        ) from exc
+
+
+@router.post("/intraday-return/config", response_model=IntradayReturnConfig)
+async def intraday_return_update_config(
+    config: IntradayReturnConfig,
+    audit: Auditor = Depends(get_auditor),
+):
+    if len(config.rules) > MAX_RULES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {MAX_RULES} rules allowed.",
+        )
+    if len(config.rules) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one rule is required.",
+        )
+    try:
+        before = load_intraday_return_config()  # old values die at save()
+        rules_dicts = [r.model_dump(exclude={"id"}) for r in config.rules]
+        save_intraday_return_config(config.enabled, rules_dicts)
+        after = load_intraday_return_config()
+    except Exception as exc:
+        logger.error("Failed to update intraday-return config: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while updating intraday-return config",
+        ) from exc
+
+    audit.record_diff(
+        "risk_monitor.intraday_return.config_change",
+        target="intraday_return:config",
+        old=_config_audit_view(IntradayReturnConfig, before),
+        new=_config_audit_view(IntradayReturnConfig, after),
+    )
+    return IntradayReturnConfig(**after)
+
+
+@router.post("/intraday-return/scan-now", response_model=IntradayReturnScanNowResponse)
+def intraday_return_scan_now(audit: Auditor = Depends(get_auditor)):
+    """Run one intraday-return tick right now (blocking, own lock).
+
+    Plain `def` (OPT-0055): the tick is seconds of synchronous MySQL +
+    SQLite IO. Audited because a PERSON pressed it; the scheduled tick is
+    not (a cron has no "who"). Alerts land in alert_events / the detail
+    table exactly as on a scheduled tick — there is no cached snapshot.
+    """
+    try:
+        result = trigger_intraday_return_scan_now()
+    except Exception as exc:
+        logger.error("Intraday-return scan-now failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while running intraday-return scan",
+        ) from exc
+    if result is None:
+        # Disabled in config or the tick failed (logged inside the job).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="intraday-return scan did not run (disabled or failed — see server log)",
+        )
+    response = IntradayReturnScanNowResponse(
+        alerts=int(result.get("alerts_inserted", len(result.get("alerts") or []))),
+        updates=int(result.get("updates_applied", len(result.get("updates") or []))),
+        accounts_evaluated=int(result.get("accounts_evaluated") or 0),
+        trading_day=result.get("trading_day"),
+        scan_time_ms=int(result.get("scan_time_ms") or 0),
+        scanned_at=str(result.get("scanned_at") or ""),
+        status=str(result.get("status") or "ok"),
+        servers_failed=list(result.get("servers_failed") or []),
+        skipped_reason=result.get("skipped_reason"),
+    )
+    audit.record(
+        "risk_monitor.scan.run_now",
+        target="scan:intraday_return",
+        new_value={
+            "alerts": response.alerts,
+            "updates": response.updates,
+            "scan_time_ms": response.scan_time_ms,
+        },
+    )
+    return response
+
+
+@router.get("/intraday-return/alerts", response_model=AlertsResponse)
+async def intraday_return_alerts(
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+    server: Optional[str] = Query(default=None),
+    login: Optional[int] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    rule_id: Optional[int] = Query(default=None),
+    zipcode: Optional[str] = Query(default=None, max_length=64),
+    page: Optional[int] = Query(default=None, ge=1),
+    page_size: int = Query(default=50, ge=1, le=_MAX_PAGE_SIZE),
+    limit: Optional[int] = Query(default=None, ge=1, le=_MAX_PAGE_SIZE),
+    offset: Optional[int] = Query(default=None, ge=0),
+    sort_by: Optional[str] = Query(default=None),
+    sort_order: Optional[str] = Query(default=None),
+):
+    since_iso, until_iso = _default_since_until(since, until)
+    zipcode_clean = _clean_zipcode(zipcode)
+
+    if page is not None:
+        effective_limit = page_size
+        effective_offset = (page - 1) * page_size
+        effective_page = page
+    else:
+        effective_limit = limit if limit is not None else page_size
+        effective_offset = offset or 0
+        effective_page = (effective_offset // effective_limit) + 1 if effective_limit else 1
+        page_size = effective_limit
+
+    try:
+        entries, total = query_alert_events(
+            since=since_iso,
+            until=until_iso,
+            server=server,
+            login=login,
+            symbol=symbol,
+            rule_id=rule_id,
+            rule_id_min=INTRADAY_RETURN_RULE_ID_MIN,
+            rule_id_max=INTRADAY_RETURN_RULE_ID_MAX_ID,
+            zipcode=zipcode_clean,
+            limit=effective_limit,
+            offset=effective_offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            # Rows are keyed by MT trading day and updated all day: select by
+            # the day they belong to, not by the first-hit scanned_at.
+            time_field="trading_day",
+        )
+        return AlertsResponse(
+            entries=[AlertEvent(**e) for e in entries],
+            total=total,
+            since=since_iso,
+            until=until_iso,
+            page=effective_page,
+            page_size=page_size,
+        )
+    except Exception as exc:
+        logger.error("Failed to query intraday-return alerts: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while querying intraday-return alerts",
+        ) from exc
+
+
+@router.get("/intraday-return/alerts/stats", response_model=AlertsStats)
+async def intraday_return_alerts_stats(
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+    server: Optional[str] = Query(default=None),
+    login: Optional[int] = Query(default=None),
+    zipcode: Optional[str] = Query(default=None, max_length=64),
+):
+    since_iso, until_iso = _default_since_until(since, until)
+    zipcode_clean = _clean_zipcode(zipcode)
+    try:
+        stats = alert_events_stats(
+            since=since_iso,
+            until=until_iso,
+            server=server,
+            login=login,
+            rule_id_min=INTRADAY_RETURN_RULE_ID_MIN,
+            rule_id_max=INTRADAY_RETURN_RULE_ID_MAX_ID,
+            zipcode=zipcode_clean,
+            include_rule_breakdown=True,
+            time_field="trading_day",
+        )
+        stats.update(intraday_return_stats_extras(
+            since=since_iso, until=until_iso, server=server,
+            login=login, zipcode=zipcode_clean, time_field="trading_day",
+        ))
+        return AlertsStats(**stats)
+    except Exception as exc:
+        logger.error("Failed to compute intraday-return stats: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while computing intraday-return stats",
+        ) from exc
+
+
+@router.get("/intraday-return/alerts/export")
+async def intraday_return_alerts_export(
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+    server: Optional[str] = Query(default=None),
+    login: Optional[int] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    rule_id: Optional[int] = Query(default=None),
+    zipcode: Optional[str] = Query(default=None, max_length=64),
+    sort_by: Optional[str] = Query(default=None),
+    sort_order: Optional[str] = Query(default=None),
+):
+    since_iso, until_iso = _default_since_until(since, until)
+    zipcode_clean = _clean_zipcode(zipcode)
+    filename = "risk-monitor-intraday-return.csv"
+    try:
+        return StreamingResponse(
+            _csv_stream(
+                since_iso=since_iso,
+                until_iso=until_iso,
+                server=server,
+                login=login,
+                symbol=symbol,
+                rule_id=rule_id,
+                rule_id_min=INTRADAY_RETURN_RULE_ID_MIN,
+                rule_id_max=INTRADAY_RETURN_RULE_ID_MAX_ID,
+                zipcode_clean=zipcode_clean,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                time_field="trading_day",
+                header=_INTRADAY_RETURN_CSV_HEADER,
+                row_fn=_csv_row_from_intraday_return,
+            ),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{filename}"; '
+                    f"filename*=UTF-8''{quote(filename)}"
+                ),
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to export intraday-return alerts: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while exporting intraday-return alerts",
         ) from exc
 
 

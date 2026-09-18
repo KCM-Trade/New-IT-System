@@ -824,7 +824,8 @@ def test_scan_rule2_env_threshold_applies(monkeypatch, fresh_baseline):
 
 def test_band_121_130_owned_by_slow_tier_partition():
     from app.core import burst_open_scheduler as bs
-    assert bs._MAX_ALLOCATED_RULE_ID == 130
+    # 130 was the top when this band was allocated; OPT-0062 (131-140) raised it.
+    assert bs._MAX_ALLOCATED_RULE_ID >= 130
     for rid in range(121, 131):
         assert not bs._is_fast_tier_rule_id(rid)
 
