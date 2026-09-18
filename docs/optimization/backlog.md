@@ -15,6 +15,7 @@
 | [OPT-0028](./items/OPT-0028-risk-monitor-aggregator-hardening.md) | opt/aggregator-hardening | 2026-07-06 | 等 0041 merge 后开工（依赖测试转绿） |
 | [OPT-0057](./items/OPT-0057-risk-watchlist-copy-rewrite.md) | opt/risk-watchlist-copy-rewrite | 2026-07-25 | 阻塞：待用户在 items/OPT-0057-...-copy-review.md 填新文案后实施 |
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
+| [OPT-0062](./items/OPT-0062-intraday-return-rule.md) | opt/intraday-return-rule | 2026-09-18 | 獨立 job + detail 表 + 郵件源 + 回測腳本；只讀 item 文件 v2，不重跑回測 |
 ## ✅ 待领取（Ready）
 
 > AC 已经在 item 文件里定义好了。按 priority + effort + 你的当前心智状态挑一个。
@@ -29,7 +30,6 @@
 | [OPT-0050](./items/OPT-0050-baseline-test-prod-pollution.md) | P1 | backend | S | 基线幂等测试污染 prod PG（940 行假快照）+ 随 roster 增长挂死（178→940 后 ≥3.6 分钟）；与 0041 关系待定 |
 | [OPT-0051](./items/OPT-0051-verify-gate-live-db-coupling.md) | P1 | backend | M | 后端测试直连云 DB：verify.sh 单轮 733s 且有 .env 会挂死，41 个既有失败掩盖真信号；建议排在 0041 之后 |
 | [OPT-0053](./items/OPT-0053-scheduler-tier-test-flake.md) | P1 | backend | S | verify.sh 硬闸有 flaky 测试：scheduler_tiers 的 fast_burst 保留槽位断言 clean HEAD 实测 1/8 轮随机红；疑 daemon 线程 + 模块级 `_latest_result` 竞态。与 0051 叠加后闸门实际已失效 |
-| [OPT-0062](./items/OPT-0062-intraday-return-rule.md) | P1 | mixed | L | 即日高收益率自動偵測與郵件警報：risk-monitor 新規則 Intraday Return（band 131-140）+ detail 表 + 郵件源 + 回測腳本；**v2 2026-09-18**：公式改權益增量口徑（分母 = 昨日日終 + 真入金 + credit）、門檻 50/30、7 日淨利 ≥ 0、獨立 job、每 tick 回種；三個重點帳戶 300% 回測全中；冷審 21 條已全部吸收 |
 
 ## 💡 想法（Ideas）—— 还不能直接 claim
 

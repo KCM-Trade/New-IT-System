@@ -1,7 +1,7 @@
 ---
 id: OPT-0062
 title: 即日高收益率自動偵測與郵件警報 —— risk-monitor 新規則 Intraday Return（band 131-140）+ detail 表 + 郵件源 + 回測腳本
-status: ready
+status: wip
 priority: P1
 area: mixed
 effort: L
