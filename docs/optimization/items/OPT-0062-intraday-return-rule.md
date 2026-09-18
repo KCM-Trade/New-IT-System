@@ -67,20 +67,31 @@ Credit / Bonus 走 `Action=3` / `CMD=7`（7 天 Credit In $92.9k、Bonus In $33.
 67044208：88 筆 / 中位 10.5 分鐘 / 鎖倉 88%；60006521（9/15，8021%）：258 筆 / 82%。
 現有對沖規則（91-100，3 秒內同開多空且完美 1:1）抓不到「先空、虧了再逐筆補多」。
 
-## 公式 v2（實施口徑，SSOT）
+## 公式 v3（實施口徑，SSOT；2026-09-18 用戶認可，取代 v2）
+
+> **v2 → v3 的原因**：v2 用「權益增量」當分子，會把**隔夜倉的浮虧回補**算成當日盈利（9/17 清單實例：8611807 一張 3 手 XAUUSD 多單自 8/28 扛到現在，
+> 浮虧 −62,471 → −39,763，當天零成交零出入金，被記成「盈利 22,708 / 112%」；8521502 五張隔夜 XAGUSD 多單白銀大漲，−403 → +645，記成 205%），
+> 而分母又恰被同一批隔夜浮虧壓小，比率被放大。Sammy 原式（當日已平 + **當前全部浮動**）反過來會讓盈利的隔夜倉**每天重複命中**且重複計分。
+> 「只算當天開的倉」又會漏掉「昨天 50 美元開倉、今天浮盈 500」這種最典型的小本金暴利。v3 三者都避開。
 
 以 MT 服務器交易日 D 為單位，對每個候選帳戶：
 
 ```
 prev_eq        = 昨日（D-1，週末往前找）日終權益
+prev_bal       = 昨日日終餘額；prev_credit = 昨日日終 credit
+carried_float0 = prev_eq − prev_bal − prev_credit        （隔夜倉在昨日日終的總浮動，可正可負）
 dep_in         = D 內真入金（Action=2/CMD=6，Profit>0，Comment 不在黑名單）
 cred_in        = D 內 credit/bonus 入（Action=3/CMD=7，Profit>0）
-net_flow(D)    = D 內全部餘額 + credit 操作的帶號合計（含出金、調帳；調帳單獨記 adj_excluded）
-equity_now     = Balance + Credit + Σ floating
-initial_equity = prev_eq + dep_in + cred_in            （include_deposits_in_base=false 時 = prev_eq）
-intraday_profit= equity_now − prev_eq − net_flow(D)    （= 當日已平倉 + Δ浮動；出金自動加回；跨日持倉不重複計分）
+initial_equity = prev_eq + dep_in + cred_in              （include_deposits_in_base=false 時 = prev_eq）
+
+倉位分兩類（按開倉時間 < 今日日初 判定）：
+  same_day_pnl   = 當天開的倉：已平（PROFIT+SWAPS+COMMISSION）+ 仍持有的當前浮動（PROFIT+SWAPS），全算
+  carried_now    = 隔夜倉：今天平掉的已實現 + 仍持有的當前浮動（帳戶級合計）
+  carried_gain   = max(carried_now, 0) − max(carried_float0, 0)   （只算今天在「盈利區」新增的部分；虧損回補 = 0；不重複計昨天已進 initial_equity 的浮盈）
+
+intraday_profit= same_day_pnl + carried_gain
 return_pct     = 100 × intraday_profit / initial_equity
-net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
+net_7d         = 近 net_window_days 日已平倉 PnL 合計 + 當前全部持倉浮動  （「整體仍虧」的人過不了：8611807 = 0 + (−24,350)）
 觸發 = initial_equity ≥ min_initial_equity_usd
      ∧ intraday_profit ≥ min_profit_usd
      ∧ return_pct ≥ min_return_pct
@@ -88,7 +99,20 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
      ∧ [可選] lock_pct ≥ min_lock_pct ∧ median_hold_min ≤ max_median_hold_min
 ```
 
-- 對「當日開、當日平」的目標人群，`intraday_profit` 與 Sammy 的「已平倉 + 當前浮動」數值完全一致；只在跨日持倉時不同（v2 更準）。
+**v3 在典型場景下的表現**（單測要逐條釘住）：
+
+| 場景 | intraday_profit | 結果 |
+|---|---|---|
+| 當天開當天平（三個重點帳戶） | same_day_pnl 全算 | 67044208 957% / 60006521 8021% / 60011522 617%、942%，與 v2 完全一致 |
+| 昨天 50 開倉，昨日終浮盈 +20，今天浮盈 +500 | 500 − 20 = 480，/70 = 686% | 命中；第二天浮盈不再漲則分子 0，**不重複命中** |
+| 扛單浮虧 −62k 回到 −40k（8611807） | max(−40k,0) − max(−62k,0) = 0 | 不命中；net_7d 也是負 |
+| 隔夜倉由虧轉盈（8521502：−403 → 平 74.64 + 浮 645.60） | 720 − 0 = 720，/548 = 131% | 100% 檔命中、300% 不命中（與 Sammy 原式同值，扛單轉盈讓風控看一眼是合理的） |
+| 隔夜倉浮盈 +100 今天平在 +150 | 150 − 100 = 50 | 只算今天增量，不重複計分 |
+
+- `carried_float0` 全部現成：MT5 `mt5_users.EquityPrevDay − BalancePrevDay − Credit`（credit 用昨日行 `mt5_daily.Credit`）；MT4 `mt4_daily` 昨日行 `EQUITY − BALANCE − CREDIT`。
+  不需要逐倉的日初價格。隔夜倉今天的盈虧按 `TimeCreate` / `OPEN_TIME` < 今日日初 分組即可。
+- `carried_gain` 是**帳戶級**截零，不是逐倉截零（逐倉需要日初價格，做不到；帳戶級已足夠排除扛單回補）。
+- 出金：不進分子也不進分母（分子按倉位算，天然與出入金無關）；當日出金 > 入金 × 50% 仍打 `flag_withdraw_gt_half_deposit`。
 - CEN：比率免換算；三個 USD 門檻與手數 ÷100；幣種在檢測前取。
 - `initial_equity ≤ 0` 一律跳過（不再有 ÷0）。
 - 「當天」= MT 服務器交易日。⚠ MT 日界隨 DST（夏 GMT+3 / 冬 GMT+2），`BROKER_TZ_OFFSET` 硬編碼 +03:00 —— 本規則是唯一以日界為口徑的規則，
@@ -96,7 +120,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 - 排除：demo/test 組（`sql_helpers.demo_test_filter_sql()`）、MT4 login 7 開頭。⚠ risk-monitor SKILL.md 寫的 `RISK_MONITOR_EXCLUDED_LOGINSIDS` /
   `excluded_login_sql` **在代碼裡不存在**，只有反向的 `RISK_MONITOR_FORCE_INCLUDE_LOGINSIDS`；那段 skill 文檔順手修掉。
 
-## 方案 v2
+## 方案 v2（公式部分以上方 v3 為準）
 
 ### 規則定位
 
@@ -147,7 +171,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 ### 落庫 `alert_intraday_return_detail`（主表 23 列不動，OPT-0008 五步 LEFT JOIN）
 
 `trading_day` · `prev_day_equity` · `deposits_in` · `credit_in` · `withdrawals_out` · `adj_excluded` · `initial_equity` ·
-`equity_now` · `intraday_profit` · `return_pct` · `peak_return_pct` · `net_7d` · `flag_withdraw_gt_half_deposit`（當日出金 > 入金 × 50%，冷審 F6 規避路徑）·
+`equity_now` · `same_day_pnl` · `carried_float0` · `carried_now` · `carried_gain` · `intraday_profit` · `return_pct` · `peak_return_pct` · `net_7d` · `realized_7d` · `floating_all_now` · `flag_withdraw_gt_half_deposit`（當日出金 > 入金 × 50%，冷審 F6 規避路徑）·
 `trades_today` · `lots_today` · `median_hold_sec` · `lock_pct` · `top_symbol` · `updated_at`。
 
 主表映射：`order_count` = 當日筆數、`total_lots` = 當日手數、`first_open`/`last_open` = 當日首末成交、enrichment 走 `get_account_info_map()`。
@@ -191,7 +215,9 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 **② 9/17 全盤（三台）**：≥100% 17 帳戶（MT5 5 / MT4 12）→ 7 日過濾後 13；≥200% 5 → 3；≥300% 2 → 1。
 7 日過濾砍掉的 4 個正是「本週已虧、當天反彈」（如 8612530：當日 +382 / 7 日 −314；8515329：+280 / −723）。
 清單 CSV：scratchpad `intraday_return_2026-09-17.csv`（已發 Kieran 郵箱）。
-兩個 `trades_today=0` 的 MT4 命中（8521502 / 8611807）是純持倉浮動變化 —— 權益增量口徑下的預期行為，郵件裡要能看出來（`trades_today` 列）。
+⚠ 這兩張表是 **v2 口徑**跑的。9/17 清單裡兩個 `trades_today=0` 的 MT4 命中（8521502 / 8611807）暴露了 v2 把隔夜倉浮虧回補算成盈利的缺陷，
+已改成 §公式 v3：v3 下 8611807 分子 0 且 net_7d −24,350（不命中）、8521502 = 720 / 548 = 131%（只命中 100% 檔）；三個重點帳戶四行數字不變
+（全是當天開當天平）；MT5 四天 300% 命中變 1 / 4 / 3 / 0。`intraday_return_backtest.py` 落地後用 v3 重跑補齊本節。
 
 ## 假設 / 待驗證
 
@@ -204,13 +230,13 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 ## 驗收標準
 
 - [ ] 獨立 job + 自有 lock + env 開關與週期；`_SLOW_TIER_RULE_BANDS` 含 (131,140) 且 `_MAX_ALLOCATED_RULE_ID=140`，tier anti-drift 測試覆蓋
-- [ ] 公式 v2 逐項單測：÷0 跳過、三門檻、CEN ÷100（檢測前取幣種）、入金黑名單、credit 進分母、出金加回、跨日持倉不重複計分、7 日淨利、可選行為條件
+- [ ] 公式 v3 逐項單測：÷0 跳過、三門檻、CEN ÷100（檢測前取幣種）、入金黑名單、credit 進分母、**§公式 v3 表格五個場景逐一釘住**（同日全算 / 隔夜爆發命中且次日不重複 / 扛單回補 = 0 / 由虧轉盈只算過零段 / 隔夜浮盈只算增量）、net_7d = 已平 7 日 + 當前全部浮動、可選行為條件
 - [ ] 去重每 tick 回種 + UPSERT detail + `peak_return_pct`；高檔抑制低檔
 - [ ] MT5 切日用 `Timestamp`；MT4 只主鍵點查 `mt4_daily`；分母按日緩存；`MAX_EXECUTION_TIME` 釘住
 - [ ] `alert_intraday_return_detail` 落庫 + `/alerts` 拍扁 + `return_pct` / `net_7d` 服務端排序
 - [ ] 郵件源註冊 + anti-drift + test-send；seed 兩條訂閱（131 / 132 → risk@，cc kieran + lawrence）
 - [ ] 前端 tab 四個 hook 齊全，tsc/vitest 綠；drawer 可增刪規則（含可選行為條件與 nullable 顯示）
-- [ ] `backend/scripts/intraday_return_backtest.py` 落地，重跑 §驗證 ① 得到同樣四行
+- [ ] `backend/scripts/intraday_return_backtest.py` 落地（v3 口徑），重跑 §驗證 ① 得到同樣四行，且 9/17 清單裡 8611807 不出現、8521502 只在 100% 檔
 - [ ] 回放測試：三個重點帳戶各自日期在 300% 命中（種子時間戳相對 `datetime.now()`，OPT-0041）
 - [ ] 回寫 risk-monitor skill（Rule ID 表 131-140、references、修掉不存在的 `excluded_login_sql`）+ docs/features/risk-monitor.md + alert-mail-center skill
 
