@@ -325,3 +325,5 @@ v3 專門修的兩個案例，按驗收標準逐條核對：
 7. `_prepare_server` 的 SQL 組裝無單測；DST 切換日（**2026-11-01**，美國日程）前後各實測一次。
 8. Sammy 對公式 v3 與門檻 50/30 的確認仍待；量級看一周後再決定 CS 是否收、100% 檔是否關（郵件中心 UI 操作）。
 9. 課件（Hook 2）：`BEGIN IMMEDIATE` 跨進程去重 + DST 墻鐘 vs FILETIME 是新概念，可補。
+
+**同日 hotfix**：`6c96344` MT 墻鐘改美國 DST 日程 tzinfo；`9606ece` 郵件 CRM 連結改 `/crm/accounts/{sid}-{login}`（首封真實 digest 裡用戶發現原來是 `/admin/accounts/{login}`）。
