@@ -159,7 +159,9 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 `MAIL_SOURCES["intraday_return"]`，band (131,140)，realtime（realtime 本來就是每 tick 每訂閱一封 digest，命中合併，配按日去重後 100% 檔一天最多十幾封，不另做匯總層）。
 照 `services/alert_mail/rebate_arb.py`（4 個 fetch_* + template_builder + registry entry）。可過濾字段：`return_pct` / `intraday_profit` / `initial_equity` / `net_7d` / `trades_today` / `lock_pct`。
 模版按 alert-email-style：帳戶信息 + 初始權益拆解（昨日日終 / 入金 / credit）+ 當日盈虧拆解 + 收益率（含峰值）+ 7 日淨利 + 三個行為特徵 + 出金標記 + CRM 連結。
-**上線先 shadow 1–2 週**：不 seed 訂閱、只落庫，用真實 tick 口徑看 100% 檔的量再決定發不發；之後風控郵箱訂 131+132、CS 只訂 132（地址待用戶給）。
+**收件人（用戶拍板 2026-09-18）**：上線即發、**不做 shadow 期**，100% 與 300% 兩檔都發；先只發風控組，**CS 暫不收**；
+兩條規則各 seed 一條 realtime 訂閱：`to = risk@kcmtrade.com`，`cc = kieran.xiang@kohleservices.com, lawrence.li@kohleservices.com`。
+上線後人工觀察量級再調（門檻 / 是否給 CS / 是否關 100% 檔），都是郵件中心 UI 操作，不改代碼。
 
 ### 回測 / 清單腳本（交付物，Sammy 會反覆要）
 
@@ -193,11 +195,11 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 
 ## 假設 / 待驗證
 
-- [ ] 郵件收件人：風控 + CS 具體地址
+- [x] 郵件收件人：risk@kcmtrade.com，cc kieran.xiang@kohleservices.com + lawrence.li@kohleservices.com；CS 暫不發（2026-09-18 拍板）
 - [ ] Sammy 對「公式 v2（權益增量口徑）」與「門檻 50/30」的確認（v1 回信寫的是 50/100，**已發 Kieran 的草稿轉發前要改**）
 - [ ] 「今日日初」從 `mt5_daily` 推導在 DST 切換日的實測（下一次切換 2026-10-25 前後）
 - [ ] MT4 分母緩存後每 tick 實測耗時（目標 < 10s 三台合計）
-- [ ] shadow 期後 100% 檔是否發郵件（用真實 tick 口徑定）
+- [x] 不做 shadow，兩檔上線即發，人工觀察後再調（2026-09-18 拍板）
 
 ## 驗收標準
 
@@ -206,7 +208,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 - [ ] 去重每 tick 回種 + UPSERT detail + `peak_return_pct`；高檔抑制低檔
 - [ ] MT5 切日用 `Timestamp`；MT4 只主鍵點查 `mt4_daily`；分母按日緩存；`MAX_EXECUTION_TIME` 釘住
 - [ ] `alert_intraday_return_detail` 落庫 + `/alerts` 拍扁 + `return_pct` / `net_7d` 服務端排序
-- [ ] 郵件源註冊 + anti-drift + test-send；shadow 期不 seed 訂閱
+- [ ] 郵件源註冊 + anti-drift + test-send；seed 兩條訂閱（131 / 132 → risk@，cc kieran + lawrence）
 - [ ] 前端 tab 四個 hook 齊全，tsc/vitest 綠；drawer 可增刪規則（含可選行為條件與 nullable 顯示）
 - [ ] `backend/scripts/intraday_return_backtest.py` 落地，重跑 §驗證 ① 得到同樣四行
 - [ ] 回放測試：三個重點帳戶各自日期在 300% 命中（種子時間戳相對 `datetime.now()`，OPT-0041）
@@ -218,7 +220,7 @@ net_7d         = equity_now − 日終權益(D-7) − Σ net_flow(D-6..D)
 |---|---|---|
 | F1 🔴 | Action=2 正向含調帳 / Initial balance | §入金白名單（黑名單口徑）+ `adj_excluded` 列 |
 | F2 🔴 | credit / bonus 漏掉 | 分母加 `cred_in`，detail 單列 |
-| F3 🔴 | 回測 ≠ 上線口徑 | shadow 1–2 週；回測腳本 docstring 標「下界」 |
+| F3 🔴 | 回測 ≠ 上線口徑 | 用戶拍板不做 shadow、上線後人工觀察；回測腳本 docstring 標「下界」 |
 | F4 🟡 | EquityPrevDay 語義（已核實為真） | — |
 | F5 🟡 | 日界隨 DST | 從 `mt5_daily` 推導日初，不用 CURDATE |
 | F6 🟡 | 出金不減分母可被利用 | `flag_withdraw_gt_half_deposit` 標記 |
