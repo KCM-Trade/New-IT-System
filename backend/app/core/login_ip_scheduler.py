@@ -132,10 +132,10 @@ def _send_failure_alert(job_name: str, target_date: str, error: str) -> None:
         logger.warning("failure alert: no 'to' recipients configured; skipping email")
         return
 
-    subject = f"⚠️ Login IP Monitor — {job_name} FAILED ({target_date})"
+    subject = f"[ALERT] Login IP Monitor — {job_name} FAILED ({target_date})"
     body = f"""
     <div style="font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 640px;">
-      <h2 style="color: #c0392b;">⚠️ 定时任务失败</h2>
+      <h2 style="color: #c0392b;">[ALERT] 定时任务失败</h2>
       <table style="border-collapse: collapse;">
         <tr><td style="padding: 4px 12px; color: #666;">Job</td><td><code>{job_name}</code></td></tr>
         <tr><td style="padding: 4px 12px; color: #666;">Target date</td><td><code>{target_date}</code></td></tr>

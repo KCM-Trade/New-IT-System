@@ -304,9 +304,13 @@ def _build_report_html(
                 display = str(value) if value is not None else ""
                 align = "left"
                 color = ""
+                nowrap = ""
             else:
                 display = _fmt_num(value)
                 align = "right"
+                # Figures stay on one line; the scroll wrapper around the table
+                # handles overflow on phones instead of numbers wrapping mid-value.
+                nowrap = "white-space:nowrap;"
                 if is_delta and isinstance(value, (int, float)) and value:
                     color = f"color:{GREEN};" if value > 0 else f"color:{RED};"
                 else:
@@ -314,7 +318,7 @@ def _build_report_html(
             bg = f"background:{HIGHLIGHT_BG};" if is_highlight else ""
             cells += (
                 f"<td style='padding:6px 10px;border:1px solid #ddd;"
-                f"text-align:{align};{bg}{color}'>{display}</td>"
+                f"text-align:{align};{nowrap}{bg}{color}'>{display}</td>"
             )
         rows_html += f"<tr>{cells}</tr>"
 
@@ -349,14 +353,20 @@ def _build_report_html(
     </div>
     """
 
+    # email_service sends this fragment as-is (no <html>/<head>), so the viewport
+    # meta goes first; the 13-column grid sits in an inline scroll wrapper so
+    # phones get a horizontally scrollable table instead of a shrunken one.
     return f"""
-    <div style="font-family:Arial,sans-serif;">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <div style="font-family:Arial,sans-serif;max-width:1280px;">
         <h3 style="margin:0 0 12px 0;">IB Financial Report — {date_str}</h3>
         {explanation_html}
-        <table style="border-collapse:collapse;font-size:13px;">
+        <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
             <thead><tr>{headers_html}</tr></thead>
             <tbody>{rows_html}</tbody>
         </table>
+        </div>
         <p style="color:#999;font-size:11px;margin-top:12px;">
             {footer}
         </p>
