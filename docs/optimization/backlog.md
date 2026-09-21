@@ -29,6 +29,7 @@
 | [OPT-0050](./items/OPT-0050-baseline-test-prod-pollution.md) | P1 | backend | S | 基线幂等测试污染 prod PG（940 行假快照）+ 随 roster 增长挂死（178→940 后 ≥3.6 分钟）；与 0041 关系待定 |
 | [OPT-0051](./items/OPT-0051-verify-gate-live-db-coupling.md) | P1 | backend | M | 后端测试直连云 DB：verify.sh 单轮 733s 且有 .env 会挂死，41 个既有失败掩盖真信号；建议排在 0041 之后 |
 | [OPT-0053](./items/OPT-0053-scheduler-tier-test-flake.md) | P1 | backend | S | verify.sh 硬闸有 flaky 测试：scheduler_tiers 的 fast_burst 保留槽位断言 clean HEAD 实测 1/8 轮随机红；疑 daemon 线程 + 模块级 `_latest_result` 竞态。与 0051 叠加后闸门实际已失效 |
+| [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | P1 | mixed | L | 交易 IP 盈利归因：journal 逐单开仓 IP 落库（上线日=数据起点，先部署）+ 按「账户组×时段」找同 IP 多客户/多 IB 集群 + /login-ips 第 5 tab（页面 cs、tab risk-only，MODULE_MAP carve-out） |
 
 ## 💡 想法（Ideas）—— 还不能直接 claim
 
