@@ -227,7 +227,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 3. 日期参数严格校验**形状**（`\d{4}-\d{2}-\d{2}`）：Python 3.11+ `fromisoformat` 连 `YYYYMMDD` 也收，路由层拒掉，避免未文档化的调用契约被烤进前端。
 4. 本窗口真实数据 `partial_remainder` / `journal_incomplete` 两桶为空（MT4 `from #` 链全部走通、parse_runs 全齐）——桶与分类逻辑存在且有单测，只是首周无样本。
 5. 回填走 `docker exec new-it-backend-dev`（root）而不是宿主机——`login_ip_orders.db` 主文件属 root（容器创建），宿主机无免密 sudo；同 Phase 1 第 5 条那类坑。prod api 容器同为 root，部署后每日 08:30 自动对账无此问题。
-6. 全量 pytest **1878 passed**（13.7 分钟，含两条 app-assembly anti-drift 与 log-volume 护栏）；新增 54 个用例（db 7 / reconcile 13 / grouping 12 / api 8 / 权限 1+1）。
+6. 全量 pytest **1878 passed**（13.7 分钟，含两条 app-assembly anti-drift 与 log-volume 护栏）；新增 39 个用例（db 7 / reconcile 13 / grouping 12 / api 6 / module-gate carve-out 1）。
 
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。
