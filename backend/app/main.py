@@ -45,6 +45,7 @@ from app.core.client_roace_scheduler import (
     stop_client_roace_scheduler,
 )
 from app.core.login_ip_db import init_login_ip_db
+from app.core.login_ip_orders_db import init_login_ip_orders_db
 from app.core.login_ip_scheduler import (
     start_login_ip_scheduler,
     stop_login_ip_scheduler,
@@ -111,6 +112,7 @@ async def lifespan(app: FastAPI):
     init_client_return_export_db()
     init_client_roace_db()
     init_login_ip_db()
+    init_login_ip_orders_db()
     init_fund_flow_monitor_db()
     init_view_profiles_db()
     init_users_db()

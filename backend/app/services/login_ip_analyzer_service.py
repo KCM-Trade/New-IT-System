@@ -6,8 +6,13 @@ analysis artifacts + writes monitored-account login rows into login_ip.db.
 Since 2026-07 the same single pass also extracts, per trading account, the
 LAST client-initiated CLOSE order of the day that carried a client IPv4 —
 persisted to the `last_trade_ip` table and `analysis_last_trade_ip.json`
-(90-day retention). Non-close trade events (open/modify/delete/pending) are
-intentionally ignored per the 2026-07-13 business decision.
+(90-day retention).
+Since 2026-09 (OPT-0063 Phase 1) the same pass ALSO extracts EVERY order
+placement event carrying a client IPv4 (MT4 `order #N, ...` confirmations;
+MT5 `order performed` / `order placed`) — persisted to the separate
+`login_ip_orders.db` (`order_ip` table, 120-day retention) and
+`analysis_order_ip.json`. Open/close is NOT judged here for MT5 (the journal
+cannot tell them apart); the nightly reconciliation does that in Phase 2.
 
 Called by
 ---------
@@ -47,7 +52,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from app.core import login_ip_db
+from app.core import login_ip_db, login_ip_orders_db
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,8 @@ ACCOUNT_LOGINS_FILE = "analysis_account_logins.json"
 RAW_LOGINS_FILE = "analysis_raw_logins.json"
 # Daily per-account "last trade order IP" snapshot (2026-07 requirement).
 LAST_TRADE_IP_FILE = "analysis_last_trade_ip.json"
+# Daily per-order open IP capture (OPT-0063 Phase 1, 2026-09).
+ORDER_IP_FILE = "analysis_order_ip.json"
 
 # --- last-trade-IP extraction rules ------------------------------------------
 # Business definition (decided 2026-07-13, narrowed same day): for every
@@ -108,6 +115,101 @@ def _is_mt5_close(msg: str) -> bool:
 
 _ORDER_REF_RE = re.compile(r"#(\d+)")
 
+# --- order-event extraction rules (OPT-0063 Phase 1, 2026-09) ----------------
+# Matched against the message after "'<acc>': " — the same anchor and the same
+# upstream gates (client IPv4, >=5-digit non-demo account) as close detection.
+# Samples below are from the 20260918 journals.
+#
+# MT4 / MT4_Live2 — the CONFIRMATION line carries the ticket; the request line
+# ('order buy limit 0.11 XAUUSD at 4305.00000 sl: ...') has no '#N,' and never
+# matches:
+#   '8520962': order #23106530, buy 0.60 XAUUSD at 4344.62000
+#   '8510072': order #23106533, buy limit 0.11 XAUUSD at 4305.00000
+# Lookalikes that must NOT match:
+#   '8509886': order #23105091 closed by API            (no comma after #N)
+#   '100001333': order #23106618, sell 0.01 XAUUSD is opened at 4347.85000
+#     (API echo account; empty IP in practice, and 'is opened at' breaks the
+#      '<symbol> at <price>' shape, so it cannot match even with an IP)
+_MT4_ORDER_RE = re.compile(
+    r"^order #(\d+), (buy|sell)( (?:limit|stop))? ([\d.]+) (\S+) at [\d.]+"
+)
+
+# MT5 — the order ticket lives inside the trailing '[#N ...]' bracket.
+# 'performed' (market fills AND pending-order activations; bracket tail is
+# 'at market' or 'at <price>'):
+#   '67043240': order performed buy 0.02 at 81169.06 [#40659198 buy 0.02 BTCUSD at market], time 324.37 ms
+#   '67039488': order performed sell 0.01 at 4343.85 [#40497330 sell 0.01 XAUUSD.kcmc at 4342.37], time ...
+# ⚠ open vs close is NOT decided here: a close confirmation looks identical to
+# an open ('[#N buy 0.02 XAUUSD.cent at market]' with N = the CLOSE order
+# ticket). The nightly reconciliation (Phase 2) judges via
+# mt5_orders_history."Order" == PositionID. What IS excluded here:
+#   '[#40497598 close by 0.3 XAUUSD.cent at 4308.26]'  (close-by hedge close —
+#   the (buy|sell) verb anchor rejects it structurally)
+_MT5_PERFORMED_RE = re.compile(
+    r"^order performed .*\[#(\d+) (buy|sell)( (?:limit|stop))? ([\d.]+) (\S+) at (?:market|[\d.]+)\]"
+)
+
+# 'placed' — pending-order submission, bracket immediately after 'placed ':
+#   '67043869': order placed [#40497321 buy limit 0.01 USDCAD.kcm at 1.39000], time 0.86 ms
+# Pending verbs only (limit|stop) — no plain buy/sell exists on this shape
+# (verified 20260918). Two lookalikes are excluded ON PURPOSE:
+#   'order placed for execution [#N buy 0.2 XAUUSD.kcm at market]' (~300/day,
+#     server-side LP routing leg of a market order; out of OPT-0063's spec —
+#     the market fill itself is already captured as 'performed')
+#   'order placed for '67038239' [#N buy limit ...]' (manager placing FOR a
+#     client — the account column holds the manager's short id, so the >=5
+#     digit gate drops it upstream; the anchored '\[#' is the second fence)
+#   'order placed [#40556683 buy stop limit 0.8 XAUUSD at 4402.00 (4352.75)]'
+#     (stop-limit: 'limit' lands where lots should be — ~1 line/day, accepted loss)
+_MT5_PLACED_RE = re.compile(
+    r"^order placed \[#(\d+) (buy|sell)( (?:limit|stop)) ([\d.]+) (\S+) at [\d.]+\]"
+)
+
+
+def _match_order_event(server_name: str, msg: str) -> dict | None:
+    """Match an order-placement journal message; return the event or None.
+
+    Pure matcher — caller supplies account/IP/time from the line columns.
+    Returns a dict with order_ref (int ticket), event_kind, cmd, lots, symbol.
+    MT5 events are collected WITHOUT an open/close verdict (see above).
+    """
+    # Cheap gate: every order shape on both server families starts with
+    # 'order ' — keeps the regexes off the millions of unrelated lines.
+    if not msg.startswith("order "):
+        return None
+
+    if server_name == "MT5":
+        m = _MT5_PERFORMED_RE.match(msg)
+        if m:
+            ticket, verb, modifier, lots, symbol = m.groups()
+            event_kind = "performed"
+        else:
+            m = _MT5_PLACED_RE.match(msg)
+            if not m:
+                return None
+            ticket, verb, modifier, lots, symbol = m.groups()
+            event_kind = "placed"
+        return {
+            "order_ref": int(ticket),
+            "event_kind": event_kind,
+            "cmd": verb + (modifier or ""),
+            "lots": float(lots),
+            "symbol": symbol,
+        }
+
+    m = _MT4_ORDER_RE.match(msg)
+    if not m:
+        return None
+    ticket, verb, modifier, lots, symbol = m.groups()
+    return {
+        "order_ref": int(ticket),
+        "event_kind": "order",
+        "cmd": verb + (modifier or ""),
+        "lots": float(lots),
+        "symbol": symbol,
+    }
+
+
 # Per-account cap on captured raw log lines. Keeping this small keeps the JSON
 # small enough to ship inside email attachments and render quickly in the UI.
 MAX_RAW_LOGS_PER_ACCOUNT = 10
@@ -127,14 +229,24 @@ def _parse_one_log(
     log_path: Path,
     server_name: str,
     monitored_ids: set[str],
-) -> tuple[dict[str, set[int]], dict[str, Counter], dict[str, list[str]], dict[str, dict]]:
+) -> tuple[
+    dict[str, set[int]],
+    dict[str, Counter],
+    dict[str, list[str]],
+    dict[str, dict],
+    list[dict],
+    int,
+]:
     """Parse a single-day .log for one server.
 
-    Returns `(ip_to_accounts, account_ip_logins, raw_login_logs, last_trade)`.
-    Every key is a str so JSON serialization doesn't need any custom
-    converters later. `last_trade` maps account_id → the LAST client close
-    order of the day that carried a valid IPv4 (see `_is_mt4_close` /
-    `_is_mt5_close` and the demo/manager filter above).
+    Returns `(ip_to_accounts, account_ip_logins, raw_login_logs, last_trade,
+    order_events, lines_scanned)`. Every key is a str so JSON serialization
+    doesn't need any custom converters later. `last_trade` maps account_id →
+    the LAST client close order of the day that carried a valid IPv4 (see
+    `_is_mt4_close` / `_is_mt5_close` and the demo/manager filter above).
+    `order_events` (OPT-0063) is one dict per order-placement line that
+    carried a client IPv4 — see `_match_order_event`. `lines_scanned` feeds
+    the `order_ip_parse_runs` audit table.
 
     See module docstring for the two-pass logic. `monitored_ids` is the set of
     monitored account-id STRINGS for this specific server — passing it in
@@ -160,10 +272,15 @@ def _parse_one_log(
     # Journal lines are chronological, so "last close order" is simply the
     # latest matching line — overwrite wins, memory stays O(#accounts).
     last_trade: dict[str, dict] = {}
+    # OPT-0063: every order-placement event with a client IPv4. ~120k rows on
+    # a weekday (dominated by MT5 'order performed') — fine as a list, it is
+    # drained into SQLite right after the parse.
+    order_events: list[dict] = []
 
     lines_scanned = 0
     logins_matched = 0
     close_lines_matched = 0
+    order_lines_matched = 0
 
     # ----- Pass 1 ---------------------------------------------------------
     with open(log_path, "r", encoding=encoding, errors="ignore") as fp:
@@ -195,6 +312,19 @@ def _parse_one_log(
                     continue
                 if demo_prefix and acc_id_str.startswith(demo_prefix):
                     continue
+                # --- order-placement branch (OPT-0063), BEFORE close -------
+                # Runs on the same gated stream as close detection (client
+                # IPv4 + real non-demo account already enforced above).
+                # Rejected requests are not order events: 'no money' (MT4
+                # rejection marker, same rule as close) and 'invalid'.
+                if "no money" not in msg and "invalid" not in msg:
+                    order_event = _match_order_event(server_name, msg)
+                    if order_event is not None:
+                        order_event["account_id"] = int(acc_id_str)
+                        order_event["ip_address"] = ip_str
+                        order_event["event_time_mt"] = parts[time_idx].strip()
+                        order_events.append(order_event)
+                        order_lines_matched += 1
                 # MT4 rejections keep the verb ('... [no money]') — a
                 # refused request is not a close order.
                 if is_close(msg) and "no money" not in msg:
@@ -276,7 +406,8 @@ def _parse_one_log(
 
     logger.info(
         "[%s] parsed: %d lines scanned, %d login events, %d unique IPs, %d unique accounts, "
-        "%d raw-log accounts captured, %d close lines → %d last-trade-IP accounts",
+        "%d raw-log accounts captured, %d close lines → %d last-trade-IP accounts, "
+        "%d order events",
         server_name,
         lines_scanned,
         logins_matched,
@@ -285,8 +416,9 @@ def _parse_one_log(
         len(raw_login_logs),
         close_lines_matched,
         len(last_trade),
+        order_lines_matched,
     )
-    return ip_to_accounts, account_ip_logins, raw_login_logs, last_trade
+    return ip_to_accounts, account_ip_logins, raw_login_logs, last_trade, order_events, lines_scanned
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +435,15 @@ def _json_default(obj: Any):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def _save_json(data: dict, out_path: Path) -> None:
+def _save_json(data: dict, out_path: Path, compact: bool = False) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fp:
-        json.dump(data, fp, indent=2, ensure_ascii=False, default=_json_default)
+        # compact=True for the ~120k-rows/day order_ip dump: indent=2 would
+        # put every field on its own line and triple the file size.
+        if compact:
+            json.dump(data, fp, separators=(",", ":"), ensure_ascii=False, default=_json_default)
+        else:
+            json.dump(data, fp, indent=2, ensure_ascii=False, default=_json_default)
     size_kb = out_path.stat().st_size / 1024
     logger.info("saved %s (%.1f KB)", out_path.name, size_kb)
 
@@ -370,10 +507,13 @@ def analyze_date(
               'unique_ips': 4068, 'unique_accounts': 1421,
               'total_logins': 81048, 'monitored_logins': 12,
               'correlated_accounts': 5, 'raw_logs_captured_accounts': 17,
+              'last_trade_ip_accounts': 780, 'order_events': 9518,
             },
             ...
           },
           'login_history_inserted': 42,
+          'last_trade_ip_upserted': 1488,
+          'order_ip_upserted': 118448,
           'status': 'ok' | 'empty' | 'partial',
         }
     """
@@ -385,6 +525,7 @@ def analyze_date(
         "servers": {},
         "login_history_inserted": 0,
         "last_trade_ip_upserted": 0,
+        "order_ip_upserted": 0,
         "status": "empty",
     }
 
@@ -411,6 +552,10 @@ def analyze_date(
     acc_all: dict[str, dict] = {}
     raw_all: dict[str, dict] = {}
     trade_all: dict[str, dict] = {}
+    order_all: dict[str, list[dict]] = {}
+    # Per-server line counts feed the order_ip_parse_runs audit table, so the
+    # Phase 2 coverage endpoint can flag a truncated log weeks later.
+    lines_scanned_by_server: dict[str, int] = {}
 
     # ----- Parse each server's log ---------------------------------------
     for log_path in log_files:
@@ -425,8 +570,8 @@ def analyze_date(
         monitored_ids = monitored_ids_per_server.get(server_name, set())
 
         try:
-            ip_map, acc_map, raw_map, trade_map = _parse_one_log(
-                log_path, server_name, monitored_ids
+            ip_map, acc_map, raw_map, trade_map, order_events, lines_scanned = (
+                _parse_one_log(log_path, server_name, monitored_ids)
             )
         except Exception as exc:
             logger.exception("[%s] parse FAILED: %s", server_name, exc)
@@ -438,6 +583,8 @@ def analyze_date(
             raw_all[server_name] = raw_map
         if trade_map:
             trade_all[server_name] = trade_map
+        order_all[server_name] = order_events
+        lines_scanned_by_server[server_name] = lines_scanned
 
         # Per-server stats for the caller.
         monitored_login_count = sum(
@@ -454,6 +601,7 @@ def analyze_date(
             "correlated_accounts": sum(1 for aid in raw_map if aid not in monitored_ids),
             "raw_logs_captured_accounts": len(raw_map),
             "last_trade_ip_accounts": len(trade_map),
+            "order_events": len(order_events),
         }
 
     if not acc_all:
@@ -465,6 +613,38 @@ def analyze_date(
     _save_json(acc_all, out_day_dir / ACCOUNT_LOGINS_FILE)
     _save_json(raw_all, out_day_dir / RAW_LOGINS_FILE)
     _save_json(trade_all, out_day_dir / LAST_TRADE_IP_FILE)
+    _save_json(order_all, out_day_dir / ORDER_IP_FILE, compact=True)
+
+    # ----- Write per-order open-IP rows (OPT-0063) ------------------------
+    if write_to_db:
+        order_records = [
+            (
+                target_date,
+                server_name,
+                ev["account_id"],
+                ev["order_ref"],
+                ev["ip_address"],
+                ev["event_time_mt"],
+                ev["event_kind"],
+                ev["cmd"],
+                ev["lots"],
+                ev["symbol"],
+            )
+            for server_name, events in order_all.items()
+            for ev in events
+        ]
+        summary["order_ip_upserted"] = login_ip_orders_db.upsert_order_ips(order_records)
+        # Parse audit: one row per (day, server) actually parsed, so coverage
+        # can later tell "log was truncated" apart from "no orders that day".
+        login_ip_orders_db.record_parse_runs(
+            (
+                target_date,
+                server_name,
+                lines_scanned_by_server[server_name],
+                len(order_all[server_name]),
+            )
+            for server_name in order_all
+        )
 
     # ----- Write per-account last-trade-IP rows ----------------------------
     if write_to_db and trade_all:
