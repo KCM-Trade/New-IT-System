@@ -84,8 +84,8 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 ### 4. 由此定下的口径（用户 2026-09-21 认可）
 
 1. **事实按「IP × 日」记，排名按「账户组 × 时段」算。** 按日排榜首是当天运气最好的散户；按时段但以 IP 为单位排会把一个团伙切成 20 份。
-2. **私有 IP**：当天该 IP 上的 CRM 客户数 < `public_ip_clients`（默认 10）。**按客户数不按账户数** —— 1 客户 17 账户同 IP（182.46.13.58）是发现不是 NAT。
-3. **账户组** = 时间窗内共用过任一私有 IP 的账户的连通分量（union-find）。IP 降级为证据列（「共用 N 个 IP」）。
+2. **共享出口 / 私有 IP**（v2 统一为按**窗口**判）：窗口内该 IP 上的 distinct CRM 客户数 ≥ `public_ip_clients`（默认 10）= 共享出口，不参与连边；其余为私有 IP。**按客户数不按账户数** —— 1 客户 17 账户同 IP（182.46.13.58）是发现不是 NAT。
+3. **账户组** = 窗口内通过私有 IP 相连的账户的连通分量（union-find），**连边要求共用 ≥ 2 个 IP 日或 ≥ 2 个不同私有 IP**（默认值，待拍板；单次共现连边在 90 天窗口会把换过租客的家庭宽带串成一组）。IP 降级为证据列（「共用 N 个 IP」+ 桥接 IP）。
 4. **盈亏归开仓日的 IP**（老板要「下单时」的 IP），窗口按 **平仓日** 切（盈亏在平仓日实现）。
 5. 组的指标：盈利、单数、手数、账户数、客户数、直属 IB 数、共用 IP 数、活跃日、赚钱日 / 活跃日、主品种占比、平均持仓、按日盈利序列。
 6. 「一人多户」（1 客户 ≥ 2 账户同 IP）单独一类，开关默认关。
@@ -102,7 +102,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 ### Phase 1 — 逐单开仓 IP 落库（backend，**先部署**）
 
-1. `login_ip_db.py` 新表：
+1. 新库文件 `backend/data/login_ip_orders.db`，新模块 `backend/app/core/login_ip_orders_db.py`（照 `login_ip_db.py` 的 `get_connection` / `_SCHEMA` / `init_*` 模式；`order_ip`、`order_ip_parse_runs` 与 Phase 2 的 `trade_ip_pnl` 都放这里，与六个 tab 共用的 `login_ip.db` 隔离）。`order_ip` 表：
    ```sql
    CREATE TABLE IF NOT EXISTS order_ip (
      id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,8 +124,8 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
    ```
    另加一张解析审计表 `order_ip_parse_runs(trade_date, server_name, lines_scanned, rows_written, parsed_at)`，让 `coverage` 能列出「哪天哪台服务器日志不完整」——`_download_job` 当天会告警，但几周后查窗口时那一天只会表现为「盈利偏低」，没人看得出来。
    ⚠ `_SCHEMA` 里的索引只能引用建表时就有的列（CLAUDE.md `users_db._SCHEMA` 那条同样适用于本库）。
-2. `_parse_one_log` 的非 login 分支里，在 `is_close(...)` 之前加 `is_open(msg)`（MT4：`order #` 开头且逗号后是 `buy|sell`；MT5：`order performed` 且不含 `, close #`），解析 ticket / cmd / lots / symbol，收进 `open_orders: list[dict]`；返回值多一项（**改签名要同步 `:289` 的 return 与调用方 `:456` 附近**，以及单测）。
-3. `upsert_order_ips()`（`INSERT OR REPLACE`，参考 `:523`）；`cleanup_old_order_ip(days=DEFAULT_ORDER_IP_RETENTION_DAYS)` 挂进 `_report_job` 的 `_daily_housekeeping`（`login_ip_scheduler.py:339`），**保留期待拍板：默认 400 天**（老板要长窗口）。⚠ 量级按 9-18 工作日实测 ≈ **5.5–6 万行 / 交易日 × 250 ≈ 1,500 万行 / 年、约 2 GB**（v1 写的 350 万行 / 300 MB 是周日样本，错了 4 倍）。`login_ip.db` 六个 tab 共用，建议 `order_ip` **单独一个库文件** `backend/data/login_ip_orders.db`（同一模块、独立文件，避免 VACUUM / 备份 / WAL 增长牵连主库），保留期写进 `docs/features/login-ip.md` §5.1 表。若用户要压成本，`order_ip` 原始表可以只留 120 天、`trade_ip_pnl` 对账结果留 400 天（排名只读后者）。
+2. `_parse_one_log` 的非 login 分支里，在 `is_close(...)` 之前加 `_match_order_event(server, msg)`，按 §背景 2 的 v2 规则匹配（MT4：`order #N, <buy|sell>[ limit| stop] ...`；MT5：`order performed ... [#N ... at market]` **排除** `close by`，以及 `order placed [#N ...]`），解析 ticket / event_kind / cmd / lots / symbol，收进 `order_events: list[dict]`（⚠ MT5 这里**不判开平**，夜间对账才判）；返回值多一项（**改签名要同步 `:289` 的 return、调用方 `:456` 附近、`scripts/backfill_login_ip.py:129`，以及单测**）。
+3. `upsert_order_ips()`（`INSERT OR REPLACE`，参考 `login_ip_db.py:523`）+ `record_parse_run()`；`cleanup_old_order_ip(days=DEFAULT_ORDER_IP_RETENTION_DAYS)` 挂进 `_report_job` 的 `_daily_housekeeping`（`login_ip_scheduler.py:339`），**保留期待拍板：默认 400 天**（老板要长窗口）。⚠ 量级按 9-18 工作日实测 ≈ **5.5–6 万行 / 交易日 × 250 ≈ 1,500 万行 / 年、约 2 GB**（v1 写的 350 万行 / 300 MB 是周日样本，错了 4 倍）——这就是单独库文件的原因（VACUUM / 备份 / WAL 增长不牵连主库）。保留期写进 `docs/features/login-ip.md` §5.1 表。若用户要压成本，`order_ip` 原始表可以只留 120 天、`trade_ip_pnl` 对账结果留 400 天（排名只读后者）。
 4. 日 JSON 同步落一份 `analysis_order_ip.json`（与 `analysis_last_trade_ip.json` 同款，方便脚本/回放）。
 5. 回填：上线当天用 `backend/data/login_ip/tmp/` 里还在的 7 天 log 回填，🔴 **必须走 `backend/scripts/backfill_login_ip.py`（直接调 `analyze_date`，不推 CRM），不能用 `/login-ip/scheduler/run-now`**——`_download_job` 会顺带跑 `push_last_close_ips_to_crm(target_date)`，diff 基准是推送日志里的 `MAX(trade_date)`，回填老日期会把 CRM 里较新的「最后平仓 IP」覆盖成旧值。`analyze_date` 返回值/签名一改，三个调用方（`login_ip_scheduler.py:214`、`backfill_login_ip.py:129`、单测）同步。
 
@@ -134,14 +134,14 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 `backend/app/services/login_ip_trade_profit_service.py`（新）：
 
 1. **盈亏对账 = 每天 08:30 report job 的固定一步，结果落 SQLite `trade_ip_pnl`；API 只读 SQLite，不碰从库**（冷审实测：`mt5_deals` 一个 MT 日按 `Timestamp` 切 0.55 s / 69,207 行，`mt4_trades` 一个 closeDate 0.59 s；「首次请求现算」冷启动 30 天 ≈ 35 s、90 天 ≈ 100 s 从库时间，每次改阈值都是 cache miss，达不到 P95 < 2 s）。Redis 只缓存分组结果（键 = 全部阈值参数），`scope_cache_suffix()` 对 risk 路由无意义，不用带：
-   - MT4 家族：`mt4_trades WHERE closeDate = :day AND sid IN (1,6) AND CMD IN (0,1)` → `ticketSid` join `order_ip`（`server_name`+`order_ref`）。
-   - MT5：`mt5_deals WHERE Entry IN (1,2,3) AND Timestamp 落在 :day`（🔴 用 `Timestamp`（FILETIME，有索引）切日别用 `Time`，OPT-0062 实测 19.3s vs 0.25s）→ `(Login, PositionID)` join `order_ip`。
+   - MT4 家族：`mt4_trades WHERE closeDate = :day AND sid IN (1,6) AND CMD IN (0,1)` → `ticketSid` join `order_ip`（`server_name`+`order_ref`；`COMMENT LIKE 'from #%'` 先沿链回溯到原 ticket）。
+   - MT5：`mt5_deals WHERE Entry IN (1,2,3) AND Timestamp 落在 :day`（🔴 用 `Timestamp`（FILETIME，有索引）切日别用 `Time`，OPT-0062 实测 19.3s vs 0.25s）→ `order_ip WHERE server_name='MT5' AND order_ref = PositionID`（开仓单 `Order == PositionID`，所以直接拿 PositionID 当 `order_ref` 查即可命中开仓行；同一 PositionID 的平仓单号另查得 `close_ip`）。
    - 结果表 `trade_ip_pnl` **按平仓 deal 建键**：`(server, deal_ref)`（MT5 `Deal`，MT4 `ticketSid`）+ `close_date, account_id, position_ref, open_ip, close_ip, user_id, ib_id, symbol, lots, profit_usd, hold_sec, open_date, reason, no_ip_cause`。🔴 不能按 PositionID 建键——MT5 一个仓位常分多笔、跨多天平掉（9-18：69,207 笔平仓 deal 对 68,709 个仓位）。索引 `(close_date)`、`(open_ip)`、`(user_id)`。CEN 用 `mt4_users.CURRENCY` 折算，剔 demo/test/员工（口径同 `ip_profit_backtest.py` `DAY_SQL`）。`user_id` 来自 `mt4_users.userId`，`ib_id` 来自 `ib_tree WHERE level = 1`（已验 62,200/62,200 一客户一行）。MT4 `COMMENT LIKE 'from #%'` 沿链回溯原 ticket 取 IP。
    - 未匹配到开仓 IP 的单 `open_ip = NULL` 且 `no_ip_cause ∈ {server_initiated, bridge_group, pre_golive, partial_remainder, journal_incomplete}`（= 无 IP 桶，**不丢**，按原因可拆）。长持仓很少（9-18 平仓里开仓 > 7 天的 MT5 40 / 69,207、MT4 39 / 9,560），上线前开的仓两周左右自然清掉。
 2. **分组**：给定窗口 `[from, to]`（平仓日）：
    - **共享出口**按窗口判：窗口内该 IP 的 distinct `user_id` ≥ `public_ip_clients`（默认 10）的 IP 不参与连边（抓运营商 NAT / VPN）。
    - **连边条件（待用户拍板，默认值如下）**：两个账户之间要成边，必须在窗口内共用 **≥ 2 个 IP 日**或 **≥ 2 个不同私有 IP**——只靠一次共现连边，90 天窗口里一条家庭宽带三个月换过三户人就会把三个无关家庭串成一组（union-find 的传递性放大误合并）。每次合并记下**桥接 IP**，详情里可见。
-   - union-find 出组；组指标见 §背景 4.5。一人多户与跨客户用 `clients ≥ 2` 区分。v1 「背景 4.2 按日判私有 IP」与本条以本条为准。
+   - union-find 出组；组指标见 §背景 4.5。一人多户与跨客户用 `clients ≥ 2` 区分。
 3. **API**（`routes/login_ip.py` 同文件或新 `routes/login_ip_trade_profit.py`，前缀必须是 `/login-ip/trade-profit/...`，`def` 不要 `async def`）：
    - `GET /login-ip/trade-profit/groups?from&to&min_clients=2&public_ip_clients=10&include_same_client=false&page&page_size` → 标准分页响应（`data/total/page/page_size/total_pages/statistics`）。
    - `GET /login-ip/trade-profit/groups/{group_id}?from&to&min_clients&public_ip_clients&include_same_client` → 账户明细 + IP 列表（每 IP：国家（cache-only geo）、窗口内客户数、活跃日、是否桥接 IP）+ 按日盈利序列。⚠ `group_id` 是窗口 + 参数 + 账户列表的哈希，**详情必须带同一套参数才能还原**；将来做告警需要稳定键时另起（不在本 OPT）。
@@ -149,7 +149,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
    - `GET /login-ip/trade-profit/coverage?from&to` → 已平仓单数 / 有 IP 单数 / 无 IP 单数（按 `no_ip_cause` 拆）与盈亏 + **日志不完整的 (日期, 服务器) 列表**（来自 `order_ip_parse_runs`）。
    - 查询型 GET 不记审计（口诀：人做的 + 改了状态 + 做成了）。
    - `MODULE_MAP` 加 `("login-ip", "trade-profit"): "risk"`。
-4. `group_id` 用窗口 + 排序后账户列表的 sha1 前 12 位（无状态，同窗口稳定）。
+4. `group_id` = sha1(窗口 + 全部阈值参数 + 排序后账户列表) 前 12 位（无状态；同窗口同参数下稳定）。
 
 ### Phase 3 — 前端第 5 tab（frontend）
 
