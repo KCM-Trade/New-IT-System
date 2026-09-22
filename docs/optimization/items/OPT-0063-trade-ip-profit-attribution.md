@@ -1,11 +1,12 @@
 ---
 id: OPT-0063
 title: 交易 IP 盈利归因 —— /login-ips 第 5 个 tab（risk-only）：逐单下单 IP 落库 + 按「账户组 × 时段」找同 IP 多客户/多 IB 的人头账户集群
-status: ready
+status: wip
 priority: P1
 area: mixed
 effort: L
 created: 2026-09-21
+claimed: 2026-09-22
 related: [[OPT-0062]] [[OPT-0020]]
 ---
 
@@ -85,7 +86,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 1. **事实按「IP × 日」记，排名按「账户组 × 时段」算。** 按日排榜首是当天运气最好的散户；按时段但以 IP 为单位排会把一个团伙切成 20 份。
 2. **共享出口 / 私有 IP**（v2 统一为按**窗口**判）：窗口内该 IP 上的 distinct CRM 客户数 ≥ `public_ip_clients`（默认 10）= 共享出口，不参与连边；其余为私有 IP。**按客户数不按账户数** —— 1 客户 17 账户同 IP（182.46.13.58）是发现不是 NAT。
-3. **账户组** = 窗口内通过私有 IP 相连的账户的连通分量（union-find），**连边要求共用 ≥ 2 个 IP 日或 ≥ 2 个不同私有 IP**（默认值，待拍板；单次共现连边在 90 天窗口会把换过租客的家庭宽带串成一组）。IP 降级为证据列（「共用 N 个 IP」+ 桥接 IP）。
+3. **账户组** = 窗口内通过私有 IP 相连的账户的连通分量（union-find），**连边要求共用 ≥ 2 个 IP 日或 ≥ 2 个不同私有 IP**（✅ 用户 2026-09-22 拍板采用此默认值；单次共现连边在 90 天窗口会把换过租客的家庭宽带串成一组）。IP 降级为证据列（「共用 N 个 IP」+ 桥接 IP）。
 4. **盈亏归开仓日的 IP**（老板要「下单时」的 IP），窗口按 **平仓日** 切（盈亏在平仓日实现）。
 5. 组的指标：盈利、单数、手数、账户数、客户数、直属 IB 数、共用 IP 数、活跃日、赚钱日 / 活跃日、主品种占比、平均持仓、按日盈利序列。
 6. 「一人多户」（1 客户 ≥ 2 账户同 IP）单独一类，开关默认关。
@@ -125,7 +126,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
    另加一张解析审计表 `order_ip_parse_runs(trade_date, server_name, lines_scanned, rows_written, parsed_at)`，让 `coverage` 能列出「哪天哪台服务器日志不完整」——`_download_job` 当天会告警，但几周后查窗口时那一天只会表现为「盈利偏低」，没人看得出来。
    ⚠ `_SCHEMA` 里的索引只能引用建表时就有的列（CLAUDE.md `users_db._SCHEMA` 那条同样适用于本库）。
 2. `_parse_one_log` 的非 login 分支里，在 `is_close(...)` 之前加 `_match_order_event(server, msg)`，按 §背景 2 的 v2 规则匹配（MT4：`order #N, <buy|sell>[ limit| stop] ...`；MT5：`order performed ... [#N ... at market]` **排除** `close by`，以及 `order placed [#N ...]`），解析 ticket / event_kind / cmd / lots / symbol，收进 `order_events: list[dict]`（⚠ MT5 这里**不判开平**，夜间对账才判）；返回值多一项（**改签名要同步 `:289` 的 return、调用方 `:456` 附近、`scripts/backfill_login_ip.py:129`，以及单测**）。
-3. `upsert_order_ips()`（`INSERT OR REPLACE`，参考 `login_ip_db.py:523`）+ `record_parse_run()`；`cleanup_old_order_ip(days=DEFAULT_ORDER_IP_RETENTION_DAYS)` 挂进 `_report_job` 的 `_daily_housekeeping`（`login_ip_scheduler.py:339`），**保留期待拍板：默认 400 天**（老板要长窗口）。⚠ 量级按 9-18 工作日实测 ≈ **5.5–6 万行 / 交易日 × 250 ≈ 1,500 万行 / 年、约 2 GB**（v1 写的 350 万行 / 300 MB 是周日样本，错了 4 倍）——这就是单独库文件的原因（VACUUM / 备份 / WAL 增长不牵连主库）。保留期写进 `docs/features/login-ip.md` §5.1 表。若用户要压成本，`order_ip` 原始表可以只留 120 天、`trade_ip_pnl` 对账结果留 400 天（排名只读后者）。
+3. `upsert_order_ips()`（`INSERT OR REPLACE`，参考 `login_ip_db.py:523`）+ `record_parse_run()`；`cleanup_old_order_ip(days=DEFAULT_ORDER_IP_RETENTION_DAYS)` 挂进 `_report_job` 的 `_daily_housekeeping`（`login_ip_scheduler.py:339`），**保留期 ✅ 用户 2026-09-22 拍板：`order_ip` 原始表 120 天、`trade_ip_pnl` 对账结果表 400 天**（排名只读后者；原始证据 120 天后清除）。⚠ 量级按 9-18 工作日实测 ≈ **5.5–6 万行 / 交易日**（v1 写的 350 万行 / 300 MB 是周日样本，错了 4 倍）——这就是单独库文件的原因（VACUUM / 备份 / WAL 增长不牵连主库）。保留期写进 `docs/features/login-ip.md` §5.1 表。
 4. 日 JSON 同步落一份 `analysis_order_ip.json`（与 `analysis_last_trade_ip.json` 同款，方便脚本/回放）。
 5. 回填：上线当天用 `backend/data/login_ip/tmp/` 里还在的 7 天 log 回填，🔴 **必须走 `backend/scripts/backfill_login_ip.py`（直接调 `analyze_date`，不推 CRM），不能用 `/login-ip/scheduler/run-now`**——`_download_job` 会顺带跑 `push_last_close_ips_to_crm(target_date)`，diff 基准是推送日志里的 `MAX(trade_date)`，回填老日期会把 CRM 里较新的「最后平仓 IP」覆盖成旧值。`analyze_date` 返回值/签名一改，三个调用方（`login_ip_scheduler.py:214`、`backfill_login_ip.py:129`、单测）同步。
 
@@ -140,7 +141,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
    - 未匹配到开仓 IP 的单 `open_ip = NULL` 且 `no_ip_cause ∈ {server_initiated, bridge_group, pre_golive, partial_remainder, journal_incomplete}`（= 无 IP 桶，**不丢**，按原因可拆）。长持仓很少（9-18 平仓里开仓 > 7 天的 MT5 40 / 69,207、MT4 39 / 9,560），上线前开的仓两周左右自然清掉。
 2. **分组**：给定窗口 `[from, to]`（平仓日）：
    - **共享出口**按窗口判：窗口内该 IP 的 distinct `user_id` ≥ `public_ip_clients`（默认 10）的 IP 不参与连边（抓运营商 NAT / VPN）。
-   - **连边条件（待用户拍板，默认值如下）**：两个账户之间要成边，必须在窗口内共用 **≥ 2 个 IP 日**或 **≥ 2 个不同私有 IP**——只靠一次共现连边，90 天窗口里一条家庭宽带三个月换过三户人就会把三个无关家庭串成一组（union-find 的传递性放大误合并）。每次合并记下**桥接 IP**，详情里可见。
+   - **连边条件（✅ 用户 2026-09-22 拍板）**：两个账户之间要成边，必须在窗口内共用 **≥ 2 个 IP 日**或 **≥ 2 个不同私有 IP**——只靠一次共现连边，90 天窗口里一条家庭宽带三个月换过三户人就会把三个无关家庭串成一组（union-find 的传递性放大误合并）。每次合并记下**桥接 IP**，详情里可见。
    - union-find 出组；组指标见 §背景 4.5。一人多户与跨客户用 `clients ≥ 2` 区分。
 3. **API**（`routes/login_ip.py` 同文件或新 `routes/login_ip_trade_profit.py`，前缀必须是 `/login-ip/trade-profit/...`，`def` 不要 `async def`）：
    - `GET /login-ip/trade-profit/groups?from&to&min_clients=2&public_ip_clients=10&include_same_client=false&page&page_size` → 标准分页响应（`data/total/page/page_size/total_pages/statistics`）。
