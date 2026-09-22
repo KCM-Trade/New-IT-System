@@ -295,7 +295,7 @@ def _daily_housekeeping() -> None:
     audit row of the main job — we'd rather keep stale data than lose the
     run record.
 
-    Six sweeps:
+    Six sweeps on login_ip.db, plus two on login_ip_orders.db (OPT-0063):
       1. `cleanup_old_login_history`       — drop rows outside the 7-day
          correlation window; this function was defined in `login_ip_db`
          since the migration but had no caller, so history grew forever.
@@ -312,8 +312,12 @@ def _daily_housekeeping() -> None:
       6. `cleanup_old_ip_geo_cache`        — drop geo answers past their TTL.
          Purely disk housekeeping: `get_cached_countries` already filters on
          age, so a stale row is inert, never served.
+      7. `cleanup_old_order_ip`            — drop per-order open-IP rows
+         older than 120 days (OPT-0063; retention decided 2026-09-22).
+      8. `cleanup_old_parse_runs`          — drop parse audit rows older
+         than 400 days (aligned with the Phase 2 ranking window).
     """
-    from ..core import login_ip_db
+    from ..core import login_ip_db, login_ip_orders_db
 
     try:
         removed_history = login_ip_db.cleanup_old_login_history()
@@ -322,15 +326,20 @@ def _daily_housekeeping() -> None:
         removed_trade_ips = login_ip_db.cleanup_old_last_trade_ip()
         removed_push_log = login_ip_db.cleanup_old_crm_push_log()
         removed_geo_cache = login_ip_db.cleanup_old_ip_geo_cache()
+        removed_order_ip = login_ip_orders_db.cleanup_old_order_ip()
+        removed_parse_runs = login_ip_orders_db.cleanup_old_parse_runs()
         logger.info(
             "[housekeeping] history_removed=%d runs_removed=%d runs_reaped=%d "
-            "trade_ips_removed=%d crm_push_log_removed=%d geo_cache_removed=%d",
+            "trade_ips_removed=%d crm_push_log_removed=%d geo_cache_removed=%d "
+            "order_ip_removed=%d parse_runs_removed=%d",
             removed_history,
             removed_runs,
             reaped,
             removed_trade_ips,
             removed_push_log,
             removed_geo_cache,
+            removed_order_ip,
+            removed_parse_runs,
         )
     except Exception:
         logger.exception("[housekeeping] failed (swallowed; non-fatal)")

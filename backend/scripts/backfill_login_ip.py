@@ -10,7 +10,9 @@ Login IP Monitor - One-shot backfill script.
 - 一天一天串行处理：同一时刻最多只有 1 天的 .log 在磁盘上。
 - 单 server 失败不影响其他 server；单天失败不影响其他天。
 - 已经有 JSON 的日期默认跳过（--force 可重跑）。
-- **只产出 JSON，不写 SQLite**：DB 层留给 Phase 1（core/login_ip_db.py）。
+- 解析结果写 JSON + SQLite（login_history / last_trade_ip / order_ip），
+  但**绝不推 CRM**——回填老日期走本脚本是安全的；`run-now` 会顺带
+  `push_last_close_ips_to_crm`，把 CRM 里较新的值覆盖成旧值（OPT-0063）。
 
 Usage
 -----
@@ -55,6 +57,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 # Make `from app.services...` work when invoked as a plain script (not -m).
 sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.core.login_ip_orders_db import init_login_ip_orders_db  # noqa: E402
 from app.services.login_ip_analyzer_service import (  # noqa: E402
     ACCOUNT_LOGINS_FILE,
     IP_MAPPING_FILE,
@@ -99,6 +102,7 @@ def process_one_day(
         "downloaded": {},
         "parsed": {},
         "login_history_inserted": 0,
+        "order_ip_upserted": 0,
         "error": None,
     }
 
@@ -129,6 +133,7 @@ def process_one_day(
         analysis = analyze_date(target_date, log_dir=TMP_ROOT, out_dir=DATA_DIR)
         summary["parsed"] = analysis["servers"] or {}
         summary["login_history_inserted"] = analysis["login_history_inserted"]
+        summary["order_ip_upserted"] = analysis.get("order_ip_upserted", 0)
         # Map the service's status back to the script's status vocabulary.
         summary["status"] = "empty" if analysis["status"] == "empty" else "ok"
 
@@ -227,6 +232,10 @@ def main() -> int:
     # Load .env from backend/ (pointed to explicitly so running from any CWD works)
     load_dotenv(BACKEND_ROOT / ".env")
 
+    # The app normally creates this DB in its lifespan; the script runs
+    # standalone, so make sure the OPT-0063 tables exist before upserts.
+    init_login_ip_orders_db()
+
     logger.info("=" * 70)
     logger.info("Login IP backfill run_id=%s", run_id)
     logger.info("log file: %s", log_file)
@@ -288,6 +297,8 @@ def main() -> int:
                 )
         if s.get("login_history_inserted"):
             parts.append(f"hist+={s['login_history_inserted']}")
+        if s.get("order_ip_upserted"):
+            parts.append(f"order_ip={s['order_ip_upserted']}")
         logger.info("  %s %-10s %s", s["date"], s["status"], "  ".join(parts))
 
     # exit 1 if any day errored (cron / CI friendly)
