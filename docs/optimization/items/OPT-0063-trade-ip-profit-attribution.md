@@ -12,6 +12,7 @@ related: [[OPT-0062]] [[OPT-0020]]
 
 > **v2（2026-09-22）**：独立冷审 15 条 finding（实测 9-18 工作日 journal + 从库）已全部吸收：MT5 开仓判定改为「全收 + 夜间按 `Order == PositionID` 判开/平」、补 MT5 挂单 `order placed`、量级修正 4 倍、P&L 改 08:30 预计算、结果表按 deal 建键、私有 IP 定义统一、回填改走 `backfill_login_ip.py`。冷审原文浓缩在 §冷审对照表。
 > **✅ Phase 1 已上线（2026-09-22）**：commit `fa3932b`（merge `c3f0168`），已部署 prod 并回填 09-15 → 09-21 共 **619,998 行**（MT4 53,450 / Live2 10,400 / MT5 556,148 = performed 500,152 + placed 55,996）；`order_ip_parse_runs` 21 行齐全；回填未推 CRM（`crm_last_close_ip_push_log` 当日 0 新增）。实施偏差见 §笔记「Phase 1 实施记录」。**Phase 2 worker 注意：`order_ip` 表已有真实数据可读。**
+> **✅ Phase 2 已上线（2026-09-22）**：commit `28a5f39`，已部署 prod 并回填 09-15 → 09-21 对账共 **306,231 行**（with-IP 95.5%）；4 个端点 `/login-ip/trade-profit/{groups,groups/{id},ips,coverage}` 挂 risk 模块；**Cheng Qian 5 客户组在真实下单 IP 数据上精确复现**（group `e4c578ff2792`，7 账户 5 IP，周盈利 $3,385）。实施偏差见 §笔记「Phase 2 实施记录」。
 > **本文件自洽，实施 worker 只读这一份即可。** 分析、口径验证与一个月回测都已做完（§背景），不要重做。
 > ⚠ 按 tracker 规则这是 net-new feature，本应走 `feat/` 分支；用户 2026-09-21 明确要求按 OPT 管理（同 OPT-0062 先例），照办。
 > ⚠ **Phase 1（落库）越早上线越好**：逐单 IP 只在 MT journal 里，本机 `backend/data/login_ip/tmp/` 只留 7 天、MT5 FTP 只留 5 天，**功能上线日 = 数据起点，历史补不回来**。Phase 1 可以先于 Phase 2/3 单独部署。
@@ -191,12 +192,12 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 - [x] `_daily_housekeeping` 加 sweep 7/8（order_ip 120 天、parse_runs 400 天）；`docs/features/login-ip.md` 新增 §3.6 写清行格式、口径、保留期。
 - [x] 重跑同一天不产生重复行（UNIQUE 生效，单测覆盖）。
 
-**Phase 2**
-- [ ] `GET /login-ip/trade-profit/groups` 90 天窗口 P95 < 2 s（只读 SQLite + union-find；缓存命中 < 200 ms）；08:30 对账步骤单日 < 30 s。
-- [ ] MT5 分多笔平掉的仓位，各笔 deal 各自一行、盈亏合计等于 `mt5_deals` 合计（不重复、不丢）。
-- [ ] 对 08-21 → 09-20 用近似数据集跑同一分组算法，能把 Cheng Qian 5 客户组和 45.32.124.94 组各聚成一组（算法正确性的回归样本；不入正式表）。
-- [ ] cs-only 用户调该接口 403（不是 401）；`AUTH_ENABLED=false` 时恒过；`test_app_assembly` 两条 anti-drift 绿；`test_data_scope` 全绿且 ROUTE_SCOPE 未改。
-- [ ] 无 IP 桶在 coverage 里可见，且 groups 的合计 + 无 IP 桶 = 窗口内全部已平仓单。
+**Phase 2**（✅ 2026-09-22 已上线；验收实测见 §笔记「Phase 2 实施记录」）
+- [x] `GET /login-ip/trade-profit/groups` 90 天窗口 P95 < 2 s（只读 SQLite + union-find；缓存命中 < 200 ms）；08:30 对账步骤单日 < 30 s。——实测：90 天窗口冷算 **0.59 s**（数据自 09-15 起），缓存命中 118 ms；对账单日 4.7–6.3 s。
+- [x] MT5 分多笔平掉的仓位，各笔 deal 各自一行、盈亏合计等于 `mt5_deals` 合计（不重复、不丢）。——真实数据抽查 position 40010063：10 deal 合计 $273.35 与源库逐分一致；单测覆盖两日分笔。
+- [x] ~~对 08-21 → 09-20 用近似数据集跑同一分组算法~~ → 直接用**真实下单 IP**（09-15 → 09-21）跑正式分组：Cheng Qian 5 客户组精确复现；45.32.124.94 在窗口内（459 单 / 2 账户 / +$9,468），经 `/ips` 可见。
+- [x] cs-only 用户调该接口 403（不是 401）；`AUTH_ENABLED=false` 时恒过；`test_app_assembly` 两条 anti-drift 绿；`test_data_scope` 全绿且 ROUTE_SCOPE 未改。——另有真机实测：cs-only 用户（anson.zou）调 `/groups` 返 403。
+- [x] 无 IP 桶在 coverage 里可见，且 groups 的合计 + 无 IP 桶 = 窗口内全部已平仓单。——口径修正：守恒式需要中间项「有 IP 但未成组的 solo 单」，`statistics.window_with_ip_trades` 与 `groups_trades` 就是为此暴露的（292,390 = 62,821 成组 + 229,569 solo；306,231 = 292,390 + 13,841 无 IP）。
 
 **Phase 3**
 - [ ] 6 位 cs-only 用户看不到 tab，risk 用户与 manager 看得到；`?tab=` 深链无权限时回落 tab 1。
@@ -218,6 +219,15 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
    ```
    注意 `--force` 会消耗掉 `tmp/` 里的 log（脚本原有行为）。
 6. 全量 pytest 1840 passed（13.5 分钟）；09-18 真实日志冒烟：MT5 performed 与「带 IPv4 且过 gate 的行数」逐行 diff 零漏抓。
+
+### Phase 2 实施记录（2026-09-22，worker 如实上报的偏差）
+
+1. **候选 IP 预筛按「IP 在窗口内 ≥ 2 账户」，不是按 (IP, 日)**——单测抓出的真 bug：按 (ip, day) 预筛会把「跨天共用但从不同日共现」的 IP 全部漏掉，已拍板的「≥ 2 个不同私有 IP」连边规则永远不触发。
+2. **MySQL DECIMAL 必须在记录装配处转 float**——回填首日 7/7 全灭（`decimal.Decimal` 绑不进 sqlite，`_f()` 兜底）；假数据单测测不出，已补 Decimal 回归用例。这是只有真从库能暴露的类别。
+3. 日期参数严格校验**形状**（`\d{4}-\d{2}-\d{2}`）：Python 3.11+ `fromisoformat` 连 `YYYYMMDD` 也收，路由层拒掉，避免未文档化的调用契约被烤进前端。
+4. 本窗口真实数据 `partial_remainder` / `journal_incomplete` 两桶为空（MT4 `from #` 链全部走通、parse_runs 全齐）——桶与分类逻辑存在且有单测，只是首周无样本。
+5. 回填走 `docker exec new-it-backend-dev`（root）而不是宿主机——`login_ip_orders.db` 主文件属 root（容器创建），宿主机无免密 sudo；同 Phase 1 第 5 条那类坑。prod api 容器同为 root，部署后每日 08:30 自动对账无此问题。
+6. 全量 pytest **1878 passed**（13.7 分钟，含两条 app-assembly anti-drift 与 log-volume 护栏）；新增 54 个用例（db 7 / reconcile 13 / grouping 12 / api 8 / 权限 1+1）。
 
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。

@@ -1,5 +1,6 @@
 """
-SQLite database for per-order open IP capture (OPT-0063 Phase 1).
+SQLite database for per-order open IP capture (OPT-0063 Phase 1) and the
+nightly reconciled per-deal P&L attribution (Phase 2).
 
 Stores:
 - `order_ip`            — one row per (server, order ticket): the client IPv4
@@ -10,6 +11,13 @@ Stores:
                           Lets the Phase 2 coverage endpoint list "which
                           (date, server) log was incomplete" weeks later, when
                           the gap would otherwise look like "low profit that day".
+- `trade_ip_pnl`        — Phase 2 result table, ONE ROW PER CLOSE DEAL:
+                          yesterday's closed trades (mt4_trades / mt5_deals)
+                          joined back to the opening order's IP. Keyed by
+                          (server, deal_ref) — NOT by position, because MT5
+                          positions are routinely closed in several deals
+                          across several days. Rankings read ONLY this table;
+                          the API never touches the MySQL slave.
 
 The DB file lives at `backend/data/login_ip_orders.db` — deliberately NOT in
 `login_ip.db`: at ~120k rows per weekday this table dwarfs the six-tab
@@ -64,6 +72,11 @@ DEFAULT_ORDER_IP_RETENTION_DAYS = 120
 # "that day predates go-live" for any day a ranking can display.
 DEFAULT_PARSE_RUN_RETENTION_DAYS = 400
 
+# Retention for the Phase 2 reconciled P&L table. Decided 2026-09-22: 400
+# days — this is the table the rankings read, so it outlives the raw
+# order_ip evidence (120 days) by design.
+DEFAULT_TRADE_IP_PNL_RETENTION_DAYS = 400
+
 
 _SCHEMA_SQL = """
 -- One row per order ticket observed in the journal with a client IPv4.
@@ -98,6 +111,52 @@ CREATE TABLE IF NOT EXISTS order_ip_parse_runs (
     parsed_at     TEXT    NOT NULL DEFAULT (datetime('now', '+8 hours')),
     UNIQUE (trade_date, server_name)  -- re-run of the same day overwrites
 );
+
+-- Phase 2 result table: one row per CLOSE DEAL with the P&L attributed to the
+-- IP the position was opened from. Written once per MT day by the 08:30
+-- report job (login_ip_trade_profit_service.reconcile_trade_ip_pnl); the API
+-- reads only this table.
+--
+-- Key: (server, deal_ref) — MT5: the close deal ticket; MT4: ticketSid
+-- ('1-23106530'). NOT PositionID: an MT5 position is routinely closed in
+-- several deals across several days (9-18: 69,207 close deals vs 68,709
+-- positions), and each deal's P&L must land on its own row.
+--
+-- open_ip IS NULL means the no-IP bucket, with no_ip_cause saying why:
+--   pre_golive         — opened before the 2026-09-15 data start
+--   journal_incomplete — no parse run exists for the (open day, server)
+--   bridge_group       — account sits in a KCM*\\5LS_* bridge group, where the
+--                        journal's IP column is systematically empty (~14%)
+--   partial_remainder  — MT4 'from #N' remainder whose chain walk found no IP
+--   server_initiated   — residual: SL/TP activation, stop-out, dealer/API open
+CREATE TABLE IF NOT EXISTS trade_ip_pnl (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    server        TEXT    NOT NULL,   -- MT4 | MT5 | MT4_Live2
+    deal_ref      TEXT    NOT NULL,   -- MT5 Deal ticket | MT4 ticketSid
+    close_date    TEXT    NOT NULL,   -- YYYY-MM-DD (MT day of the close)
+    account_id    INTEGER NOT NULL,   -- bare MT login
+    position_ref  TEXT,               -- MT5 PositionID | MT4 ticket number
+    open_ip       TEXT,               -- NULL => no-IP bucket (see no_ip_cause)
+    close_ip      TEXT,               -- MT5 only; MT4 close lines carry no order event
+    user_id       INTEGER,            -- CRM user (fxbackoffice.mt4_users.userId)
+    ib_id         INTEGER,            -- direct IB (ib_tree level=1), NULL if none
+    symbol        TEXT,
+    lots          REAL,
+    profit_usd    REAL,               -- CEN accounts already divided by 100
+    hold_sec      INTEGER,
+    open_date     TEXT,               -- YYYY-MM-DD (MT day of the open)
+    reason        INTEGER,            -- MT5 open-deal Reason (0 client / 1 EA / 2 dealer / 16 mobile); NULL on MT4
+    no_ip_cause   TEXT,               -- set iff open_ip IS NULL
+    reconciled_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+    UNIQUE (server, deal_ref)         -- re-run of the same day overwrites
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_ip_pnl_close_date ON trade_ip_pnl(close_date);
+CREATE INDEX IF NOT EXISTS idx_trade_ip_pnl_open_ip ON trade_ip_pnl(open_ip);
+CREATE INDEX IF NOT EXISTS idx_trade_ip_pnl_user ON trade_ip_pnl(user_id);
+-- The grouping service looks member accounts up by (server, account_id) inside
+-- a close-date window; leading with the account keeps that off a full scan.
+CREATE INDEX IF NOT EXISTS idx_trade_ip_pnl_account ON trade_ip_pnl(server, account_id, close_date);
 """
 
 
@@ -257,4 +316,112 @@ def cleanup_old_parse_runs(days: int = DEFAULT_PARSE_RUN_RETENTION_DAYS) -> int:
 
     if deleted:
         logger.info("cleanup_old_parse_runs: removed %d rows older than %s", deleted, cutoff)
+    return deleted
+
+
+def get_parse_run_server_days() -> set[tuple[str, str]]:
+    """Every (trade_date, server_name) ever parsed. Small table (3 rows/day),
+    so a full read is fine — the reconcile uses it to tell "the journal for
+    that open day was never parsed" (journal_incomplete) apart from "parsed
+    but the order line carried no IP" (server_initiated).
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT trade_date, server_name FROM order_ip_parse_runs"
+        ).fetchall()
+    return {(r["trade_date"], r["server_name"]) for r in rows}
+
+
+def get_order_ips_by_refs(refs_by_server: dict[str, Iterable[int]]) -> dict[tuple[str, int], str]:
+    """Point-lookup ``{(server_name, order_ref): ip_address}`` for the given
+    order tickets. Chunked IN against the UNIQUE(server_name, order_ref) index
+    — the reconcile calls this with ~70k refs per server per day.
+    """
+    out: dict[tuple[str, int], str] = {}
+    with get_connection() as conn:
+        for server, refs in refs_by_server.items():
+            ref_list = sorted({int(r) for r in refs})
+            for start in range(0, len(ref_list), 1000):
+                chunk = ref_list[start : start + 1000]
+                placeholders = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT server_name, order_ref, ip_address FROM order_ip "
+                    f"WHERE server_name = ? AND order_ref IN ({placeholders})",
+                    (server, *chunk),
+                ).fetchall()
+                for r in rows:
+                    out[(r["server_name"], r["order_ref"])] = r["ip_address"]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# trade_ip_pnl CRUD (OPT-0063 Phase 2)
+# ---------------------------------------------------------------------------
+
+# Column order shared by upsert_trade_ip_pnl's INSERT and the row builders in
+# the service — keep the two in sync by construction (one tuple, one list).
+_TRADE_IP_PNL_COLUMNS = (
+    "server", "deal_ref", "close_date", "account_id", "position_ref",
+    "open_ip", "close_ip", "user_id", "ib_id", "symbol", "lots",
+    "profit_usd", "hold_sec", "open_date", "reason", "no_ip_cause",
+)
+
+
+def replace_trade_ip_pnl_for_date(close_date: str, records: Iterable[tuple]) -> int:
+    """Rewrite one MT day's reconciled rows. Returns the number written.
+
+    DELETE-then-INSERT inside one transaction (not bare INSERT OR REPLACE):
+    a re-run must also remove rows the new run no longer produces — e.g. a
+    trade whose row disappears after a filter fix — otherwise the stale row
+    survives forever and double-counts the day.
+    """
+    records = list(records)
+    with get_connection() as conn:
+        conn.execute("DELETE FROM trade_ip_pnl WHERE close_date = ?", (close_date,))
+        if records:
+            conn.executemany(
+                f"INSERT INTO trade_ip_pnl ({', '.join(_TRADE_IP_PNL_COLUMNS)}) "
+                f"VALUES ({', '.join('?' * len(_TRADE_IP_PNL_COLUMNS))})",
+                records,
+            )
+        conn.commit()
+    logger.info(
+        "trade_ip_pnl: %s rewritten with %d rows", close_date, len(records)
+    )
+    return len(records)
+
+
+def get_trade_ip_pnl_for_date(close_date: str) -> list[dict]:
+    """Every reconciled row for one close date (YYYY-MM-DD). Batch/test use."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trade_ip_pnl WHERE close_date = ? ORDER BY server, deal_ref",
+            (close_date,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_trade_ip_pnl_dates() -> set[str]:
+    """Distinct close_date values present — the coverage endpoint diffs this
+    against the calendar to list days the reconcile never ran."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT DISTINCT close_date FROM trade_ip_pnl").fetchall()
+    return {r["close_date"] for r in rows}
+
+
+def cleanup_old_trade_ip_pnl(days: int = DEFAULT_TRADE_IP_PNL_RETENTION_DAYS) -> int:
+    """Delete reconciled rows older than `days`. Returns count deleted."""
+    cutoff = (_dt.datetime.now() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM trade_ip_pnl WHERE close_date < ?", (cutoff,)
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+
+    if deleted:
+        logger.info(
+            "cleanup_old_trade_ip_pnl: removed %d rows older than %s", deleted, cutoff
+        )
     return deleted

@@ -247,6 +247,11 @@ MODULE_MAP: dict[tuple[str, ...], ModulePolicy] = {
     ("admin",): MANAGER,
     # ── cs ───────────────────────────────────────────────────────────────────
     ("login-ip",): "cs",
+    # OPT-0063: /login-ips is a cs page, but its trade-profit tab (mule-account
+    # clusters by order IP) is risk-only. The longer tuple wins over the prefix
+    # above, exactly like the ("ib-data", "query") carve-outs below. Being a
+    # risk route, it is deliberately NOT in data_scope.ROUTE_SCOPE.
+    ("login-ip", "trade-profit"): "risk",
     ("cs",): "cs",
     ("ibid-lots",): "cs",
     ("ib-tree",): "cs",

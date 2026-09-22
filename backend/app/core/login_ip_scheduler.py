@@ -316,6 +316,8 @@ def _daily_housekeeping() -> None:
          older than 120 days (OPT-0063; retention decided 2026-09-22).
       8. `cleanup_old_parse_runs`          — drop parse audit rows older
          than 400 days (aligned with the Phase 2 ranking window).
+      9. `cleanup_old_trade_ip_pnl`        — drop reconciled P&L rows older
+         than 400 days (OPT-0063 Phase 2; the rankings read this table).
     """
     from ..core import login_ip_db, login_ip_orders_db
 
@@ -328,10 +330,11 @@ def _daily_housekeeping() -> None:
         removed_geo_cache = login_ip_db.cleanup_old_ip_geo_cache()
         removed_order_ip = login_ip_orders_db.cleanup_old_order_ip()
         removed_parse_runs = login_ip_orders_db.cleanup_old_parse_runs()
+        removed_trade_pnl = login_ip_orders_db.cleanup_old_trade_ip_pnl()
         logger.info(
             "[housekeeping] history_removed=%d runs_removed=%d runs_reaped=%d "
             "trade_ips_removed=%d crm_push_log_removed=%d geo_cache_removed=%d "
-            "order_ip_removed=%d parse_runs_removed=%d",
+            "order_ip_removed=%d parse_runs_removed=%d trade_pnl_removed=%d",
             removed_history,
             removed_runs,
             reaped,
@@ -340,6 +343,7 @@ def _daily_housekeeping() -> None:
             removed_geo_cache,
             removed_order_ip,
             removed_parse_runs,
+            removed_trade_pnl,
         )
     except Exception:
         logger.exception("[housekeeping] failed (swallowed; non-fatal)")
@@ -355,6 +359,24 @@ def _report_job(target_date: str | None = None) -> dict[str, Any]:
 
     try:
         result = send_daily_report(target_date, dry_run=False)
+
+        # OPT-0063 Phase 2: reconcile yesterday's closed trades against the
+        # per-order open IPs the 05:10 job captured. Lives in the report job
+        # (not the download job) because it reads the MySQL SLAVE, not the
+        # raw logs — and it must run after order_ip for the day exists.
+        # Failure here must not poison the report's audit row: the email
+        # already went out, so the reconcile gets its own alert instead.
+        try:
+            from ..services import login_ip_trade_profit_service
+
+            result["trade_ip_pnl"] = login_ip_trade_profit_service.reconcile_trade_ip_pnl(
+                target_date
+            )
+        except Exception as exc:
+            logger.exception("[report_job] %s: trade-ip-pnl reconcile FAILED", target_date)
+            result["trade_ip_pnl"] = {"error": str(exc)}
+            _send_failure_alert("trade_ip_pnl_reconcile", target_date, str(exc))
+
         login_ip_db.record_run_finish(
             run_id, "success", summary_json=json.dumps(result, default=str)
         )

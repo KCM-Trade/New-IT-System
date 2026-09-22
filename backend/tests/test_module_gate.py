@@ -50,6 +50,7 @@ PROBE_PATHS = [
     "/ib-data/region-query",
     "/admin/users",
     "/login-ip/search",
+    "/login-ip/trade-profit/groups",
     "/ib-financial/query",
     "/risk/window-scan",
     "/risk-monitor/burst-open/alerts",
@@ -412,6 +413,39 @@ def test_carve_out_beats_its_own_prefix(client):
         "/api/v1/client-return-rate/query", headers=_bearer(sid)
     ).status_code == 200
     assert client.get("/api/v1/client-return-rate/cache", headers=_bearer(sid)).status_code == 403
+
+
+def test_login_ip_trade_profit_is_a_risk_carve_out_of_a_cs_prefix(client):
+    """OPT-0063: /login-ips is a cs page, but its trade-profit tab is risk-only.
+
+    ("login-ip", "trade-profit") is one segment longer than ("login-ip",), so
+    it wins for the four Phase-2 endpoints while the rest of the prefix stays
+    cs. Being a risk route, it is deliberately absent from
+    data_scope.ROUTE_SCOPE — pinned red in test_data_scope.py if added.
+    """
+    from app.core.auth_deps import classify_path
+
+    assert classify_path("/login-ip/trade-profit/groups") == "risk"
+    assert classify_path("/login-ip/trade-profit/groups/abc123def456") == "risk"
+    assert classify_path("/login-ip/trade-profit/ips") == "risk"
+    assert classify_path("/login-ip/trade-profit/coverage") == "risk"
+    assert classify_path("/login-ip/search") == "cs"
+
+    # cs-only: the page answers, the trade-profit tab does not. Asserted
+    # BEFORE the second mint — resolve_session reads the grant fresh per
+    # request, so re-minting STAFF would rewrite the first sid's grant too.
+    cs_only = _mint(STAFF, allowed_modules='["cs"]')
+    assert client.get("/api/v1/login-ip/search", headers=_bearer(cs_only)).status_code == 200
+    resp = client.get("/api/v1/login-ip/trade-profit/groups", headers=_bearer(cs_only))
+    assert resp.status_code == 403
+    assert "risk" in resp.json()["detail"]
+
+    risk_only = _mint(STAFF, allowed_modules='["risk"]')
+    assert client.get(
+        "/api/v1/login-ip/trade-profit/groups", headers=_bearer(risk_only)
+    ).status_code == 200
+    # …and the reverse direction holds too: risk alone does not open the page.
+    assert client.get("/api/v1/login-ip/search", headers=_bearer(risk_only)).status_code == 403
 
 
 # ── role and abstention ──────────────────────────────────────────────────────
