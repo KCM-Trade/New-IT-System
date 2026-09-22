@@ -11,6 +11,7 @@ related: [[OPT-0062]] [[OPT-0020]]
 ---
 
 > **v2（2026-09-22）**：独立冷审 15 条 finding（实测 9-18 工作日 journal + 从库）已全部吸收：MT5 开仓判定改为「全收 + 夜间按 `Order == PositionID` 判开/平」、补 MT5 挂单 `order placed`、量级修正 4 倍、P&L 改 08:30 预计算、结果表按 deal 建键、私有 IP 定义统一、回填改走 `backfill_login_ip.py`。冷审原文浓缩在 §冷审对照表。
+> **✅ Phase 1 已上线（2026-09-22）**：commit `fa3932b`（merge `c3f0168`），已部署 prod 并回填 09-15 → 09-21 共 **619,998 行**（MT4 53,450 / Live2 10,400 / MT5 556,148 = performed 500,152 + placed 55,996）；`order_ip_parse_runs` 21 行齐全；回填未推 CRM（`crm_last_close_ip_push_log` 当日 0 新增）。实施偏差见 §笔记「Phase 1 实施记录」。**Phase 2 worker 注意：`order_ip` 表已有真实数据可读。**
 > **本文件自洽，实施 worker 只读这一份即可。** 分析、口径验证与一个月回测都已做完（§背景），不要重做。
 > ⚠ 按 tracker 规则这是 net-new feature，本应走 `feat/` 分支；用户 2026-09-21 明确要求按 OPT 管理（同 OPT-0062 先例），照办。
 > ⚠ **Phase 1（落库）越早上线越好**：逐单 IP 只在 MT journal 里，本机 `backend/data/login_ip/tmp/` 只留 7 天、MT5 FTP 只留 5 天，**功能上线日 = 数据起点，历史补不回来**。Phase 1 可以先于 Phase 2/3 单独部署。
@@ -182,13 +183,13 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 ## 验收标准
 
-**Phase 1**
-- [ ] 05:10 job 跑完后 `order_ip` 有当日三台服务器的行；抽 1 个**工作日**：MT4 家族按 `ticketSid` 对 `mt4_trades`；MT5 先按 `mt5_orders_history` 判开/平，开仓单再对 `mt5_deals Entry=0` `(Login, PositionID)`，**开仓判定精确率 ≥ 99%**；召回缺口全部能在原始 log 里证明是「IP 列非 IPv4」或「挂单激活行」（同 §3.4.1 的复核方法，脚本可仿 `backend/scripts/verify_last_close_ip.py`）。
-- [ ] `order_ip_parse_runs` 有当日三行；人为截断一份 log 重跑，`coverage` 能列出该 (日期, 服务器)。
-- [ ] 用 `backfill_login_ip.py` 回填后 `crm_push_log` **没有**新增该日期的推送行。
-- [ ] 0 条 demo 前缀 / <5 位账号 / 空 IP 行。
-- [ ] `_daily_housekeeping` 表里多一行 `order_ip` 400 天；`docs/features/login-ip.md` 新增 §3.6 写清行格式、口径、保留期。
-- [ ] 重跑同一天不产生重复行（UNIQUE 生效）。
+**Phase 1**（✅ 2026-09-22 已上线；回填 7 天验证通过：619,998 行、parse_runs 21 行、CRM 推送日志 0 新增、重跑覆盖由单测保证。剩余两项靠时间验证：）
+- [ ] 05:10 job 跑完后 `order_ip` 有当日三台服务器的行（**2026-09-23 早上确认**）；抽 1 个**工作日**：MT4 家族按 `ticketSid` 对 `mt4_trades`；MT5 先按 `mt5_orders_history` 判开/平，开仓单再对 `mt5_deals Entry=0` `(Login, PositionID)`，**开仓判定精确率 ≥ 99%**；召回缺口全部能在原始 log 里证明是「IP 列非 IPv4」或「挂单激活行」（同 §3.4.1 的复核方法，脚本可仿 `backend/scripts/verify_last_close_ip.py`）。
+- [ ] `order_ip_parse_runs` 有当日三行；人为截断一份 log 重跑，`coverage` 能列出该 (日期, 服务器)（随 Phase 2 coverage 端点一起验）。
+- [x] 用 `backfill_login_ip.py` 回填后 CRM 推送日志**没有**新增该日期的推送行。
+- [x] 0 条 demo 前缀 / <5 位账号 / 空 IP 行（单测门槛集成用例）。
+- [x] `_daily_housekeeping` 加 sweep 7/8（order_ip 120 天、parse_runs 400 天）；`docs/features/login-ip.md` 新增 §3.6 写清行格式、口径、保留期。
+- [x] 重跑同一天不产生重复行（UNIQUE 生效，单测覆盖）。
 
 **Phase 2**
 - [ ] `GET /login-ip/trade-profit/groups` 90 天窗口 P95 < 2 s（只读 SQLite + union-find；缓存命中 < 200 ms）；08:30 对账步骤单日 < 30 s。
@@ -204,6 +205,19 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 - [ ] `./verify.sh` 绿（tsc / vitest / pytest）。
 
 ## 笔记
+
+### Phase 1 实施记录（2026-09-22，worker 如实上报的偏差）
+
+1. **MT5 存在 `order placed for execution [#N buy ... at market]`（实测 301 条/天，带客户真实 IP）**——市价单的服务端→LP 路由腿，不是客户下单行。placed 正则已收窄为「`placed ` 紧跟 `[#` + 仅 limit/stop 动词」把它排除；市价单本体已由 `performed` 收到，无数据损失。
+2. `_parse_one_log` 返回 **6 元组**（多带了 `lines_scanned: int` 供 `order_ip_parse_runs`）；`analyze_date` 签名不变（返回 dict 多 `order_ip_upserted`、每 server 多 `order_events`）。
+3. `order_ip_parse_runs` 保留期定为 **400 天**（item 未写；与 Phase 2 排名窗口对齐，coverage 才能区分「日志不完整」vs「早于上线日」；3 行/天体积可忽略）。
+4. `buy stop limit` 挂单（1 条/天）按 4 动词口径匹配不上，认损，已写进代码注释与 §3.6。
+5. 🔴 **回填必须在容器内跑**：宿主机直接跑 `backfill_login_ip.py` 会因 `backend/data/login_ip/` 日目录属主是 root（容器写入）而 PermissionError。正确姿势：
+   ```bash
+   docker exec -w /app new-it-backend-prod /opt/venv/bin/python scripts/backfill_login_ip.py --start YYYYMMDD --end YYYYMMDD --force
+   ```
+   注意 `--force` 会消耗掉 `tmp/` 里的 log（脚本原有行为）。
+6. 全量 pytest 1840 passed（13.5 分钟）；09-18 真实日志冒烟：MT5 performed 与「带 IPv4 且过 gate 的行数」逐行 diff 零漏抓。
 
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。
