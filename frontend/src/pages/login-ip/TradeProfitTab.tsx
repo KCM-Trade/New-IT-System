@@ -1,11 +1,11 @@
 /**
  * Tab 5 — Trade-IP Profit Attribution (交易 IP 盈亏), OPT-0063 Phase 3.
  *
- * Ranks ACCOUNT GROUPS (union-find components over shared private IPs), not
- * IPs: a crew rotating across 20 IPs is one group, while any single IP's
- * daily leaderboard is just luck. risk-only inside this cs page — the parent
- * (LoginIPs.tsx) renders this tab only for `hasModule(access, "risk")`, and
- * the backend gates `/login-ip/trade-profit/*` to the risk module anyway.
+ * Ranks ACCOUNT GROUPS. The fixed rule (no toolbar knobs): an IP used by
+ * >= 5 distinct CRM clients connects every account that used it; one client
+ * with several accounts does not count. risk-only inside this cs page — the
+ * parent (LoginIPs.tsx) renders this tab only for `hasModule(access, "risk")`,
+ * and the backend gates `/login-ip/trade-profit/*` to the risk module anyway.
  *
  * Data is static within a day (the 08:30 HKT reconcile produces yesterday's
  * close-day rows), so there is NO polling here — filters refetch, and a
@@ -36,7 +36,6 @@ import { useTheme } from "@/components/theme-provider";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -100,9 +99,8 @@ import {
   profitColorClass,
   shouldShowEmptyState,
   LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
-  MIN_CLIENTS_OPTIONS,
-  PUBLIC_IP_CLIENTS_OPTIONS,
   TRADE_PROFIT_FILTER_DEFAULTS,
+  TRADE_PROFIT_IP_MIN_CLIENTS,
   type TradeProfitCoverageResponse,
   type TradeProfitFilters,
   type TradeProfitGroupDetailResponse,
@@ -379,16 +377,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   const [rangePreset, setRangePreset] = useState<TradeProfitRangePreset>(
     persisted.rangePreset,
   );
-  const [minClients, setMinClients] = useState<number>(persisted.minClients);
-  const [excludeSharedExit, setExcludeSharedExit] = useState<boolean>(
-    persisted.excludeSharedExit,
-  );
-  const [publicIpClients, setPublicIpClients] = useState<number>(
-    persisted.publicIpClients,
-  );
-  const [includeSameClient, setIncludeSameClient] = useState<boolean>(
-    persisted.includeSameClient,
-  );
   // Investigation context — NOT persisted (grid-column-persist.md §13).
   const [customRange, setCustomRange] = useState<DateRange | undefined>();
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -396,7 +384,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   useFilterPersist(
     LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
     TRADE_PROFIT_FILTER_DEFAULTS,
-    { rangePreset, minClients, excludeSharedExit, publicIpClients, includeSameClient },
+    { rangePreset },
     // While "custom" is selected the persisted preset keeps its last real
     // value, so a reload restores e.g. 7d instead of an empty custom mode.
     { skipFields: rangePreset === "custom" ? ["rangePreset"] : [] },
@@ -444,13 +432,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   // hashes (window, thresholds, account list), so after a filter change the
   // open id would 404 by design. A manual refresh keeps the same signature
   // and leaves the panel open.
-  const paramsSignature = [
-    dateWindow.from,
-    dateWindow.to,
-    minClients,
-    excludeSharedExit ? publicIpClients : "off",
-    includeSameClient,
-  ].join("|");
+  const paramsSignature = [dateWindow.from, dateWindow.to].join("|");
   const prevSignatureRef = useRef(paramsSignature);
 
   useEffect(() => {
@@ -462,12 +444,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
         prevSignatureRef.current = paramsSignature;
         setExpandedGroupId(null);
       }
-      const params = buildTradeProfitParams(dateWindow, {
-        minClients,
-        excludeSharedExit,
-        publicIpClients,
-        includeSameClient,
-      });
+      const params = buildTradeProfitParams(dateWindow);
       const listParams = new URLSearchParams(params);
       listParams.set("page", "1");
       listParams.set("page_size", String(MAX_GROUPS));
@@ -515,10 +492,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
     return () => controller.abort();
   }, [
     dateWindow,
-    minClients,
-    excludeSharedExit,
-    publicIpClients,
-    includeSameClient,
     paramsSignature,
   ]);
 
@@ -542,12 +515,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
       // Same builder as the list call — group_id hashes the window and
       // thresholds, so the detail request must echo them verbatim or the id
       // resolves to nothing (404 by design, not a bug).
-      const params = buildTradeProfitParams(dateWindow, {
-        minClients,
-        excludeSharedExit,
-        publicIpClients,
-        includeSameClient,
-      });
+      const params = buildTradeProfitParams(dateWindow);
       try {
         const res = await apiFetch(
           `/api/v1/login-ip/trade-profit/groups/${expandedGroupId}?${params}`,
@@ -579,10 +547,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   }, [
     expandedGroupId,
     dateWindow,
-    minClients,
-    excludeSharedExit,
-    publicIpClients,
-    includeSameClient,
     t,
   ]);
 
@@ -662,7 +626,9 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
         width: 95,
         headerComponent: InfoHeader,
         headerComponentParams: {
-          tooltip: t("loginIpsPage.tradeProfit.colSharedIpsTip"),
+          tooltip: t("loginIpsPage.tradeProfit.colSharedIpsTip", {
+            count: TRADE_PROFIT_IP_MIN_CLIENTS,
+          }),
         },
       },
       {
@@ -877,77 +843,12 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               </Popover>
             )}
 
-            <Select
-              value={String(minClients)}
-              onValueChange={(v) => setMinClients(Number(v))}
-            >
-              <SelectTrigger
-                className={FILTER_CONTROL_CLASS}
-                aria-label={t("loginIpsPage.tradeProfit.minClients")}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MIN_CLIENTS_OPTIONS.map((n) => (
-                  <SelectItem key={n} value={String(n)}>
-                    {t("loginIpsPage.tradeProfit.thresholdClients", {
-                      count: n,
-                    })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <div className="flex h-9 items-center gap-2">
-              <Checkbox
-                id="tp-exclude-shared-exit"
-                checked={excludeSharedExit}
-                onCheckedChange={(v) => setExcludeSharedExit(v === true)}
-              />
-              <label
-                htmlFor="tp-exclude-shared-exit"
-                className="cursor-pointer select-none text-sm"
-              >
-                {t("loginIpsPage.tradeProfit.excludeSharedExit")}
-              </label>
-            </div>
-
-            <Select
-              value={String(publicIpClients)}
-              onValueChange={(v) => setPublicIpClients(Number(v))}
-              disabled={!excludeSharedExit}
-            >
-              <SelectTrigger
-                className={FILTER_CONTROL_CLASS}
-                aria-label={t("loginIpsPage.tradeProfit.sharedExitThreshold")}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PUBLIC_IP_CLIENTS_OPTIONS.map((n) => (
-                  <SelectItem key={n} value={String(n)}>
-                    {t("loginIpsPage.tradeProfit.sharedExitOption", {
-                      count: n,
-                    })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <div className="flex h-9 items-center gap-2">
-              <Checkbox
-                id="tp-include-same-client"
-                checked={includeSameClient}
-                onCheckedChange={(v) => setIncludeSameClient(v === true)}
-              />
-              <label
-                htmlFor="tp-include-same-client"
-                className="cursor-pointer select-none text-sm"
-              >
-                {t("loginIpsPage.tradeProfit.includeSameClient")}
-              </label>
-            </div>
           </div>
+          <p className="text-sm text-muted-foreground">
+            {t("loginIpsPage.tradeProfit.rule", {
+              count: TRADE_PROFIT_IP_MIN_CLIENTS,
+            })}
+          </p>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <ColumnVisibilityMenu
@@ -1019,7 +920,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("loginIpsPage.tradeProfit.emptyHint", {
-                  minClients,
+                  count: TRADE_PROFIT_IP_MIN_CLIENTS,
                   from: dateWindow.from,
                   to: dateWindow.to,
                 })}

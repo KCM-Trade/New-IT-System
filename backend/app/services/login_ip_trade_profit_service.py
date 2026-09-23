@@ -31,11 +31,18 @@ Attribution contract (SSOT: docs/optimization/items/OPT-0063-*.md):
   remainder never had a placement line, so the reconcile walks the chain back
   to the original ticket's IP (cap ``_MAX_CHAIN_DEPTH``).
 - Shared exits (carrier NAT / VPN): an IP with >= ``public_ip_clients``
-  distinct CRM clients in the window never connects accounts.
-- Edge rule (decided 2026-09-22): two accounts connect only when they share
-  >= 2 IP-days (same IP, same close day) OR >= 2 distinct private IPs in the
-  window. A single co-occurrence is too weak over a 90-day window — one home
-  broadband reassigned between tenants would merge unrelated households.
+  distinct CRM clients in the window never connects accounts. The page sends
+  1000 so this cap does not drop the IPs the fixed rule below is meant to keep.
+- Edge rule (decided 2026-09-22, legacy when ``ip_min_clients`` is 0): two
+  accounts connect only when they share >= 2 IP-days (same IP, same close day)
+  OR >= 2 distinct private IPs. A single co-occurrence is too weak over a
+  90-day window — one home broadband reassigned between tenants would merge
+  unrelated households.
+- Page rule (``ip_min_clients`` >= 2, the UI always sends 5): an IP used by
+  that many distinct CRM clients connects every account that used it, even on
+  one day. The legacy edges are skipped in this mode, so a chain of two-person
+  IPs cannot invent a group. One client with many accounts never reaches the
+  count (clients, not accounts).
 """
 
 from __future__ import annotations
@@ -545,6 +552,10 @@ class GroupParams(NamedTuple):
     min_clients: int = 2
     public_ip_clients: int = 10
     include_same_client: bool = False
+    # 0 keeps the legacy "2 IP-days / 2 IPs" edges. >= 2 switches the page
+    # rule on: only IPs with this many distinct CRM clients create edges,
+    # and one shared use of such an IP is enough.
+    ip_min_clients: int = 0
 
 
 class _UnionFind:
@@ -631,6 +642,13 @@ def compute_groups(p: GroupParams) -> list[dict]:
         public_ips = {
             ip for ip, clients in ip_clients.items() if len(clients) >= p.public_ip_clients
         }
+        # Page rule. These IPs are still subject to public_ips: the UI raises
+        # public_ip_clients to the cap so a 5-person IP is not dropped first.
+        qualifying_ips = {
+            ip
+            for ip, clients in ip_clients.items()
+            if p.ip_min_clients >= 2 and len(clients) >= p.ip_min_clients
+        }
         private_ips = [ip for ip in cand_ips if ip not in public_ips]
         if not private_ips:
             return []
@@ -672,10 +690,24 @@ def compute_groups(p: GroupParams) -> list[dict]:
 
         uf = _UnionFind()
         edge_bridge_ips: dict[frozenset, set[str]] = {}
+        # ip_min_clients >= 2 replaces the legacy edge: only a qualifying IP
+        # connects, and it connects every account that used it (one day, or
+        # even different days, is enough). Legacy edges stay for
+        # callers that do not pass the knob, so the older tests still hold.
+        strict_ip = p.ip_min_clients >= 2
         for a, b in set(pair_ipdays) | set(pair_ips):
-            if pair_ipdays.get((a, b), 0) >= 2 or len(pair_ips.get((a, b), ())) >= 2:
-                uf.union(a, b)
-                edge_bridge_ips[frozenset((a, b))] = set(pair_ips.get((a, b), ()))
+            shared = pair_ips.get((a, b), ())
+            if strict_ip:
+                via = shared & qualifying_ips
+                if not via:
+                    continue
+                bridge = set(via)
+            elif pair_ipdays.get((a, b), 0) >= 2 or len(shared) >= 2:
+                bridge = set(shared)
+            else:
+                continue
+            uf.union(a, b)
+            edge_bridge_ips[frozenset((a, b))] = bridge
 
         components: dict[str, list[str]] = defaultdict(list)
         for acc in list(uf._parent):
@@ -798,7 +830,7 @@ def compute_groups(p: GroupParams) -> list[dict]:
 
         id_material = (
             f"{p.date_from}|{p.date_to}|{p.min_clients}|{p.public_ip_clients}|"
-            f"{int(p.include_same_client)}|{','.join(accs)}"
+            f"{int(p.include_same_client)}|{p.ip_min_clients}|{','.join(accs)}"
         )
         group_id = hashlib.sha1(id_material.encode()).hexdigest()[:12]
 
@@ -1159,6 +1191,7 @@ def get_group_detail(group_id: str, p: GroupParams) -> Optional[dict]:
             "min_clients": p.min_clients,
             "public_ip_clients": p.public_ip_clients,
             "include_same_client": p.include_same_client,
+            "ip_min_clients": p.ip_min_clients,
         },
         "statistics": {"from_cache": from_cache},
     }

@@ -159,7 +159,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 `frontend/src/pages/login-ip/TradeProfitTab.tsx`（新），挂进 `LoginIPs.tsx`（`:36-60` 那组 Tabs），仅 `hasModule(access, "risk")` 渲染：
 
-1. **工具栏**（`useFilterPersist`，key `LOGIN_IP_TRADE_PROFIT_FILTERS_V1`，并手列进 `view-profiles/manifest.ts` 的 `FILTER_STATE_KEYS`）：窗口预设 7 / 30 / 90 天 + 自定义（自定义绝对区间不持久化）、最少客户数（默认 2）、排除共享出口（默认开，阈值 10）、含一人多户（默认关）。两个「≥ N 客户」下拉的**选项文案自带类目**（`≥ N 客户成组` / `共享出口 ≥ N 客户`），避免并排看成同一个筛选。
+1. **工具栏**（`useFilterPersist`，key `LOGIN_IP_TRADE_PROFIT_FILTERS_V1`，并手列进 `view-profiles/manifest.ts` 的 `FILTER_STATE_KEYS`）：只剩窗口预设 7 / 30 / 90 天 + 自定义（自定义绝对区间不持久化）。最少客户数 / 排除共享出口 / 含一人多户已删。固定规则：`ip_min_clients=5`（该 IP 用过即连边，一天就够）+ `min_clients=5` + `include_same_client=false` + `public_ip_clients=1000`（不把 5 人以上的 IP 先丢掉）。一人多户凑不满 5 个客户，不出现。
 2. **覆盖率横幅是 warn-only**：常态句「本窗口 N 单，M 单无 IP…」已删。横幅只在 `incomplete_logs` / `unreconciled_dates` 非空时出现。coverage 失败不让 tab 失败。
 3. **主表 AG-Grid（一组一行，9 列，盈亏降序）**：组盈亏（红绿）、客户数（一人多户 Badge）、IB 数、账户数、单数、手数、共用 IP、赚钱日/活跃日（`colId: "profitable_ratio"`；活跃日不单列）、主品种+占比（不足 100% 时追加 `· 其他 X%`，API 只给 dominant share）、平均持仓。~~按日盈亏 sparkline~~ 与 ~~单独的活跃日列~~ 已删。`useGridColumnPersist` key `LOGIN_IP_TRADE_PROFIT_GRID_STATE_V1` + `<ColumnVisibilityMenu>`；计算列显式 `colId`；列头解释用 `InfoHeader`；zebra 别用 `hsl(var(--primary))`。一次拉 `page_size=200`。
 4. **详情是右侧 shadcn Sheet**（不是 AG-Grid master/detail，也不是表下方 Card）：点行高亮，桌面从右侧滑入（宽 `min(640px, 92vw)`），手机从底部（`useIsMobile`）。里面**上下两张** shadcn Table：账户明细（CRM 链接），然后是该组用过的 IP（窗口客户数 / 活跃日 / 桥接 列头有 ⓘ；点 IP 跳 `?tab=search&q=<ip>`）。深链底座已落地（`?tab=` 受控，无权限回落 `report`；`LOGIN_IP_ACTIVE_TAB_V1` 在 `UI_STATE_KEYS`）。⚠ 详情请求必须回显列表页全部阈值参数（`group_id` 是参数哈希）。
@@ -234,7 +234,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 1. **交接样本「Cheng Qian 组排第一」不再成立**：该组在 item 原窗口（09-15→09-21 默认参数）数据仍精确吻合（`e4c578ff2792`，+$3,385.32 / 5 客户 / 7 账户 / 5 IP），但排名 **#7/89**——交接时的「排第一」是 09-22 回填进行中对部分数据的观察。且当前 7 天窗口已移到 09-16→09-22，该组不在其中（`group_id` 随窗口哈希，换窗口即换 id，预期行为）；验证时用自定义区间回到 09-15→09-21 即可复现。
 2. **前端测试环境是 node、无 jsdom/testing-library**——门控矩阵 / 深链解析 / 窗口计算全部抽成纯函数模块（`tabs.ts` / `trade-profit.ts`）再测（`lib/crm-tag-filter.ts` 同款模式）；组件本体无渲染测试，真机四状态用无头 Chrome CDP 截图补验。
-3. **空态真机验证参数**：7 天窗口 + `minClients=10` + 共享出口阈值 5 → `total=0`（两个都是工具栏 Select 里的现成选项）；`minClients=10` + 阈值 10 仍有 1 组，别用它验空态。
+3. **空态真机验证参数**（三个阈值控件删除前）：7 天窗口 + `minClients=10` + 共享出口阈值 5 → `total=0`。控件删除后空态只取决于窗口里有没有「≥5 个不同客户用过」的 IP，不再能从工具栏调阈值。
 4. `page_size` 后端上限 200（`le=200`），前端 `MAX_GROUPS=200` 一次拉满前端分页；写 500 会 422。
 5. eslint `react-hooks/exhaustive-deps` 对「故意多依赖」的写法会报警：`refreshToken` 让窗口 memo 在手动刷新时重算 `new Date()`，但 memo 体内不引用它——用 `void refreshToken;` 显式消费（注释说明），别加 eslint-disable。
 6. 覆盖率行里 coverage 端点失败**不**让 tab 失败（`setCoverage(null)`）——它是读者的上下文，不值得陪葬主表。
@@ -247,7 +247,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 1. 删「按日盈亏」迷你图和单独的「活跃日」列（11 → 9）。活跃日仍是「赚钱日/活跃日」的分母。
 2. 覆盖率横幅改为只在日志不完整 / 尚未对账时出现。
-3. 两个「≥ N 客户」下拉选项文案各自带上类目。
+3. ~~两个「≥ N 客户」下拉~~ 已连同「含一人多户」一起删掉，改成固定的「同一 IP ≥ 5 个不同客户」。
 4. 主品种占比不足 100% 时显示 `· 其他 X%`。分品种 histogram 要后端加字段，本次没做。
 5. 点行改为 **shadcn Sheet** 从右侧滑出（手机从底部），宽 640px。账户明细在上，使用过的 IP 在下。选中行保持蓝色高亮。
 6. 查询路径不变：只读本地 SQLite 预计算表 + Redis，不碰从库，无轮询。

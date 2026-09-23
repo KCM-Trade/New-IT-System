@@ -1,23 +1,22 @@
 /**
  * Logic tests for the trade-IP profit tab helpers (trade-profit.ts): the
  * HKT window math, the list/detail query-param echo (group_id is a hash of
- * the params, so both calls MUST be built by one builder), the shared-exit
- * toggle, and the display helpers. No DOM — pure functions only (project
- * test convention, same pattern as lib/crm-tag-filter.ts).
+ * the params, so both calls MUST be built by one builder), and the display
+ * helpers. No DOM — pure functions only (project convention, same pattern
+ * as lib/crm-tag-filter.ts).
  */
 import { describe, expect, it } from "vitest";
 import {
   buildTradeProfitParams,
   computeTradeProfitWindow,
-  effectivePublicIpClients,
   fmtHoldMin,
   fmtUsd,
   hkDayShift,
   LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
   profitColorClass,
-  PUBLIC_IP_CLIENTS_DISABLED,
   shouldShowEmptyState,
-  TRADE_PROFIT_FILTER_DEFAULTS,
+  TRADE_PROFIT_IP_MIN_CLIENTS,
+  TRADE_PROFIT_PUBLIC_IP_CLIENTS,
 } from "./trade-profit";
 
 // 2026-09-23 10:00 HKT = 2026-09-23 02:00 UTC.
@@ -88,49 +87,20 @@ describe("computeTradeProfitWindow", () => {
 describe("buildTradeProfitParams (list/detail echo)", () => {
   const window = { from: "2026-09-16", to: "2026-09-22" };
 
-  it("carries the full threshold set the group_id hash is computed from", () => {
-    const p = buildTradeProfitParams(window, {
-      minClients: 3,
-      excludeSharedExit: true,
-      publicIpClients: 20,
-      includeSameClient: true,
-    });
+  it("sends the fixed 5-client rule, not the removed toolbar knobs", () => {
+    const p = buildTradeProfitParams(window);
     expect(p.get("from")).toBe("2026-09-16");
     expect(p.get("to")).toBe("2026-09-22");
-    expect(p.get("min_clients")).toBe("3");
-    expect(p.get("public_ip_clients")).toBe("20");
-    expect(p.get("include_same_client")).toBe("true");
+    expect(p.get("min_clients")).toBe(String(TRADE_PROFIT_IP_MIN_CLIENTS));
+    expect(p.get("ip_min_clients")).toBe(String(TRADE_PROFIT_IP_MIN_CLIENTS));
+    expect(p.get("public_ip_clients")).toBe(String(TRADE_PROFIT_PUBLIC_IP_CLIENTS));
+    expect(p.get("include_same_client")).toBe("false");
   });
 
   it("produces byte-identical strings for identical inputs (the echo contract)", () => {
-    const filters = { ...TRADE_PROFIT_FILTER_DEFAULTS };
-    expect(buildTradeProfitParams(window, filters).toString()).toBe(
-      buildTradeProfitParams(window, filters).toString(),
+    expect(buildTradeProfitParams(window).toString()).toBe(
+      buildTradeProfitParams(window).toString(),
     );
-  });
-
-  it("shared-exit OFF sends the backend cap (1000), not the picker value", () => {
-    const p = buildTradeProfitParams(window, {
-      minClients: 2,
-      excludeSharedExit: false,
-      publicIpClients: 10,
-      includeSameClient: false,
-    });
-    expect(p.get("public_ip_clients")).toBe(String(PUBLIC_IP_CLIENTS_DISABLED));
-  });
-});
-
-describe("effectivePublicIpClients", () => {
-  it("passes the threshold through when the toggle is on", () => {
-    expect(
-      effectivePublicIpClients({ excludeSharedExit: true, publicIpClients: 5 }),
-    ).toBe(5);
-  });
-
-  it("returns the disable sentinel when the toggle is off", () => {
-    expect(
-      effectivePublicIpClients({ excludeSharedExit: false, publicIpClients: 5 }),
-    ).toBe(1000);
   });
 });
 

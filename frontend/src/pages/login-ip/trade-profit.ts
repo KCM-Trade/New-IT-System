@@ -120,10 +120,6 @@ export type TradeProfitRangePreset = "7d" | "30d" | "90d" | "custom";
 
 export interface TradeProfitFilters extends Record<string, unknown> {
   rangePreset: TradeProfitRangePreset;
-  minClients: number;
-  excludeSharedExit: boolean;
-  publicIpClients: number;
-  includeSameClient: boolean;
 }
 
 export const LOGIN_IP_TRADE_PROFIT_FILTERS_KEY =
@@ -131,27 +127,20 @@ export const LOGIN_IP_TRADE_PROFIT_FILTERS_KEY =
 
 export const TRADE_PROFIT_FILTER_DEFAULTS: TradeProfitFilters = {
   rangePreset: "7d",
-  minClients: 2,
-  excludeSharedExit: true,
-  publicIpClients: 10,
-  includeSameClient: false,
 };
 
-export const MIN_CLIENTS_OPTIONS = [2, 3, 5, 10] as const;
-export const PUBLIC_IP_CLIENTS_OPTIONS = [5, 10, 20, 50] as const;
+/**
+ * Fixed grouping rule for this tab (the three threshold controls were
+ * removed). An IP used by this many distinct CRM clients forms a group;
+ * one person with several accounts does not count toward the number.
+ */
+export const TRADE_PROFIT_IP_MIN_CLIENTS = 5;
 
 /**
- * Sent when the shared-exit toggle is OFF: the backend caps
- * public_ip_clients at 1000, and no IP in a window has anywhere near 1000
- * distinct clients, so 1000 effectively disables shared-exit exclusion.
+ * Backend cap. Sent so a busy IP is not dropped as a "shared exit" before
+ * the 5-client rule can see it. No window IP has anywhere near 1000 clients.
  */
-export const PUBLIC_IP_CLIENTS_DISABLED = 1000;
-
-export function effectivePublicIpClients(
-  f: Pick<TradeProfitFilters, "excludeSharedExit" | "publicIpClients">,
-): number {
-  return f.excludeSharedExit ? f.publicIpClients : PUBLIC_IP_CLIENTS_DISABLED;
-}
+export const TRADE_PROFIT_PUBLIC_IP_CLIENTS = 1000;
 
 // ── Window ───────────────────────────────────────────────────────────────
 
@@ -210,20 +199,22 @@ export function computeTradeProfitWindow(
  * hash of (window, thresholds, account list), so the detail request MUST
  * echo the exact set the list was produced under — one builder for both
  * keeps that echo structural instead of remembered.
+ *
+ * The three toolbar knobs are gone. Every call sends the fixed rule:
+ * ip_min_clients = 5 (that IP connects its accounts), min_clients = 5,
+ * include_same_client = false, and public_ip_clients at the cap so those
+ * IPs are not excluded first.
  */
 export function buildTradeProfitParams(
   window: TradeProfitWindow,
-  filters: Pick<
-    TradeProfitFilters,
-    "minClients" | "excludeSharedExit" | "publicIpClients" | "includeSameClient"
-  >,
 ): URLSearchParams {
   return new URLSearchParams({
     from: window.from,
     to: window.to,
-    min_clients: String(filters.minClients),
-    public_ip_clients: String(effectivePublicIpClients(filters)),
-    include_same_client: String(filters.includeSameClient),
+    min_clients: String(TRADE_PROFIT_IP_MIN_CLIENTS),
+    public_ip_clients: String(TRADE_PROFIT_PUBLIC_IP_CLIENTS),
+    include_same_client: "false",
+    ip_min_clients: String(TRADE_PROFIT_IP_MIN_CLIENTS),
   });
 }
 

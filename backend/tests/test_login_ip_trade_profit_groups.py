@@ -205,6 +205,83 @@ def test_min_clients_filter(db):
     assert len(svc.compute_groups(_params(min_clients=2))) == 1
 
 
+def _five_clients_one_day(ip="1.1.1.1", n=5, user_base=101, account_base=1001):
+    """n distinct clients, one IP, one close day — a single co-occurrence."""
+    return [
+        _pnl("MT5", account_base + i, ip, "2026-09-15", user_id=user_base + i,
+             deal_ref=f"{ip}-{i}")
+        for i in range(n)
+    ]
+
+
+def test_five_clients_on_one_ip_one_day_connects_under_page_rule(db):
+    """The page rule: one IP used by >= 5 distinct clients is a group even
+    when they only shared it on a single day. public_ip_clients stays at the
+    cap so the IP is not dropped as a shared exit first."""
+    db.replace_trade_ip_pnl_for_date("2026-09-15", _five_clients_one_day())
+    # Legacy edges ignore a single co-occurrence.
+    assert svc.compute_groups(_params()) == []
+    groups = svc.compute_groups(_params(
+        min_clients=5, public_ip_clients=1000, ip_min_clients=5,
+    ))
+    assert len(groups) == 1
+    assert groups[0]["clients"] == 5
+    assert groups[0]["accounts"] == 5
+    assert groups[0]["same_client"] is False
+    assert groups[0]["member_ips"][0]["bridge"] is True
+
+
+def test_four_clients_on_one_ip_does_not_qualify(db):
+    db.replace_trade_ip_pnl_for_date("2026-09-15", _five_clients_one_day(n=4))
+    assert svc.compute_groups(_params(
+        min_clients=2, public_ip_clients=1000, ip_min_clients=5,
+    )) == []
+
+
+def test_one_client_many_accounts_stays_hidden_under_page_rule(db):
+    """Five accounts of one CRM client are not five people."""
+    rows = [
+        _pnl("MT5", 1001 + i, "1.1.1.1", "2026-09-15", user_id=101,
+             deal_ref=f"s{i}")
+        for i in range(5)
+    ]
+    db.replace_trade_ip_pnl_for_date("2026-09-15", rows)
+    assert svc.compute_groups(_params(
+        public_ip_clients=1000, ip_min_clients=5, include_same_client=True,
+    )) == []
+
+
+def test_page_rule_ignores_legacy_two_person_edges(db):
+    """Two clients sharing an IP on two days still form a group under the
+    legacy rule, but not when ip_min_clients=5 — that IP never had 5 people."""
+    db.replace_trade_ip_pnl_for_date("2026-09-15", [
+        _pnl("MT5", 1001, "1.1.1.1", "2026-09-15", user_id=101),
+        _pnl("MT5", 1002, "1.1.1.1", "2026-09-15", user_id=102, deal_ref="a"),
+    ])
+    db.replace_trade_ip_pnl_for_date("2026-09-16", [
+        _pnl("MT5", 1001, "1.1.1.1", "2026-09-16", user_id=101, deal_ref="b"),
+        _pnl("MT5", 1002, "1.1.1.1", "2026-09-16", user_id=102, deal_ref="c"),
+    ])
+    assert len(svc.compute_groups(_params())) == 1
+    assert svc.compute_groups(_params(
+        public_ip_clients=1000, ip_min_clients=5,
+    )) == []
+
+
+def test_busy_ip_is_kept_when_public_cap_is_raised(db):
+    """15 clients on one IP, one day. Default public_ip_clients=10 drops it;
+    the page sends 1000 so it counts."""
+    db.replace_trade_ip_pnl_for_date(
+        "2026-09-15", _five_clients_one_day(n=15),
+    )
+    assert svc.compute_groups(_params(ip_min_clients=5, public_ip_clients=10)) == []
+    groups = svc.compute_groups(_params(
+        min_clients=5, public_ip_clients=1000, ip_min_clients=5,
+    ))
+    assert len(groups) == 1
+    assert groups[0]["clients"] == 15
+
+
 # ---------------------------------------------------------------------------
 # group_id + detail
 # ---------------------------------------------------------------------------

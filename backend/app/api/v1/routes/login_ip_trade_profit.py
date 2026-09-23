@@ -78,6 +78,8 @@ def list_trade_profit_groups(
     min_clients: int = Query(default=2, ge=1, le=100),
     public_ip_clients: int = Query(default=10, ge=2, le=1000),
     include_same_client: bool = Query(default=False),
+    # 0 = legacy edges. >= 2 = only IPs with this many distinct clients connect.
+    ip_min_clients: int = Query(default=0, ge=0, le=100),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ):
@@ -90,6 +92,7 @@ def list_trade_profit_groups(
         min_clients=min_clients,
         public_ip_clients=public_ip_clients,
         include_same_client=include_same_client,
+        ip_min_clients=ip_min_clients,
     )
     groups, from_cache = svc.get_groups(params)
     total = len(groups)
@@ -120,6 +123,7 @@ def get_trade_profit_group(
     min_clients: int = Query(default=2, ge=1, le=100),
     public_ip_clients: int = Query(default=10, ge=2, le=1000),
     include_same_client: bool = Query(default=False),
+    ip_min_clients: int = Query(default=0, ge=0, le=100),
 ):
     """One group: account detail + member IPs (geo, window clients, bridge).
 
@@ -134,6 +138,7 @@ def get_trade_profit_group(
         min_clients=min_clients,
         public_ip_clients=public_ip_clients,
         include_same_client=include_same_client,
+        ip_min_clients=ip_min_clients,
     )
     detail = svc.get_group_detail(group_id, params)
     if detail is None:
