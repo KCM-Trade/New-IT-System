@@ -13,6 +13,7 @@ related: [[OPT-0062]] [[OPT-0020]]
 > **v2（2026-09-22）**：独立冷审 15 条 finding（实测 9-18 工作日 journal + 从库）已全部吸收：MT5 开仓判定改为「全收 + 夜间按 `Order == PositionID` 判开/平」、补 MT5 挂单 `order placed`、量级修正 4 倍、P&L 改 08:30 预计算、结果表按 deal 建键、私有 IP 定义统一、回填改走 `backfill_login_ip.py`。冷审原文浓缩在 §冷审对照表。
 > **✅ Phase 1 已上线（2026-09-22）**：commit `fa3932b`（merge `c3f0168`），已部署 prod 并回填 09-15 → 09-21 共 **619,998 行**（MT4 53,450 / Live2 10,400 / MT5 556,148 = performed 500,152 + placed 55,996）；`order_ip_parse_runs` 21 行齐全；回填未推 CRM（`crm_last_close_ip_push_log` 当日 0 新增）。实施偏差见 §笔记「Phase 1 实施记录」。**Phase 2 worker 注意：`order_ip` 表已有真实数据可读。**
 > **✅ Phase 2 已上线（2026-09-22）**：commit `28a5f39`，已部署 prod 并回填 09-15 → 09-21 对账共 **306,231 行**（with-IP 95.5%）；4 个端点 `/login-ip/trade-profit/{groups,groups/{id},ips,coverage}` 挂 risk 模块；**Cheng Qian 5 客户组在真实下单 IP 数据上精确复现**（group `e4c578ff2792`，7 账户 5 IP，周盈利 $3,385）。实施偏差见 §笔记「Phase 2 实施记录」。
+> **🚧 Phase 3 已实现未部署（2026-09-23）**：commit `70f5ca5`（branch `opt/trade-ip-profit-attribution`），第 5 个 tab + 深链底座（受控 `?tab=` / SearchTab `?q=` 预填）完成，`./verify.sh` 全绿，dev 容器真实数据四状态实测通过。实施偏差见 §笔记「Phase 3 实施记录」。
 > **本文件自洽，实施 worker 只读这一份即可。** 分析、口径验证与一个月回测都已做完（§背景），不要重做。
 > ⚠ 按 tracker 规则这是 net-new feature，本应走 `feat/` 分支；用户 2026-09-21 明确要求按 OPT 管理（同 OPT-0062 先例），照办。
 > ⚠ **Phase 1（落库）越早上线越好**：逐单 IP 只在 MT journal 里，本机 `backend/data/login_ip/tmp/` 只留 7 天、MT5 FTP 只留 5 天，**功能上线日 = 数据起点，历史补不回来**。Phase 1 可以先于 Phase 2/3 单独部署。
@@ -199,11 +200,11 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 - [x] cs-only 用户调该接口 403（不是 401）；`AUTH_ENABLED=false` 时恒过；`test_app_assembly` 两条 anti-drift 绿；`test_data_scope` 全绿且 ROUTE_SCOPE 未改。——另有真机实测：cs-only 用户（anson.zou）调 `/groups` 返 403。
 - [x] 无 IP 桶在 coverage 里可见，且 groups 的合计 + 无 IP 桶 = 窗口内全部已平仓单。——口径修正：守恒式需要中间项「有 IP 但未成组的 solo 单」，`statistics.window_with_ip_trades` 与 `groups_trades` 就是为此暴露的（292,390 = 62,821 成组 + 229,569 solo；306,231 = 292,390 + 13,841 无 IP）。
 
-**Phase 3**
-- [ ] 6 位 cs-only 用户看不到 tab，risk 用户与 manager 看得到；`?tab=` 深链无权限时回落 tab 1。
-- [ ] 过滤器与列状态刷新后保留；`manifest.ts` anti-drift 测试绿。
-- [ ] 点 IP 能跳到 Search tab 并出结果。
-- [ ] `./verify.sh` 绿（tsc / vitest / pytest）。
+**Phase 3**（🚧 2026-09-23 实现，待部署后真机复验）
+- [x] 6 位 cs-only 用户看不到 tab，risk 用户与 manager 看得到；`?tab=` 深链无权限时回落 tab 1。——门控矩阵/回落由 `tabs.test.ts` 纯函数测试钉住 + risk 用户真机截图实测；⚠ cs-only 真机未测（dev 无 cs-only 账号，未为此动 users.db），部署后抽一位复核。
+- [x] 过滤器与列状态刷新后保留；`manifest.ts` anti-drift 测试绿。——持久化读取路径真机实测（localStorage 预置 `minClients=10`+阈值 5 → 工具栏正确回显）；写入路径走 `useFilterPersist`/`useGridColumnPersist` 标准 hook；view-profiles 测试全绿。
+- [x] 点 IP 能跳到 Search tab 并出结果。——真机实测 `?tab=search&q=175.5.121.184`：IP 模式 + 120 天预填、自动搜索出 3 行。
+- [x] `./verify.sh` 绿（tsc / vitest / pytest）。——pytest 1878 / vitest 284（24 文件）/ tsc 0 error；改动文件 eslint 0 error 0 warning。
 
 ## 笔记
 
@@ -228,6 +229,17 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 4. 本窗口真实数据 `partial_remainder` / `journal_incomplete` 两桶为空（MT4 `from #` 链全部走通、parse_runs 全齐）——桶与分类逻辑存在且有单测，只是首周无样本。
 5. 回填走 `docker exec new-it-backend-dev`（root）而不是宿主机——`login_ip_orders.db` 主文件属 root（容器创建），宿主机无免密 sudo；同 Phase 1 第 5 条那类坑。prod api 容器同为 root，部署后每日 08:30 自动对账无此问题。
 6. 全量 pytest **1878 passed**（13.7 分钟，含两条 app-assembly anti-drift 与 log-volume 护栏）；新增 39 个用例（db 7 / reconcile 13 / grouping 12 / api 6 / module-gate carve-out 1）。
+
+### Phase 3 实施记录（2026-09-23，worker 如实上报的偏差）
+
+1. **交接样本「Cheng Qian 组排第一」不再成立**：该组在 item 原窗口（09-15→09-21 默认参数）数据仍精确吻合（`e4c578ff2792`，+$3,385.32 / 5 客户 / 7 账户 / 5 IP），但排名 **#7/89**——交接时的「排第一」是 09-22 回填进行中对部分数据的观察。且当前 7 天窗口已移到 09-16→09-22，该组不在其中（`group_id` 随窗口哈希，换窗口即换 id，预期行为）；验证时用自定义区间回到 09-15→09-21 即可复现。
+2. **前端测试环境是 node、无 jsdom/testing-library**——门控矩阵 / 深链解析 / 窗口计算全部抽成纯函数模块（`tabs.ts` / `trade-profit.ts`）再测（`lib/crm-tag-filter.ts` 同款模式）；组件本体无渲染测试，真机四状态用无头 Chrome CDP 截图补验。
+3. **空态真机验证参数**：7 天窗口 + `minClients=10` + 共享出口阈值 5 → `total=0`（两个都是工具栏 Select 里的现成选项）；`minClients=10` + 阈值 10 仍有 1 组，别用它验空态。
+4. `page_size` 后端上限 200（`le=200`），前端 `MAX_GROUPS=200` 一次拉满前端分页；写 500 会 422。
+5. eslint `react-hooks/exhaustive-deps` 对「故意多依赖」的写法会报警：`refreshToken` 让窗口 memo 在手动刷新时重算 `new Date()`，但 memo 体内不引用它——用 `void refreshToken;` 显式消费（注释说明），别加 eslint-disable。
+6. 覆盖率行里 coverage 端点失败**不**让 tab 失败（`setCoverage(null)`）——它是读者的上下文，不值得陪葬主表。
+7. dev 联调认证：`AUTH_DEV_LOGIN_EMAIL` 已在 dev 容器配好，`POST /api/v1/auth/dev-login` 拿 session cookie 即可 curl 4 个端点（API key 单独不够，dev 的 `AUTH_ENABLED=true`）；无头 Chrome 截图走 CDP `Network.setCookie`（cookie 按 domain 不按 port，`:5173` 的 vite proxy 会转发）。
+8. 全量 `./verify.sh` 绿：pytest 1878 / vitest 284（新增 `tabs.test.ts` 10 + `trade-profit.test.ts` 18；locales 双语比对随 `locales.test.ts` 自动覆盖新 key）/ tsc 0 error。
 
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。
