@@ -114,7 +114,22 @@ function formatApiDetail(detail: unknown): string {
 // wide multi-term searches, not backend CPU.
 const DAYS_OPTIONS = [1, 3, 7, 14, 30, 60, 90, 120];
 
-export function SearchTab() {
+export interface SearchTabProps {
+  /**
+   * Pre-filled IP from a deep link (`?tab=search&q=<ip>`) — the trade-profit
+   * tab's "investigate this IP" drill-down (OPT-0063 Phase 3). Consumed once
+   * per mount: the search runs, then `onInitialQueryConsumed` drops the
+   * param from the URL so later remounts restore the session cache instead.
+   */
+  initialQuery?: string | null;
+  /** Called once the pre-fill search has settled (never on abort/unmount). */
+  onInitialQueryConsumed?: () => void;
+}
+
+export function SearchTab({
+  initialQuery = null,
+  onInitialQueryConsumed,
+}: SearchTabProps) {
   const { t } = useI18n();
   // The export-polling effect below keys off exportTaskId only — adding `t` to
   // its deps would tear down and restart an in-flight poll (aborting its
@@ -147,66 +162,104 @@ export function SearchTab() {
   const gridRef = useRef<AgGridReact<SearchResultRow>>(null);
 
   // ── Search ───────────────────────────────────────────────
-  const handleSearch = useCallback(async () => {
-    const terms = parseTerms(termsText);
-    if (terms.length === 0) {
-      toast.error(t("loginIpsPage.search.needKeyword"));
-      return;
-    }
-    setLoading(true);
-    setStatusMsg("");
-    setRows([]);
-    try {
-      const body = { search_type: searchType, terms, days };
-      const res = await apiFetch("/api/v1/login-ip/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err: { detail?: unknown } = await res.json().catch(() => ({}));
-        throw new Error(
-          formatApiDetail(err.detail) || `HTTP ${res.status}`,
-        );
+  // Explicit-args core so both the button (current state) and the deep-link
+  // pre-fill (its own values) run the identical request path.
+  const runSearch = useCallback(
+    async (
+      type: SearchType,
+      rawTerms: string,
+      daysN: number,
+      signal?: AbortSignal,
+    ) => {
+      const terms = parseTerms(rawTerms);
+      if (terms.length === 0) {
+        toast.error(t("loginIpsPage.search.needKeyword"));
+        return;
       }
-      const data: SearchResponse = await res.json();
-      // Compute next grid + status, persist so returning to this tab restores them.
-      let nextRows: SearchResultRow[] = [];
-      let nextStatus = "";
-      if (data.error) {
-        nextStatus = data.error;
-        setStatusMsg(data.error);
-        toast.error(data.error);
-      } else if (data.not_found) {
-        nextStatus = data.not_found;
-        setStatusMsg(data.not_found);
-      } else if (data.results) {
-        nextRows = data.results;
-        setRows(data.results);
-        if (data.results.length === 0) {
-          nextStatus = t("loginIpsPage.search.noMatch");
-          setStatusMsg(nextStatus);
-        } else {
-          setStatusMsg("");
+      setLoading(true);
+      setStatusMsg("");
+      setRows([]);
+      try {
+        const body = { search_type: type, terms, days: daysN };
+        const res = await apiFetch("/api/v1/login-ip/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal,
+        });
+        if (!res.ok) {
+          const err: { detail?: unknown } = await res.json().catch(() => ({}));
+          throw new Error(
+            formatApiDetail(err.detail) || `HTTP ${res.status}`,
+          );
         }
+        const data: SearchResponse = await res.json();
+        // Compute next grid + status, persist so returning to this tab restores them.
+        let nextRows: SearchResultRow[] = [];
+        let nextStatus = "";
+        if (data.error) {
+          nextStatus = data.error;
+          setStatusMsg(data.error);
+          toast.error(data.error);
+        } else if (data.not_found) {
+          nextStatus = data.not_found;
+          setStatusMsg(data.not_found);
+        } else if (data.results) {
+          nextRows = data.results;
+          setRows(data.results);
+          if (data.results.length === 0) {
+            nextStatus = t("loginIpsPage.search.noMatch");
+            setStatusMsg(nextStatus);
+          } else {
+            setStatusMsg("");
+          }
+        }
+        saveLoginIpSearchCache({
+          searchType: type,
+          termsText: rawTerms,
+          days: daysN,
+          rows: nextRows,
+          statusMsg: nextStatus,
+        });
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        toast.error(
+          t("loginIpsPage.search.failed", {
+            message: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      } finally {
+        // Aborted mid-flight means a newer effect run owns the spinner.
+        if (!signal?.aborted) setLoading(false);
       }
-      saveLoginIpSearchCache({
-        searchType,
-        termsText,
-        days,
-        rows: nextRows,
-        statusMsg: nextStatus,
-      });
-    } catch (e) {
-      toast.error(
-        t("loginIpsPage.search.failed", {
-          message: e instanceof Error ? e.message : String(e),
-        }),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [searchType, termsText, days, t]);
+    },
+    [t],
+  );
+
+  const handleSearch = useCallback(
+    () => runSearch(searchType, termsText, days),
+    [runSearch, searchType, termsText, days],
+  );
+
+  // Deep-link pre-fill (`?tab=search&q=<ip>`, OPT-0063 Phase 3): run the IP
+  // search once, then let the parent drop `q` from the URL. The window is
+  // forced to the 120-day maximum — the drill-down's job is "find this IP",
+  // and the trade-profit window that surfaced it can be wider than whatever
+  // `days` the user last picked here.
+  useEffect(() => {
+    const q = initialQuery?.trim();
+    if (!q) return;
+    const controller = new AbortController();
+    setSearchType("ip_address");
+    setTermsText(q);
+    setDays(120);
+    void runSearch("ip_address", q, 120, controller.signal).finally(() => {
+      // Aborted (StrictMode remount / unmount) → the param stays, and the
+      // next effect run / mount retries the search instead of losing it.
+      if (!controller.signal.aborted) onInitialQueryConsumed?.();
+    });
+    return () => controller.abort();
+  }, [initialQuery, onInitialQueryConsumed, runSearch]);
 
   // ── Async CSV export ─────────────────────────────────────
   const parseFilename = (disp: string | null, fallback: string) => {

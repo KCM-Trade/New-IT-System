@@ -46,6 +46,10 @@ export const FILTER_STATE_KEYS: readonly string[] = [
   // target ID and the absolute date range stay in React state (investigation
   // context) and never reach localStorage.
   "IBID_LOTS_FILTERS_V1",
+  // Login IPs · trade-profit tab (OPT-0063 Phase 3): window preset / min
+  // clients / shared-exit toggle+threshold / same-client toggle. The custom
+  // absolute range is investigation context and is never persisted.
+  "LOGIN_IP_TRADE_PROFIT_FILTERS_V1",
 ];
 
 /**
@@ -59,6 +63,8 @@ export const UI_STATE_KEYS: readonly string[] = [
   "RISK_MONITOR_ACTIVE_TAB_V1",
   // Trade Window Scan: which basis tab (entry / close) the page opens on.
   "WINDOW_SCAN_ACTIVE_TAB_V1",
+  // Login IPs: which of the (now URL-controlled) tabs the page opens on.
+  "LOGIN_IP_ACTIVE_TAB_V1",
 ];
 
 /**

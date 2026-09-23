@@ -55,6 +55,8 @@ export const GRID_STORAGE_KEYS = {
   WINDOW_SCAN: "WINDOW_SCAN_GRID_STATE_V1",
   // /ibid-lots · client breakdown of the For-Tobe-Global lots query.
   IBID_LOTS_USERS: "IBID_LOTS_USERS_GRID_STATE_V1",
+  // /login-ips · trade-IP profit attribution tab (OPT-0063 Phase 3).
+  LOGIN_IP_TRADE_PROFIT: "LOGIN_IP_TRADE_PROFIT_GRID_STATE_V1",
 } as const;
 
 export type GridStorageKey =

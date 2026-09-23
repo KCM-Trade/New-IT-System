@@ -1,0 +1,1139 @@
+/**
+ * Tab 5 — Trade-IP Profit Attribution (交易 IP 盈亏), OPT-0063 Phase 3.
+ *
+ * Ranks ACCOUNT GROUPS (union-find components over shared private IPs), not
+ * IPs: a crew rotating across 20 IPs is one group, while any single IP's
+ * daily leaderboard is just luck. risk-only inside this cs page — the parent
+ * (LoginIPs.tsx) renders this tab only for `hasModule(access, "risk")`, and
+ * the backend gates `/login-ip/trade-profit/*` to the risk module anyway.
+ *
+ * Data is static within a day (the 08:30 HKT reconcile produces yesterday's
+ * close-day rows), so there is NO polling here — filters refetch, and a
+ * manual Refresh button covers "the reconcile just ran".
+ *
+ * Drill-down: clicking an IP in the detail card hops to the Search tab with
+ * that IP pre-filled (`?tab=search&q=<ip>`, handled by the parent).
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { apiFetch } from "@/lib/fetch";
+import { AgGridReact } from "ag-grid-react";
+import type { ColDef, ICellRendererParams } from "ag-grid-community";
+import { useI18n } from "@/components/i18n-provider";
+import { useTheme } from "@/components/theme-provider";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  IconInfoCircle,
+  IconRefresh,
+  IconX,
+} from "@tabler/icons-react";
+import { Calendar as CalendarIcon } from "lucide-react";
+import type { DateRange } from "react-day-picker";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+import { crmAccountUrl, crmUserUrl } from "@/lib/crm-links";
+import { ColumnVisibilityMenu } from "@/components/ColumnVisibilityMenu";
+import { InfoHeader } from "@/components/ui/info-header";
+import {
+  GRID_STORAGE_KEYS,
+  useGridColumnPersist,
+} from "@/hooks/useGridColumnPersist";
+import { useFilterPersist, readFilterState } from "@/hooks/useFilterPersist";
+import {
+  buildTradeProfitParams,
+  computeTradeProfitWindow,
+  fmtHoldMin,
+  fmtUsd,
+  profitColorClass,
+  shouldShowEmptyState,
+  LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
+  MIN_CLIENTS_OPTIONS,
+  PUBLIC_IP_CLIENTS_OPTIONS,
+  TRADE_PROFIT_FILTER_DEFAULTS,
+  type TradeProfitCoverageResponse,
+  type TradeProfitFilters,
+  type TradeProfitGroupDetailResponse,
+  type TradeProfitGroupRow,
+  type TradeProfitGroupsResponse,
+  type TradeProfitRangePreset,
+  type TradeProfitStatistics,
+} from "./trade-profit";
+
+/** Backend caps page_size at 200; groups are sorted by P&L desc, so a
+ *  truncated list still shows the groups that matter (a note says so). */
+const MAX_GROUPS = 200;
+
+// Toolbar control widths come from ONE pair of constants so the grid tracks
+// stay aligned at any wrap count (page-style-conventions §4.1).
+const FILTER_CONTROL_CLASS = "h-9 w-full min-w-0";
+const ACTION_BUTTON_CLASS = "h-9 w-full sm:w-[140px]";
+
+const linkCls = "text-blue-600 hover:underline dark:text-blue-400";
+
+/**
+ * Daily-P&L sparkline. The community edition has no agSparklineCellRenderer
+ * (enterprise-only), so this is a 40×16 inline SVG: polyline over the active
+ * days, dashed zero baseline, stroke coloured by the group's total P&L.
+ */
+function DailySparkline({
+  data,
+}: ICellRendererParams<TradeProfitGroupRow>) {
+  const daily = data?.daily;
+  if (!daily || daily.length === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const W = 40;
+  const H = 16;
+  const PAD = 1.5;
+  const values = daily.map((d) => d.profit_usd);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const span = max - min || 1;
+  const x = (i: number) =>
+    daily.length === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (daily.length - 1);
+  const y = (v: number) => H - PAD - ((v - min) / span) * (H - 2 * PAD);
+  const total = data?.profit_usd ?? 0;
+  const stroke = total > 0 ? "#16a34a" : total < 0 ? "#dc2626" : "#71717a";
+  const zeroY = y(0);
+  return (
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      className="block"
+      aria-hidden
+    >
+      <line
+        x1={0}
+        x2={W}
+        y1={zeroY}
+        y2={zeroY}
+        stroke="#a1a1aa"
+        strokeWidth={0.5}
+        strokeDasharray="2 2"
+      />
+      {daily.length === 1 ? (
+        <circle cx={x(0)} cy={y(values[0])} r={1.5} fill={stroke} />
+      ) : (
+        <polyline
+          points={daily.map((d, i) => `${x(i).toFixed(1)},${y(d.profit_usd).toFixed(1)}`).join(" ")}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={1.2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
+  );
+}
+
+export interface TradeProfitTabProps {
+  /** Jump to the Search tab with this IP pre-filled (parent owns the URL). */
+  onSearchIp: (ip: string) => void;
+}
+
+export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
+  const { t } = useI18n();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+
+  // ── Toolbar filters (persisted viewing preferences) ──────────────────
+  const persisted = useMemo(
+    () =>
+      readFilterState<TradeProfitFilters>(
+        LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
+        TRADE_PROFIT_FILTER_DEFAULTS,
+      ),
+    [],
+  );
+  const [rangePreset, setRangePreset] = useState<TradeProfitRangePreset>(
+    persisted.rangePreset,
+  );
+  const [minClients, setMinClients] = useState<number>(persisted.minClients);
+  const [excludeSharedExit, setExcludeSharedExit] = useState<boolean>(
+    persisted.excludeSharedExit,
+  );
+  const [publicIpClients, setPublicIpClients] = useState<number>(
+    persisted.publicIpClients,
+  );
+  const [includeSameClient, setIncludeSameClient] = useState<boolean>(
+    persisted.includeSameClient,
+  );
+  // Investigation context — NOT persisted (grid-column-persist.md §13).
+  const [customRange, setCustomRange] = useState<DateRange | undefined>();
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+
+  useFilterPersist(
+    LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
+    TRADE_PROFIT_FILTER_DEFAULTS,
+    { rangePreset, minClients, excludeSharedExit, publicIpClients, includeSameClient },
+    // While "custom" is selected the persisted preset keeps its last real
+    // value, so a reload restores e.g. 7d instead of an empty custom mode.
+    { skipFields: rangePreset === "custom" ? ["rangePreset"] : [] },
+  );
+
+  // ── Window ───────────────────────────────────────────────────────────
+  const [refreshToken, setRefreshToken] = useState(0);
+  // Named `dateWindow`, not `window` — shadowing the global in a component
+  // that also runs DOM-adjacent effects is a bug farm.
+  const dateWindow = useMemo(() => {
+    // refreshToken IS a real input: it re-runs this memo so `new Date()`
+    // below is re-evaluated on manual refresh (eslint can't see that).
+    void refreshToken;
+    const custom =
+      rangePreset === "custom"
+        ? {
+            from: customRange?.from
+              ? format(customRange.from, "yyyy-MM-dd")
+              : undefined,
+            to: customRange?.to
+              ? format(customRange.to, "yyyy-MM-dd")
+              : undefined,
+          }
+        : undefined;
+    // `new Date()` is re-evaluated on refresh, so a page left open across
+    // the HKT midnight picks up the freshly reconciled day.
+    return computeTradeProfitWindow(rangePreset, custom, new Date());
+  }, [rangePreset, customRange, refreshToken]);
+
+  // ── List + coverage fetch ────────────────────────────────────────────
+  const [groups, setGroups] = useState<TradeProfitGroupRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [statistics, setStatistics] = useState<TradeProfitStatistics | null>(
+    null,
+  );
+  const [coverage, setCoverage] = useState<TradeProfitCoverageResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+
+  // Collapse the open detail when the query parameters change: group_id
+  // hashes (window, thresholds, account list), so after a filter change the
+  // open id would 404 by design. A manual refresh keeps the same signature
+  // and leaves the panel open.
+  const paramsSignature = [
+    dateWindow.from,
+    dateWindow.to,
+    minClients,
+    excludeSharedExit ? publicIpClients : "off",
+    includeSameClient,
+  ].join("|");
+  const prevSignatureRef = useRef(paramsSignature);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function load() {
+      setLoading(true);
+      setError(null);
+      if (prevSignatureRef.current !== paramsSignature) {
+        prevSignatureRef.current = paramsSignature;
+        setExpandedGroupId(null);
+      }
+      const params = buildTradeProfitParams(dateWindow, {
+        minClients,
+        excludeSharedExit,
+        publicIpClients,
+        includeSameClient,
+      });
+      const listParams = new URLSearchParams(params);
+      listParams.set("page", "1");
+      listParams.set("page_size", String(MAX_GROUPS));
+      const coverageParams = new URLSearchParams({
+        from: dateWindow.from,
+        to: dateWindow.to,
+      });
+      try {
+        const [groupsRes, coverageRes] = await Promise.all([
+          apiFetch(`/api/v1/login-ip/trade-profit/groups?${listParams}`, {
+            signal: controller.signal,
+          }),
+          apiFetch(`/api/v1/login-ip/trade-profit/coverage?${coverageParams}`, {
+            signal: controller.signal,
+          }),
+        ]);
+        if (!groupsRes.ok) {
+          const body: { detail?: unknown } = await groupsRes
+            .json()
+            .catch(() => ({}));
+          throw new Error(
+            typeof body?.detail === "string"
+              ? body.detail
+              : `HTTP ${groupsRes.status}`,
+          );
+        }
+        const groupsData: TradeProfitGroupsResponse = await groupsRes.json();
+        setGroups(groupsData.data);
+        setTotal(groupsData.total);
+        setStatistics(groupsData.statistics);
+        // Coverage is context for the reader — never worth failing the tab.
+        setCoverage(coverageRes.ok ? await coverageRes.json() : null);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : String(e));
+        setGroups([]);
+        setTotal(0);
+        setStatistics(null);
+        setCoverage(null);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void load();
+    return () => controller.abort();
+  }, [
+    dateWindow,
+    minClients,
+    excludeSharedExit,
+    publicIpClients,
+    includeSameClient,
+    paramsSignature,
+  ]);
+
+  // ── Group detail fetch ───────────────────────────────────────────────
+  const [detail, setDetail] = useState<TradeProfitGroupDetailResponse | null>(
+    null,
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!expandedGroupId) {
+      setDetail(null);
+      setDetailError(null);
+      return;
+    }
+    const controller = new AbortController();
+    async function load() {
+      setDetailLoading(true);
+      setDetailError(null);
+      // Same builder as the list call — group_id hashes the window and
+      // thresholds, so the detail request must echo them verbatim or the id
+      // resolves to nothing (404 by design, not a bug).
+      const params = buildTradeProfitParams(dateWindow, {
+        minClients,
+        excludeSharedExit,
+        publicIpClients,
+        includeSameClient,
+      });
+      try {
+        const res = await apiFetch(
+          `/api/v1/login-ip/trade-profit/groups/${expandedGroupId}?${params}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) {
+          const body: { detail?: unknown } = await res
+            .json()
+            .catch(() => ({}));
+          throw new Error(
+            res.status === 404
+              ? t("loginIpsPage.tradeProfit.detailNotFound")
+              : typeof body?.detail === "string"
+                ? body.detail
+                : `HTTP ${res.status}`,
+          );
+        }
+        setDetail(await res.json());
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setDetail(null);
+        setDetailError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!controller.signal.aborted) setDetailLoading(false);
+      }
+    }
+    void load();
+    return () => controller.abort();
+  }, [
+    expandedGroupId,
+    dateWindow,
+    minClients,
+    excludeSharedExit,
+    publicIpClients,
+    includeSameClient,
+    t,
+  ]);
+
+  // ── Grid ─────────────────────────────────────────────────────────────
+  const persist = useGridColumnPersist(GRID_STORAGE_KEYS.LOGIN_IP_TRADE_PROFIT);
+
+  const columnDefs = useMemo<ColDef<TradeProfitGroupRow>[]>(
+    () => [
+      {
+        headerName: t("loginIpsPage.tradeProfit.colProfit"),
+        field: "profit_usd",
+        width: 120,
+        sort: "desc", // backend already sorts P&L desc; this shows the arrow
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colProfitTip"),
+        },
+        valueFormatter: (p) => fmtUsd(p.value),
+        cellClass: (p) =>
+          cn("font-mono font-semibold", profitColorClass(p.value)),
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colClients"),
+        field: "clients",
+        width: 95,
+        cellRenderer: (p: ICellRendererParams<TradeProfitGroupRow>) => (
+          <span className="inline-flex items-center gap-1">
+            {p.value}
+            {p.data?.same_client && (
+              <Badge variant="secondary" className="px-1 py-0 text-[10px]">
+                {t("loginIpsPage.tradeProfit.sameClientBadge")}
+              </Badge>
+            )}
+          </span>
+        ),
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colIbs"),
+        field: "ibs",
+        width: 85,
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colIbsTip"),
+        },
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colAccounts"),
+        field: "accounts",
+        width: 95,
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colTrades"),
+        field: "trades",
+        width: 90,
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colLots"),
+        field: "lots",
+        width: 90,
+        valueFormatter: (p) =>
+          p.value === null || p.value === undefined ? "—" : Number(p.value).toFixed(2),
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colSharedIps"),
+        field: "shared_ips",
+        width: 95,
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colSharedIpsTip"),
+        },
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colActiveDays"),
+        field: "active_days",
+        width: 95,
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colProfitDays"),
+        // valueGetter-only computed column → explicit stable colId, or the
+        // persisted column state would drift on any column insert/reorder.
+        colId: "profitable_ratio",
+        width: 120,
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colProfitDaysTip"),
+        },
+        valueGetter: (p) =>
+          p.data ? `${p.data.profitable_days}/${p.data.active_days}` : "",
+        // Client-side grid (all rows are local), so a comparator is a real
+        // sort, not the fake server-sort kind (grid-column-persist.md §5.5).
+        comparator: (_a, _b, nodeA, nodeB) => {
+          const ratio = (d?: TradeProfitGroupRow) =>
+            d && d.active_days > 0 ? d.profitable_days / d.active_days : -1;
+          return ratio(nodeA.data) - ratio(nodeB.data);
+        },
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colSymbol"),
+        field: "dominant_symbol",
+        width: 120,
+        cellRenderer: (p: ICellRendererParams<TradeProfitGroupRow>) => {
+          if (!p.data?.dominant_symbol) return <span>—</span>;
+          const share = Math.round(p.data.dominant_symbol_share * 100);
+          return (
+            <span>
+              {p.data.dominant_symbol}
+              <span className="ml-1 text-xs text-muted-foreground">
+                {share}%
+              </span>
+            </span>
+          );
+        },
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colAvgHold"),
+        field: "avg_hold_min",
+        width: 105,
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colAvgHoldTip"),
+        },
+        valueFormatter: (p) => fmtHoldMin(p.value),
+      },
+      {
+        headerName: t("loginIpsPage.tradeProfit.colDaily"),
+        // Renderer-only column (no field, no valueGetter) → explicit colId.
+        colId: "daily_sparkline",
+        width: 110,
+        sortable: false,
+        filter: false,
+        headerComponent: InfoHeader,
+        headerComponentParams: {
+          tooltip: t("loginIpsPage.tradeProfit.colDailyTip"),
+        },
+        cellRenderer: DailySparkline,
+      },
+    ],
+    [t],
+  );
+
+  const defaultColDef = useMemo<ColDef>(
+    () => ({
+      sortable: true,
+      resizable: true,
+      filter: true,
+      minWidth: 80,
+      wrapHeaderText: true,
+      autoHeaderHeight: true,
+      // Cells wrap instead of silently clipping when narrowed (ag-grid-style
+      // §4b) — a right-aligned number clipped from the left reads as a
+      // different plausible number, which is the worst failure mode here.
+      wrapText: true,
+      autoHeight: true,
+      cellStyle: {
+        whiteSpace: "normal",
+        lineHeight: "1.35",
+        overflowWrap: "anywhere",
+      },
+    }),
+    [],
+  );
+
+  // Match the sibling tabs (Report/Watchlist/Search): black header, white
+  // text, not theme-dependent. All semi-transparent colours are rgba — the
+  // theme's CSS variables are oklch and hsl(var(...)) would be invalid CSS.
+  const gridThemeStyle = useMemo(
+    () =>
+      ({
+        ["--ag-header-background-color" as string]: "#000000",
+        ["--ag-header-foreground-color" as string]: "#ffffff",
+        ["--ag-header-column-separator-color" as string]:
+          "rgba(255, 255, 255, 0.12)",
+        ["--ag-header-column-separator-width" as string]: "1px",
+        ["--ag-cell-horizontal-padding" as string]: "4px",
+        ["--ag-header-cell-hover-background-color" as string]: "#171717",
+        ["--ag-icon-color" as string]: "#ffffff",
+        ["--ag-background-color" as string]: "hsl(var(--card))",
+        ["--ag-foreground-color" as string]: "hsl(var(--foreground))",
+        ["--ag-row-border-color" as string]: "hsl(var(--border))",
+        ["--ag-odd-row-background-color" as string]: isDark
+          ? "rgba(255,255,255,0.04)"
+          : "rgba(0,0,0,0.03)",
+      }) satisfies CSSProperties,
+    [isDark],
+  );
+
+  const onRowClicked = useCallback(
+    (e: { data?: TradeProfitGroupRow }) => {
+      const id = e.data?.group_id;
+      if (!id) return;
+      setExpandedGroupId((prev) => (prev === id ? null : id));
+    },
+    [],
+  );
+
+  // ── Render ───────────────────────────────────────────────────────────
+  const showEmpty = shouldShowEmptyState(loading, error, groups.length);
+  const noIpPct =
+    coverage && coverage.total_trades > 0
+      ? ((coverage.no_ip_trades / coverage.total_trades) * 100).toFixed(1)
+      : "0.0";
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar (page-style-conventions §4.1: grid, not flex-wrap) */}
+      <div className="rounded-xl border bg-card px-4 py-4 md:px-6">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
+            <Select
+              value={rangePreset}
+              onValueChange={(v) => {
+                setRangePreset(v as TradeProfitRangePreset);
+                if (v === "custom" && !customRange?.from) {
+                  setDatePickerOpen(true);
+                }
+              }}
+            >
+              <SelectTrigger
+                className={FILTER_CONTROL_CLASS}
+                aria-label={t("loginIpsPage.tradeProfit.window")}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7d">
+                  {t("loginIpsPage.tradeProfit.preset7d")}
+                </SelectItem>
+                <SelectItem value="30d">
+                  {t("loginIpsPage.tradeProfit.preset30d")}
+                </SelectItem>
+                <SelectItem value="90d">
+                  {t("loginIpsPage.tradeProfit.preset90d")}
+                </SelectItem>
+                <SelectItem value="custom">
+                  {t("loginIpsPage.tradeProfit.presetCustom")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+
+            {rangePreset === "custom" && (
+              <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      FILTER_CONTROL_CLASS,
+                      "justify-start text-left font-normal",
+                      !customRange?.from && "text-muted-foreground",
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                    <span className="truncate">
+                      {customRange?.from ? (
+                        customRange.to ? (
+                          <>
+                            {format(customRange.from, "yyyy-MM-dd")} ~{" "}
+                            {format(customRange.to, "yyyy-MM-dd")}
+                          </>
+                        ) : (
+                          format(customRange.from, "yyyy-MM-dd")
+                        )
+                      ) : (
+                        t("loginIpsPage.tradeProfit.pickRange")
+                      )}
+                    </span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    initialFocus
+                    mode="range"
+                    defaultMonth={customRange?.from}
+                    selected={customRange}
+                    onSelect={setCustomRange}
+                    numberOfMonths={2}
+                    // Tomorrow and beyond can never have reconciled rows.
+                    disabled={{ after: new Date() }}
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+
+            <Select
+              value={String(minClients)}
+              onValueChange={(v) => setMinClients(Number(v))}
+            >
+              <SelectTrigger
+                className={FILTER_CONTROL_CLASS}
+                aria-label={t("loginIpsPage.tradeProfit.minClients")}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MIN_CLIENTS_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {t("loginIpsPage.tradeProfit.thresholdClients", {
+                      count: n,
+                    })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex h-9 items-center gap-2">
+              <Checkbox
+                id="tp-exclude-shared-exit"
+                checked={excludeSharedExit}
+                onCheckedChange={(v) => setExcludeSharedExit(v === true)}
+              />
+              <label
+                htmlFor="tp-exclude-shared-exit"
+                className="cursor-pointer select-none text-sm"
+              >
+                {t("loginIpsPage.tradeProfit.excludeSharedExit")}
+              </label>
+            </div>
+
+            <Select
+              value={String(publicIpClients)}
+              onValueChange={(v) => setPublicIpClients(Number(v))}
+              disabled={!excludeSharedExit}
+            >
+              <SelectTrigger
+                className={FILTER_CONTROL_CLASS}
+                aria-label={t("loginIpsPage.tradeProfit.sharedExitThreshold")}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLIC_IP_CLIENTS_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {t("loginIpsPage.tradeProfit.thresholdClients", {
+                      count: n,
+                    })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex h-9 items-center gap-2">
+              <Checkbox
+                id="tp-include-same-client"
+                checked={includeSameClient}
+                onCheckedChange={(v) => setIncludeSameClient(v === true)}
+              />
+              <label
+                htmlFor="tp-include-same-client"
+                className="cursor-pointer select-none text-sm"
+              >
+                {t("loginIpsPage.tradeProfit.includeSameClient")}
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <ColumnVisibilityMenu
+              persist={persist}
+              columnDefs={columnDefs as ColDef<unknown>[]}
+              size="sm"
+              buttonClassName={ACTION_BUTTON_CLASS}
+            />
+            <Button
+              variant="outline"
+              className={cn(ACTION_BUTTON_CLASS, "gap-2")}
+              onClick={() => setRefreshToken((n) => n + 1)}
+              disabled={loading}
+            >
+              <IconRefresh
+                className={cn("h-4 w-4", loading && "animate-spin")}
+              />
+              {t("loginIpsPage.common.refresh")}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Coverage line — how big the no-IP bucket is, so the ranking below
+          is read against the whole window and not as the whole story. */}
+      {coverage && (
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <IconInfoCircle className="mt-0.5 size-4 shrink-0 opacity-90" />
+          <div className="leading-snug">
+            <p>
+              {t("loginIpsPage.tradeProfit.coverage", {
+                total: coverage.total_trades.toLocaleString(),
+                noIp: coverage.no_ip_trades.toLocaleString(),
+                pct: noIpPct,
+                profit: fmtUsd(coverage.total_profit_usd),
+              })}
+            </p>
+            {coverage.incomplete_logs.length > 0 && (
+              <p className="text-amber-600 dark:text-amber-400">
+                {t("loginIpsPage.tradeProfit.coverageIncomplete", {
+                  list: coverage.incomplete_logs
+                    .map((l) => `${l.date} ${l.server}`)
+                    .join(", "),
+                })}
+              </p>
+            )}
+            {coverage.unreconciled_dates.length > 0 && (
+              <p>
+                {t("loginIpsPage.tradeProfit.coverageUnreconciled", {
+                  list: coverage.unreconciled_dates.join(", "),
+                })}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Main grid — one row per account group */}
+      <Card className="gap-3">
+        <CardHeader>
+          <CardTitle className="text-base">
+            {t("loginIpsPage.tradeProfit.groupsTitle", { count: total })}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {error && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              {t("loginIpsPage.tradeProfit.loadFailed", { message: error })}
+            </p>
+          )}
+          {showEmpty ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+              <p className="text-sm font-medium">
+                {t("loginIpsPage.tradeProfit.empty")}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("loginIpsPage.tradeProfit.emptyHint", {
+                  minClients,
+                  from: dateWindow.from,
+                  to: dateWindow.to,
+                })}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <style>
+                {`
+                  .login-ip-trade-profit-grid .ag-header,
+                  .login-ip-trade-profit-grid .ag-header-viewport,
+                  .login-ip-trade-profit-grid .ag-header-row {
+                    font-weight: 600;
+                  }
+                  .login-ip-trade-profit-grid .ag-header {
+                    border-top-left-radius: 0.75rem;
+                    border-top-right-radius: 0.75rem;
+                  }
+                `}
+              </style>
+              <div
+                className={cn(
+                  "login-ip-trade-profit-grid h-[480px] w-full",
+                  isDark ? "ag-theme-quartz-dark" : "ag-theme-quartz",
+                )}
+                style={gridThemeStyle}
+              >
+                <AgGridReact<TradeProfitGroupRow>
+                  rowData={groups}
+                  columnDefs={columnDefs}
+                  defaultColDef={defaultColDef}
+                  gridOptions={{ theme: "legacy" }}
+                  loading={loading}
+                  animateRows
+                  pagination
+                  paginationPageSize={50}
+                  paginationPageSizeSelector={[20, 50, 100, 200]}
+                  suppressCellFocus
+                  enableCellTextSelection
+                  getRowId={(p) => p.data.group_id}
+                  onRowClicked={onRowClicked}
+                  // Compose with the persistence handlers — never spread
+                  // gridEventProps (it would replace this grid's own
+                  // onGridReady / onSortChanged).
+                  onGridReady={(e) => persist.gridEventProps.onGridReady(e)}
+                  onSortChanged={persist.gridEventProps.onSortChanged}
+                  onColumnMoved={persist.gridEventProps.onColumnMoved}
+                  onColumnVisible={persist.gridEventProps.onColumnVisible}
+                  onColumnPinned={persist.gridEventProps.onColumnPinned}
+                  onColumnResized={persist.gridEventProps.onColumnResized}
+                />
+              </div>
+            </div>
+          )}
+          {total > groups.length && (
+            <p className="text-xs text-muted-foreground">
+              {t("loginIpsPage.tradeProfit.truncated", {
+                total,
+                shown: groups.length,
+              })}
+            </p>
+          )}
+          {statistics && !showEmpty && (
+            <p className="text-xs text-muted-foreground">
+              {t("loginIpsPage.tradeProfit.groupsFootnote", {
+                grouped: statistics.groups_trades.toLocaleString(),
+                withIp: statistics.window_with_ip_trades.toLocaleString(),
+              })}
+            </p>
+          )}
+          {/* The three known blind spots, per the OPT-0063 spec — the reader
+              must know what this view CANNOT see. */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("loginIpsPage.tradeProfit.blindSpots")}
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Detail card — community AG-Grid has no master/detail, so the
+          expansion renders as a card below the grid. */}
+      {expandedGroupId && (
+        <Card className="gap-3">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {t("loginIpsPage.tradeProfit.detailTitle")}
+              {detail?.group.same_client && (
+                <Badge variant="secondary">
+                  {t("loginIpsPage.tradeProfit.sameClientBadge")}
+                </Badge>
+              )}
+              <span className="font-mono text-xs font-normal text-muted-foreground">
+                {expandedGroupId}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-8 w-8 p-0"
+                onClick={() => setExpandedGroupId(null)}
+                aria-label={t("loginIpsPage.tradeProfit.close")}
+              >
+                <IconX className="h-4 w-4" />
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {detailLoading && (
+              <p className="text-sm text-muted-foreground">
+                {t("loginIpsPage.common.loading")}
+              </p>
+            )}
+            {detailError && (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                {t("loginIpsPage.tradeProfit.detailLoadFailed", {
+                  message: detailError,
+                })}
+              </p>
+            )}
+            {detail && !detailLoading && (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {t("loginIpsPage.tradeProfit.detailSummary", {
+                    profit: fmtUsd(detail.group.profit_usd),
+                    accounts: detail.group.accounts,
+                    clients: detail.group.clients,
+                    ips: detail.group.shared_ips,
+                  })}
+                </p>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {/* Left: member accounts */}
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">
+                      {t("loginIpsPage.tradeProfit.accountsTitle", {
+                        count: detail.group.accounts_detail?.length ?? 0,
+                      })}
+                    </h3>
+                    <div className="overflow-x-auto rounded-xl border bg-card">
+                      <Table>
+                        <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+                          <TableRow>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colAccount")}
+                            </TableHead>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colClient")}
+                            </TableHead>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colIb")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colTrades")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colLots")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colProfit")}
+                            </TableHead>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colSymbol")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colAvgHold")}
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(detail.group.accounts_detail ?? []).map((a) => {
+                            const accountHref = crmAccountUrl(
+                              a.server,
+                              a.account_id,
+                            );
+                            return (
+                              <TableRow key={a.account_key}>
+                                <TableCell className="font-mono text-sm">
+                                  {accountHref ? (
+                                    <a
+                                      href={accountHref}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={linkCls}
+                                    >
+                                      {a.account_key}
+                                    </a>
+                                  ) : (
+                                    a.account_key
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {a.user_id ? (
+                                    <a
+                                      href={crmUserUrl(a.user_id) ?? "#"}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={linkCls}
+                                    >
+                                      {a.user_id}
+                                    </a>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {a.ib_id ? (
+                                    <a
+                                      href={crmUserUrl(a.ib_id) ?? "#"}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={linkCls}
+                                    >
+                                      {a.ib_id}
+                                    </a>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {a.trades}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {a.lots.toFixed(2)}
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    "text-right font-mono",
+                                    profitColorClass(a.profit_usd),
+                                  )}
+                                >
+                                  {fmtUsd(a.profit_usd)}
+                                </TableCell>
+                                <TableCell>{a.dominant_symbol || "—"}</TableCell>
+                                <TableCell className="text-right">
+                                  {fmtHoldMin(a.avg_hold_min)}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+
+                  {/* Right: the IPs this group used */}
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">
+                      {t("loginIpsPage.tradeProfit.ipsTitle", {
+                        count: detail.member_ips.length,
+                      })}
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {t("loginIpsPage.tradeProfit.clickIpHint")}
+                    </p>
+                    <div className="overflow-x-auto rounded-xl border bg-card">
+                      <Table>
+                        <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+                          <TableRow>
+                            <TableHead>IP</TableHead>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colCountry")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colWindowClients")}
+                            </TableHead>
+                            <TableHead className="text-right">
+                              {t("loginIpsPage.tradeProfit.colActiveDays")}
+                            </TableHead>
+                            <TableHead>
+                              {t("loginIpsPage.tradeProfit.colBridge")}
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {detail.member_ips.map((ip) => (
+                            <TableRow key={ip.ip}>
+                              <TableCell>
+                                <button
+                                  type="button"
+                                  className={cn("font-mono text-sm", linkCls)}
+                                  onClick={() => onSearchIp(ip.ip)}
+                                >
+                                  {ip.ip}
+                                </button>
+                              </TableCell>
+                              <TableCell>{ip.country ?? "—"}</TableCell>
+                              <TableCell className="text-right">
+                                {ip.window_clients ?? "—"}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {ip.window_active_days ?? "—"}
+                              </TableCell>
+                              <TableCell>
+                                {ip.bridge ? (
+                                  <Badge variant="outline">
+                                    {t("loginIpsPage.tradeProfit.bridgeYes")}
+                                  </Badge>
+                                ) : (
+                                  "—"
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
