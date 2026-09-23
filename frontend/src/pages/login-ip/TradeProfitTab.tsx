@@ -33,6 +33,7 @@ import type {
 } from "ag-grid-community";
 import { useI18n } from "@/components/i18n-provider";
 import { useTheme } from "@/components/theme-provider";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -71,9 +72,15 @@ import {
 import {
   IconInfoCircle,
   IconRefresh,
-  IconX,
 } from "@tabler/icons-react";
 import { Calendar as CalendarIcon } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import type { DateRange } from "react-day-picker";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -137,6 +144,218 @@ function ThHint({ label, tip }: { label: string; tip: string }) {
   );
 }
 
+/** Body of the right-hand detail sheet (accounts + member IPs). */
+function TradeProfitDetailBody({
+  detail,
+  detailLoading,
+  detailError,
+  onSearchIp,
+}: {
+  detail: TradeProfitGroupDetailResponse | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  onSearchIp: (ip: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-4 px-4 pb-6">
+      {detailLoading && (
+        <p className="text-sm text-muted-foreground">
+          {t("loginIpsPage.common.loading")}
+        </p>
+      )}
+      {detailError && (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {t("loginIpsPage.tradeProfit.detailLoadFailed", {
+            message: detailError,
+          })}
+        </p>
+      )}
+      {detail && !detailLoading && (
+        <div className="flex flex-col gap-4">
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">
+                {t("loginIpsPage.tradeProfit.accountsTitle", {
+                  count: detail.group.accounts_detail?.length ?? 0,
+                })}
+              </h3>
+              <div className="overflow-x-auto rounded-xl border bg-card">
+                <Table>
+                  <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+                    <TableRow>
+                      <TableHead>
+                        {t("loginIpsPage.tradeProfit.colAccount")}
+                      </TableHead>
+                      <TableHead>
+                        {t("loginIpsPage.tradeProfit.colClient")}
+                      </TableHead>
+                      <TableHead>
+                        {t("loginIpsPage.tradeProfit.colIb")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("loginIpsPage.tradeProfit.colTrades")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("loginIpsPage.tradeProfit.colLots")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("loginIpsPage.tradeProfit.colProfit")}
+                      </TableHead>
+                      <TableHead>
+                        {t("loginIpsPage.tradeProfit.colSymbol")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("loginIpsPage.tradeProfit.colAvgHold")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(detail.group.accounts_detail ?? []).map((a) => {
+                      const accountHref = crmAccountUrl(a.server, a.account_id);
+                      return (
+                        <TableRow key={a.account_key}>
+                          <TableCell className="font-mono text-sm">
+                            {accountHref ? (
+                              <a
+                                href={accountHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={linkCls}
+                              >
+                                {a.account_key}
+                              </a>
+                            ) : (
+                              a.account_key
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {a.user_id ? (
+                              <a
+                                href={crmUserUrl(a.user_id) ?? "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={linkCls}
+                              >
+                                {a.user_id}
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {a.ib_id ? (
+                              <a
+                                href={crmUserUrl(a.ib_id) ?? "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={linkCls}
+                              >
+                                {a.ib_id}
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">{a.trades}</TableCell>
+                          <TableCell className="text-right">
+                            {a.lots.toFixed(2)}
+                          </TableCell>
+                          <TableCell
+                            className={cn(
+                              "text-right font-mono",
+                              profitColorClass(a.profit_usd),
+                            )}
+                          >
+                            {fmtUsd(a.profit_usd)}
+                          </TableCell>
+                          <TableCell>{a.dominant_symbol || "—"}</TableCell>
+                          <TableCell className="text-right">
+                            {fmtHoldMin(a.avg_hold_min)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">
+                {t("loginIpsPage.tradeProfit.ipsTitle", {
+                  count: detail.member_ips.length,
+                })}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {t("loginIpsPage.tradeProfit.clickIpHint")}
+              </p>
+              <div className="overflow-x-auto rounded-xl border bg-card">
+                <Table>
+                  <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+                    <TableRow>
+                      <TableHead>IP</TableHead>
+                      <TableHead>
+                        {t("loginIpsPage.tradeProfit.colCountry")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <ThHint
+                          label={t("loginIpsPage.tradeProfit.colWindowClients")}
+                          tip={t("loginIpsPage.tradeProfit.colWindowClientsTip")}
+                        />
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <ThHint
+                          label={t("loginIpsPage.tradeProfit.colActiveDays")}
+                          tip={t("loginIpsPage.tradeProfit.colIpActiveDaysTip")}
+                        />
+                      </TableHead>
+                      <TableHead>
+                        <ThHint
+                          label={t("loginIpsPage.tradeProfit.colBridge")}
+                          tip={t("loginIpsPage.tradeProfit.colBridgeTip")}
+                        />
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {detail.member_ips.map((ip) => (
+                      <TableRow key={ip.ip}>
+                        <TableCell>
+                          <button
+                            type="button"
+                            className={cn("font-mono text-sm", linkCls)}
+                            onClick={() => onSearchIp(ip.ip)}
+                          >
+                            {ip.ip}
+                          </button>
+                        </TableCell>
+                        <TableCell>{ip.country ?? "—"}</TableCell>
+                        <TableCell className="text-right">
+                          {ip.window_clients ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {ip.window_active_days ?? "—"}
+                        </TableCell>
+                        <TableCell>
+                          {ip.bridge ? (
+                            <Badge variant="outline">
+                              {t("loginIpsPage.tradeProfit.bridgeYes")}
+                            </Badge>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+      )}
+    </div>
+  );
+}
+
 export interface TradeProfitTabProps {
   /** Jump to the Search tab with this IP pre-filled (parent owns the URL). */
   onSearchIp: (ip: string) => void;
@@ -146,6 +365,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   const { t } = useI18n();
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const isMobile = useIsMobile();
 
   // ── Toolbar filters (persisted viewing preferences) ──────────────────
   const persisted = useMemo(
@@ -368,25 +588,16 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
 
   // ── Grid ─────────────────────────────────────────────────────────────
   const persist = useGridColumnPersist(GRID_STORAGE_KEYS.LOGIN_IP_TRADE_PROFIT);
-  const gridApiRef = useRef<GridApi | null>(null);
-  const detailRef = useRef<HTMLDivElement>(null);
+  const gridApiRef = useRef<GridApi<TradeProfitGroupRow> | null>(null);
 
-  // Bring the freshly expanded detail section into view (it renders below
-  // the grid, possibly under the fold). "nearest" avoids a jump when the
-  // section is already visible.
-  useEffect(() => {
-    if (!expandedGroupId) return;
-    detailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [expandedGroupId]);
-
-  // Highlight the expanded row. AG-Grid caches row styles, so changing the
-  // selection must force a refresh or the highlight lags one click behind.
-  // The stored api is guarded: a destroyed grid returns undefined instead of
-  // throwing (ui-pitfalls §2.6).
+  // Highlight the opened row. AG-Grid caches row styles, so a selection
+  // change must force a refresh or the tint lags one click behind. The
+  // stored api is guarded: a destroyed grid returns undefined, it does not
+  // throw (ui-pitfalls §2.6).
   useEffect(() => {
     const api = gridApiRef.current;
     if (!api || api.isDestroyed()) return;
-    api.refreshCells({ force: true });
+    api.redrawRows();
   }, [expandedGroupId]);
 
   const columnDefs = useMemo<ColDef<TradeProfitGroupRow>[]>(
@@ -556,18 +767,14 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
     [isDark],
   );
 
-  const onRowClicked = useCallback(
-    (e: { data?: TradeProfitGroupRow }) => {
-      const id = e.data?.group_id;
-      if (!id) return;
-      setExpandedGroupId((prev) => (prev === id ? null : id));
-    },
-    [],
-  );
+  const onRowClicked = useCallback((e: { data?: TradeProfitGroupRow }) => {
+    const id = e.data?.group_id;
+    if (!id) return;
+    setExpandedGroupId(id);
+  }, []);
 
-  // Blue tint on the expanded row; rgba (not hsl(var(...))) because the
-  // theme variables are oklch (ag-grid-style §3). Returning undefined falls
-  // back to zebra striping for every other row.
+  // Blue tint on the row whose sheet is open. rgba, not hsl(var(...)):
+  // theme variables are oklch (ag-grid-style §3). Undefined keeps zebra.
   const getRowStyle = useCallback(
     (p: RowClassParams<TradeProfitGroupRow>) =>
       p.data?.group_id === expandedGroupId
@@ -852,6 +1059,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
                   paginationPageSizeSelector={[20, 50, 100, 200]}
                   suppressCellFocus
                   enableCellTextSelection
+                  rowClass="cursor-pointer"
                   getRowId={(p) => p.data.group_id}
                   getRowStyle={getRowStyle}
                   onRowClicked={onRowClicked}
@@ -879,248 +1087,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               })}
             </p>
           )}
-          {/* Group detail — expands in place below the grid, inside the same
-              card. Community AG-Grid has no master/detail, and a full-width
-              row would fight user sorting, column filters and pagination, so
-              the expanded row is highlighted (getRowStyle) and the detail
-              renders as a bordered section under the grid. */}
-          {expandedGroupId && (
-            <div ref={detailRef} className="space-y-4 border-t pt-4">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold">
-                  {t("loginIpsPage.tradeProfit.detailTitle")}
-                </h3>
-                {detail?.group.same_client && (
-                  <Badge variant="secondary">
-                    {t("loginIpsPage.tradeProfit.sameClientBadge")}
-                  </Badge>
-                )}
-                <span className="font-mono text-xs text-muted-foreground">
-                  {expandedGroupId}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto h-8 w-8 p-0"
-                  onClick={() => setExpandedGroupId(null)}
-                  aria-label={t("loginIpsPage.tradeProfit.close")}
-                >
-                  <IconX className="h-4 w-4" />
-                </Button>
-              </div>
-            {detailLoading && (
-              <p className="text-sm text-muted-foreground">
-                {t("loginIpsPage.common.loading")}
-              </p>
-            )}
-            {detailError && (
-              <p className="text-sm text-red-600 dark:text-red-400">
-                {t("loginIpsPage.tradeProfit.detailLoadFailed", {
-                  message: detailError,
-                })}
-              </p>
-            )}
-            {detail && !detailLoading && (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  {t("loginIpsPage.tradeProfit.detailSummary", {
-                    profit: fmtUsd(detail.group.profit_usd),
-                    accounts: detail.group.accounts,
-                    clients: detail.group.clients,
-                    ips: detail.group.shared_ips,
-                  })}
-                </p>
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {/* Left: member accounts */}
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold">
-                      {t("loginIpsPage.tradeProfit.accountsTitle", {
-                        count: detail.group.accounts_detail?.length ?? 0,
-                      })}
-                    </h3>
-                    <div className="overflow-x-auto rounded-xl border bg-card">
-                      <Table>
-                        <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
-                          <TableRow>
-                            <TableHead>
-                              {t("loginIpsPage.tradeProfit.colAccount")}
-                            </TableHead>
-                            <TableHead>
-                              {t("loginIpsPage.tradeProfit.colClient")}
-                            </TableHead>
-                            <TableHead>
-                              {t("loginIpsPage.tradeProfit.colIb")}
-                            </TableHead>
-                            <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colTrades")}
-                            </TableHead>
-                            <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colLots")}
-                            </TableHead>
-                            <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colProfit")}
-                            </TableHead>
-                            <TableHead>
-                              {t("loginIpsPage.tradeProfit.colSymbol")}
-                            </TableHead>
-                            <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colAvgHold")}
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {(detail.group.accounts_detail ?? []).map((a) => {
-                            const accountHref = crmAccountUrl(
-                              a.server,
-                              a.account_id,
-                            );
-                            return (
-                              <TableRow key={a.account_key}>
-                                <TableCell className="font-mono text-sm">
-                                  {accountHref ? (
-                                    <a
-                                      href={accountHref}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={linkCls}
-                                    >
-                                      {a.account_key}
-                                    </a>
-                                  ) : (
-                                    a.account_key
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {a.user_id ? (
-                                    <a
-                                      href={crmUserUrl(a.user_id) ?? "#"}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={linkCls}
-                                    >
-                                      {a.user_id}
-                                    </a>
-                                  ) : (
-                                    "—"
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {a.ib_id ? (
-                                    <a
-                                      href={crmUserUrl(a.ib_id) ?? "#"}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={linkCls}
-                                    >
-                                      {a.ib_id}
-                                    </a>
-                                  ) : (
-                                    "—"
-                                  )}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  {a.trades}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  {a.lots.toFixed(2)}
-                                </TableCell>
-                                <TableCell
-                                  className={cn(
-                                    "text-right font-mono",
-                                    profitColorClass(a.profit_usd),
-                                  )}
-                                >
-                                  {fmtUsd(a.profit_usd)}
-                                </TableCell>
-                                <TableCell>{a.dominant_symbol || "—"}</TableCell>
-                                <TableCell className="text-right">
-                                  {fmtHoldMin(a.avg_hold_min)}
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-
-                  {/* Right: the IPs this group used */}
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold">
-                      {t("loginIpsPage.tradeProfit.ipsTitle", {
-                        count: detail.member_ips.length,
-                      })}
-                    </h3>
-                    <p className="text-xs text-muted-foreground">
-                      {t("loginIpsPage.tradeProfit.clickIpHint")}
-                    </p>
-                    <div className="overflow-x-auto rounded-xl border bg-card">
-                      <Table>
-                        <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
-                          <TableRow>
-                            <TableHead>IP</TableHead>
-                            <TableHead>
-                              {t("loginIpsPage.tradeProfit.colCountry")}
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <ThHint
-                                label={t("loginIpsPage.tradeProfit.colWindowClients")}
-                                tip={t("loginIpsPage.tradeProfit.colWindowClientsTip")}
-                              />
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <ThHint
-                                label={t("loginIpsPage.tradeProfit.colActiveDays")}
-                                tip={t("loginIpsPage.tradeProfit.colIpActiveDaysTip")}
-                              />
-                            </TableHead>
-                            <TableHead>
-                              <ThHint
-                                label={t("loginIpsPage.tradeProfit.colBridge")}
-                                tip={t("loginIpsPage.tradeProfit.colBridgeTip")}
-                              />
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {detail.member_ips.map((ip) => (
-                            <TableRow key={ip.ip}>
-                              <TableCell>
-                                <button
-                                  type="button"
-                                  className={cn("font-mono text-sm", linkCls)}
-                                  onClick={() => onSearchIp(ip.ip)}
-                                >
-                                  {ip.ip}
-                                </button>
-                              </TableCell>
-                              <TableCell>{ip.country ?? "—"}</TableCell>
-                              <TableCell className="text-right">
-                                {ip.window_clients ?? "—"}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                {ip.window_active_days ?? "—"}
-                              </TableCell>
-                              <TableCell>
-                                {ip.bridge ? (
-                                  <Badge variant="outline">
-                                    {t("loginIpsPage.tradeProfit.bridgeYes")}
-                                  </Badge>
-                                ) : (
-                                  "—"
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-            </div>
-          )}
           {statistics && !showEmpty && (
             <p className="text-xs text-muted-foreground">
               {t("loginIpsPage.tradeProfit.groupsFootnote", {
@@ -1136,6 +1102,50 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
           </p>
         </CardContent>
       </Card>
+
+      {/* Same interaction as Risk Monitor → Gap Trade: the row stays put and
+          the detail slides in from the right (from the bottom on a phone). */}
+      <Sheet
+        open={expandedGroupId !== null}
+        onOpenChange={(open) => {
+          if (!open) setExpandedGroupId(null);
+        }}
+      >
+        <SheetContent
+          side={isMobile ? "bottom" : "right"}
+          className={cn(
+            "gap-0 overflow-y-auto sm:max-w-none",
+            isMobile ? "h-[85vh] rounded-t-lg" : "w-[min(640px,92vw)]",
+          )}
+        >
+          <SheetHeader className="pr-10">
+            <SheetTitle className="flex items-center gap-2">
+              {t("loginIpsPage.tradeProfit.detailTitle")}
+              {detail?.group.same_client && (
+                <Badge variant="secondary">
+                  {t("loginIpsPage.tradeProfit.sameClientBadge")}
+                </Badge>
+              )}
+            </SheetTitle>
+            <SheetDescription>
+              {detail && !detailLoading
+                ? t("loginIpsPage.tradeProfit.detailSummary", {
+                    profit: fmtUsd(detail.group.profit_usd),
+                    accounts: detail.group.accounts,
+                    clients: detail.group.clients,
+                    ips: detail.group.shared_ips,
+                  })
+                : expandedGroupId}
+            </SheetDescription>
+          </SheetHeader>
+          <TradeProfitDetailBody
+            detail={detail}
+            detailLoading={detailLoading}
+            detailError={detailError}
+            onSearchIp={onSearchIp}
+          />
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
