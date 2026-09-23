@@ -13,7 +13,7 @@ related: [[OPT-0062]] [[OPT-0020]]
 > **v2（2026-09-22）**：独立冷审 15 条 finding（实测 9-18 工作日 journal + 从库）已全部吸收：MT5 开仓判定改为「全收 + 夜间按 `Order == PositionID` 判开/平」、补 MT5 挂单 `order placed`、量级修正 4 倍、P&L 改 08:30 预计算、结果表按 deal 建键、私有 IP 定义统一、回填改走 `backfill_login_ip.py`。冷审原文浓缩在 §冷审对照表。
 > **✅ Phase 1 已上线（2026-09-22）**：commit `fa3932b`（merge `c3f0168`），已部署 prod 并回填 09-15 → 09-21 共 **619,998 行**（MT4 53,450 / Live2 10,400 / MT5 556,148 = performed 500,152 + placed 55,996）；`order_ip_parse_runs` 21 行齐全；回填未推 CRM（`crm_last_close_ip_push_log` 当日 0 新增）。实施偏差见 §笔记「Phase 1 实施记录」。**Phase 2 worker 注意：`order_ip` 表已有真实数据可读。**
 > **✅ Phase 2 已上线（2026-09-22）**：commit `28a5f39`，已部署 prod 并回填 09-15 → 09-21 对账共 **306,231 行**（with-IP 95.5%）；4 个端点 `/login-ip/trade-profit/{groups,groups/{id},ips,coverage}` 挂 risk 模块；**Cheng Qian 5 客户组在真实下单 IP 数据上精确复现**（group `e4c578ff2792`，7 账户 5 IP，周盈利 $3,385）。实施偏差见 §笔记「Phase 2 实施记录」。
-> **🚧 Phase 3 已实现未部署（2026-09-23）**：commit `70f5ca5`（branch `opt/trade-ip-profit-attribution`），第 5 个 tab + 深链底座（受控 `?tab=` / SearchTab `?q=` 预填）完成，`./verify.sh` 全绿，dev 容器真实数据四状态实测通过。实施偏差见 §笔记「Phase 3 实施记录」。
+> **✅ Phase 3 已上线（2026-09-23）**：`70f5ca5`（tab + 深链）、`fb2a136`（文档）、`e9625a9` / `22dd390`（UI 改版），branch `opt/trade-ip-profit-attribution`。生产是用该分支工作区 `./deploy.sh` 打的包（`origin/main` 当时已包含在分支里，**这 4 个 commit 还没合进 `main`**——下次若在 `main` 上部署会把这版 UI 盖掉）。回滚标签 `new-it-system-{web,api}:pre-opt0063-phase3-20260923`。界面以 §笔记「Phase 3 UI 改版」为准。
 > **本文件自洽，实施 worker 只读这一份即可。** 分析、口径验证与一个月回测都已做完（§背景），不要重做。
 > ⚠ 按 tracker 规则这是 net-new feature，本应走 `feat/` 分支；用户 2026-09-21 明确要求按 OPT 管理（同 OPT-0062 先例），照办。
 > ⚠ **Phase 1（落库）越早上线越好**：逐单 IP 只在 MT journal 里，本机 `backend/data/login_ip/tmp/` 只留 7 天、MT5 FTP 只留 5 天，**功能上线日 = 数据起点，历史补不回来**。Phase 1 可以先于 Phase 2/3 单独部署。
@@ -159,10 +159,10 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 
 `frontend/src/pages/login-ip/TradeProfitTab.tsx`（新），挂进 `LoginIPs.tsx`（`:36-60` 那组 Tabs），仅 `hasModule(access, "risk")` 渲染：
 
-1. **工具栏**（`useFilterPersist`，key `LOGIN_IP_TRADE_PROFIT_FILTERS_V1`，并手列进 `view-profiles/manifest.ts` 的 `FILTER_STATE_KEYS`）：窗口预设 7 / 30 / 90 天 + 自定义（自定义绝对区间不持久化）、最少客户数（默认 2）、排除共享出口（默认开，阈值 10）、含一人多户（默认关）。
-2. **顶部一行覆盖率说明**（非持久化）：`本窗口 N 单，M 单无 IP（P%），盈亏 X` —— 让读者知道无 IP 桶有多大。
-3. **主表 AG-Grid（一组一行）**：组盈利（红绿）、客户数、IB 数、账户数、共用 IP 数、活跃日、赚钱日/活跃日、主品种、平均持仓、按日盈利 sparkline（`agSparklineCellRenderer` 是 enterprise，社区版用一个 40×16 的内联 SVG cell renderer）。`useGridColumnPersist` key `LOGIN_IP_TRADE_PROFIT_GRID_STATE_V1` + `<ColumnVisibilityMenu>`；计算列显式 `colId`；列头解释用 `InfoHeader`；zebra 别用 `hsl(var(--primary))`。
-4. **展开区**：点行后在表下方渲染 Card（不用 master/detail，社区版没有）：左侧账户明细（账户、客户 CRM 链接 `https://mt4.kohleglobal.com/crm/users/{uid}`、国家、直属 IB、单数、手数、盈亏、主品种、平均持仓），右侧该组用过的 IP（国家、窗口内客户数、活跃日、桥接标记），**点 IP 切到 Search tab 并预填该 IP**。⚠ 深链底座**现在不存在**：`LoginIPs.tsx` 是非受控 `<Tabs defaultValue="report">`、`grid-cols-4 max-w-2xl` 写死；`SearchTab` 不收 props、不读 URL。要照 RiskMonitor / WindowScan 的 `useSearchParams` 模式把 tab 改受控（`?tab=` 无权限时回落 `report`），`SearchTab` 接受初始搜索词（`?tab=search&q=<ip>`），`grid-cols` 按可见 tab 数算；若 tab 持久化则 `LOGIN_IP_ACTIVE_TAB_V1` 手列进 `UI_STATE_KEYS`。约 +0.5 天。
+1. **工具栏**（`useFilterPersist`，key `LOGIN_IP_TRADE_PROFIT_FILTERS_V1`，并手列进 `view-profiles/manifest.ts` 的 `FILTER_STATE_KEYS`）：窗口预设 7 / 30 / 90 天 + 自定义（自定义绝对区间不持久化）、最少客户数（默认 2）、排除共享出口（默认开，阈值 10）、含一人多户（默认关）。两个「≥ N 客户」下拉的**选项文案自带类目**（`≥ N 客户成组` / `共享出口 ≥ N 客户`），避免并排看成同一个筛选。
+2. **覆盖率横幅是 warn-only**：常态句「本窗口 N 单，M 单无 IP…」已删。横幅只在 `incomplete_logs` / `unreconciled_dates` 非空时出现。coverage 失败不让 tab 失败。
+3. **主表 AG-Grid（一组一行，9 列，盈亏降序）**：组盈亏（红绿）、客户数（一人多户 Badge）、IB 数、账户数、单数、手数、共用 IP、赚钱日/活跃日（`colId: "profitable_ratio"`；活跃日不单列）、主品种+占比（不足 100% 时追加 `· 其他 X%`，API 只给 dominant share）、平均持仓。~~按日盈亏 sparkline~~ 与 ~~单独的活跃日列~~ 已删。`useGridColumnPersist` key `LOGIN_IP_TRADE_PROFIT_GRID_STATE_V1` + `<ColumnVisibilityMenu>`；计算列显式 `colId`；列头解释用 `InfoHeader`；zebra 别用 `hsl(var(--primary))`。一次拉 `page_size=200`。
+4. **详情是右侧 shadcn Sheet**（不是 AG-Grid master/detail，也不是表下方 Card）：点行高亮，桌面从右侧滑入（宽 `min(640px, 92vw)`），手机从底部（`useIsMobile`）。里面**上下两张** shadcn Table：账户明细（CRM 链接），然后是该组用过的 IP（窗口客户数 / 活跃日 / 桥接 列头有 ⓘ；点 IP 跳 `?tab=search&q=<ip>`）。深链底座已落地（`?tab=` 受控，无权限回落 `report`；`LOGIN_IP_ACTIVE_TAB_V1` 在 `UI_STATE_KEYS`）。⚠ 详情请求必须回显列表页全部阈值参数（`group_id` 是参数哈希）。
 5. i18n：`frontend/src/i18n/locales/{en-US,zh-CN}.ts` 的 `loginIpsPage.tabs.tradeProfit` 及各列名；`locales.test.ts` 会比对两边 key。
 6. 空状态：过滤后无集群时显示「本窗口无满足条件的多客户集群」+ 当前阈值，不是空白表。
 
@@ -200,7 +200,7 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 - [x] cs-only 用户调该接口 403（不是 401）；`AUTH_ENABLED=false` 时恒过；`test_app_assembly` 两条 anti-drift 绿；`test_data_scope` 全绿且 ROUTE_SCOPE 未改。——另有真机实测：cs-only 用户（anson.zou）调 `/groups` 返 403。
 - [x] 无 IP 桶在 coverage 里可见，且 groups 的合计 + 无 IP 桶 = 窗口内全部已平仓单。——口径修正：守恒式需要中间项「有 IP 但未成组的 solo 单」，`statistics.window_with_ip_trades` 与 `groups_trades` 就是为此暴露的（292,390 = 62,821 成组 + 229,569 solo；306,231 = 292,390 + 13,841 无 IP）。
 
-**Phase 3**（🚧 2026-09-23 实现，待部署后真机复验）
+**Phase 3**（✅ 2026-09-23 已部署到 prod；cs-only 真机抽查仍空着）
 - [x] 6 位 cs-only 用户看不到 tab，risk 用户与 manager 看得到；`?tab=` 深链无权限时回落 tab 1。——门控矩阵/回落由 `tabs.test.ts` 纯函数测试钉住 + risk 用户真机截图实测；⚠ cs-only 真机未测（dev 无 cs-only 账号，未为此动 users.db），部署后抽一位复核。
 - [x] 过滤器与列状态刷新后保留；`manifest.ts` anti-drift 测试绿。——持久化读取路径真机实测（localStorage 预置 `minClients=10`+阈值 5 → 工具栏正确回显）；写入路径走 `useFilterPersist`/`useGridColumnPersist` 标准 hook；view-profiles 测试全绿。
 - [x] 点 IP 能跳到 Search tab 并出结果。——真机实测 `?tab=search&q=175.5.121.184`：IP 模式 + 120 天预填、自动搜索出 3 行。
@@ -240,6 +240,17 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 6. 覆盖率行里 coverage 端点失败**不**让 tab 失败（`setCoverage(null)`）——它是读者的上下文，不值得陪葬主表。
 7. dev 联调认证：`AUTH_DEV_LOGIN_EMAIL` 已在 dev 容器配好，`POST /api/v1/auth/dev-login` 拿 session cookie 即可 curl 4 个端点（API key 单独不够，dev 的 `AUTH_ENABLED=true`）；无头 Chrome 截图走 CDP `Network.setCookie`（cookie 按 domain 不按 port，`:5173` 的 vite proxy 会转发）。
 8. 全量 `./verify.sh` 绿：pytest 1878 / vitest 284（新增 `tabs.test.ts` 10 + `trade-profit.test.ts` 18；locales 双语比对随 `locales.test.ts` 自动覆盖新 key）/ tsc 0 error。
+
+### Phase 3 UI 改版（2026-09-23，部署前用户拍板，随 `22dd390` 上线）
+
+相对上面计划段的原样（覆盖率常驻一句、11 列含 sparkline、点行在表下方出 Card）：
+
+1. 删「按日盈亏」迷你图和单独的「活跃日」列（11 → 9）。活跃日仍是「赚钱日/活跃日」的分母。
+2. 覆盖率横幅改为只在日志不完整 / 尚未对账时出现。
+3. 两个「≥ N 客户」下拉选项文案各自带上类目。
+4. 主品种占比不足 100% 时显示 `· 其他 X%`。分品种 histogram 要后端加字段，本次没做。
+5. 点行改为 **shadcn Sheet** 从右侧滑出（手机从底部），宽 640px。账户明细在上，使用过的 IP 在下。选中行保持蓝色高亮。
+6. 查询路径不变：只读本地 SQLite 预计算表 + Redis，不碰从库，无轮询。
 
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。

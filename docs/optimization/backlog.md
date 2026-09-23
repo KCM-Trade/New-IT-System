@@ -15,7 +15,7 @@
 | [OPT-0028](./items/OPT-0028-risk-monitor-aggregator-hardening.md) | opt/aggregator-hardening | 2026-07-06 | 等 0041 merge 后开工（依赖测试转绿） |
 | [OPT-0057](./items/OPT-0057-risk-watchlist-copy-rewrite.md) | opt/risk-watchlist-copy-rewrite | 2026-07-25 | 阻塞：待用户在 items/OPT-0057-...-copy-review.md 填新文案后实施 |
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
-| [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | opt/trade-ip-profit-attribution | 2026-09-22 | Phase 1 落库先部署（日志只留 5-7 天）；连边默认值与保留期（120d 原始 + 400d 对账）已拍板 |
+| [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | opt/trade-ip-profit-attribution | 2026-09-22 | Phase 1–3 均已上 prod（2026-09-23）；UI 为右侧 Sheet。commit 尚未合进 main。剩 cs-only 抽查 + Phase 1 时间项 |
 ## ✅ 待领取（Ready）
 
 > AC 已经在 item 文件里定义好了。按 priority + effort + 你的当前心智状态挑一个。
