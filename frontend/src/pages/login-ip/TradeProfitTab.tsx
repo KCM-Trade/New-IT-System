@@ -25,7 +25,12 @@ import {
 } from "react";
 import { apiFetch } from "@/lib/fetch";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, ICellRendererParams } from "ag-grid-community";
+import type {
+  ColDef,
+  GridApi,
+  ICellRendererParams,
+  RowClassParams,
+} from "ag-grid-community";
 import { useI18n } from "@/components/i18n-provider";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
@@ -58,6 +63,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   IconInfoCircle,
   IconRefresh,
@@ -107,60 +117,23 @@ const ACTION_BUTTON_CLASS = "h-9 w-full sm:w-[140px]";
 const linkCls = "text-blue-600 hover:underline dark:text-blue-400";
 
 /**
- * Daily-P&L sparkline. The community edition has no agSparklineCellRenderer
- * (enterprise-only), so this is a 40×16 inline SVG: polyline over the active
- * days, dashed zero baseline, stroke coloured by the group's total P&L.
+ * shadcn-Table header label with an ⓘ tooltip — the plain-Table counterpart
+ * of AG-Grid's InfoHeader (which only works inside a grid). The app shell's
+ * SidebarProvider already provides a TooltipProvider, so no local wrapper.
  */
-function DailySparkline({
-  data,
-}: ICellRendererParams<TradeProfitGroupRow>) {
-  const daily = data?.daily;
-  if (!daily || daily.length === 0) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-  const W = 40;
-  const H = 16;
-  const PAD = 1.5;
-  const values = daily.map((d) => d.profit_usd);
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 0);
-  const span = max - min || 1;
-  const x = (i: number) =>
-    daily.length === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (daily.length - 1);
-  const y = (v: number) => H - PAD - ((v - min) / span) * (H - 2 * PAD);
-  const total = data?.profit_usd ?? 0;
-  const stroke = total > 0 ? "#16a34a" : total < 0 ? "#dc2626" : "#71717a";
-  const zeroY = y(0);
+function ThHint({ label, tip }: { label: string; tip: string }) {
   return (
-    <svg
-      width={W}
-      height={H}
-      viewBox={`0 0 ${W} ${H}`}
-      className="block"
-      aria-hidden
-    >
-      <line
-        x1={0}
-        x2={W}
-        y1={zeroY}
-        y2={zeroY}
-        stroke="#a1a1aa"
-        strokeWidth={0.5}
-        strokeDasharray="2 2"
-      />
-      {daily.length === 1 ? (
-        <circle cx={x(0)} cy={y(values[0])} r={1.5} fill={stroke} />
-      ) : (
-        <polyline
-          points={daily.map((d, i) => `${x(i).toFixed(1)},${y(d.profit_usd).toFixed(1)}`).join(" ")}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={1.2}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      )}
-    </svg>
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <IconInfoCircle className="size-3.5 cursor-help opacity-60 hover:opacity-100" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs text-left text-xs leading-relaxed">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    </span>
   );
 }
 
@@ -395,6 +368,26 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
 
   // ── Grid ─────────────────────────────────────────────────────────────
   const persist = useGridColumnPersist(GRID_STORAGE_KEYS.LOGIN_IP_TRADE_PROFIT);
+  const gridApiRef = useRef<GridApi | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  // Bring the freshly expanded detail section into view (it renders below
+  // the grid, possibly under the fold). "nearest" avoids a jump when the
+  // section is already visible.
+  useEffect(() => {
+    if (!expandedGroupId) return;
+    detailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [expandedGroupId]);
+
+  // Highlight the expanded row. AG-Grid caches row styles, so changing the
+  // selection must force a refresh or the highlight lags one click behind.
+  // The stored api is guarded: a destroyed grid returns undefined instead of
+  // throwing (ui-pitfalls §2.6).
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api || api.isDestroyed()) return;
+    api.refreshCells({ force: true });
+  }, [expandedGroupId]);
 
   const columnDefs = useMemo<ColDef<TradeProfitGroupRow>[]>(
     () => [
@@ -462,11 +455,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
         },
       },
       {
-        headerName: t("loginIpsPage.tradeProfit.colActiveDays"),
-        field: "active_days",
-        width: 95,
-      },
-      {
         headerName: t("loginIpsPage.tradeProfit.colProfitDays"),
         // valueGetter-only computed column → explicit stable colId, or the
         // persisted column state would drift on any column insert/reorder.
@@ -489,15 +477,20 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
       {
         headerName: t("loginIpsPage.tradeProfit.colSymbol"),
         field: "dominant_symbol",
-        width: 120,
+        width: 140,
         cellRenderer: (p: ICellRendererParams<TradeProfitGroupRow>) => {
           if (!p.data?.dominant_symbol) return <span>—</span>;
           const share = Math.round(p.data.dominant_symbol_share * 100);
+          const other = 100 - share;
           return (
             <span>
               {p.data.dominant_symbol}
               <span className="ml-1 text-xs text-muted-foreground">
                 {share}%
+                {/* The API only exposes the dominant share, so the remainder
+                    is shown as one "other" bucket, not a per-symbol split. */}
+                {other > 0 &&
+                  ` · ${t("loginIpsPage.tradeProfit.symbolOther", { pct: other })}`}
               </span>
             </span>
           );
@@ -512,19 +505,6 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
           tooltip: t("loginIpsPage.tradeProfit.colAvgHoldTip"),
         },
         valueFormatter: (p) => fmtHoldMin(p.value),
-      },
-      {
-        headerName: t("loginIpsPage.tradeProfit.colDaily"),
-        // Renderer-only column (no field, no valueGetter) → explicit colId.
-        colId: "daily_sparkline",
-        width: 110,
-        sortable: false,
-        filter: false,
-        headerComponent: InfoHeader,
-        headerComponentParams: {
-          tooltip: t("loginIpsPage.tradeProfit.colDailyTip"),
-        },
-        cellRenderer: DailySparkline,
       },
     ],
     [t],
@@ -585,12 +565,30 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
     [],
   );
 
+  // Blue tint on the expanded row; rgba (not hsl(var(...))) because the
+  // theme variables are oklch (ag-grid-style §3). Returning undefined falls
+  // back to zebra striping for every other row.
+  const getRowStyle = useCallback(
+    (p: RowClassParams<TradeProfitGroupRow>) =>
+      p.data?.group_id === expandedGroupId
+        ? {
+            background: isDark
+              ? "rgba(59,130,246,0.16)"
+              : "rgba(59,130,246,0.10)",
+          }
+        : undefined,
+    [expandedGroupId, isDark],
+  );
+
   // ── Render ───────────────────────────────────────────────────────────
   const showEmpty = shouldShowEmptyState(loading, error, groups.length);
-  const noIpPct =
-    coverage && coverage.total_trades > 0
-      ? ((coverage.no_ip_trades / coverage.total_trades) * 100).toFixed(1)
-      : "0.0";
+  // The coverage banner is warn-only: the routine "N trades, M% without IP"
+  // sentence was noise on every healthy day, so it renders solely when the
+  // window has incomplete journals or unreconciled days (the only states the
+  // reader must act on).
+  const coverageWarnings = coverage
+    ? coverage.incomplete_logs.length > 0 || coverage.unreconciled_dates.length > 0
+    : false;
 
   return (
     <div className="space-y-4">
@@ -721,7 +719,7 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               <SelectContent>
                 {PUBLIC_IP_CLIENTS_OPTIONS.map((n) => (
                   <SelectItem key={n} value={String(n)}>
-                    {t("loginIpsPage.tradeProfit.thresholdClients", {
+                    {t("loginIpsPage.tradeProfit.sharedExitOption", {
                       count: n,
                     })}
                   </SelectItem>
@@ -766,23 +764,14 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
         </div>
       </div>
 
-      {/* Coverage line — how big the no-IP bucket is, so the ranking below
-          is read against the whole window and not as the whole story. */}
-      {coverage && (
+      {/* Coverage warnings — only when the window's data is incomplete. */}
+      {coverage && coverageWarnings && (
         <div
           role="note"
           className="flex items-start gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
         >
           <IconInfoCircle className="mt-0.5 size-4 shrink-0 opacity-90" />
           <div className="leading-snug">
-            <p>
-              {t("loginIpsPage.tradeProfit.coverage", {
-                total: coverage.total_trades.toLocaleString(),
-                noIp: coverage.no_ip_trades.toLocaleString(),
-                pct: noIpPct,
-                profit: fmtUsd(coverage.total_profit_usd),
-              })}
-            </p>
             {coverage.incomplete_logs.length > 0 && (
               <p className="text-amber-600 dark:text-amber-400">
                 {t("loginIpsPage.tradeProfit.coverageIncomplete", {
@@ -864,11 +853,15 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
                   suppressCellFocus
                   enableCellTextSelection
                   getRowId={(p) => p.data.group_id}
+                  getRowStyle={getRowStyle}
                   onRowClicked={onRowClicked}
                   // Compose with the persistence handlers — never spread
                   // gridEventProps (it would replace this grid's own
                   // onGridReady / onSortChanged).
-                  onGridReady={(e) => persist.gridEventProps.onGridReady(e)}
+                  onGridReady={(e) => {
+                    gridApiRef.current = e.api;
+                    persist.gridEventProps.onGridReady(e);
+                  }}
                   onSortChanged={persist.gridEventProps.onSortChanged}
                   onColumnMoved={persist.gridEventProps.onColumnMoved}
                   onColumnVisible={persist.gridEventProps.onColumnVisible}
@@ -886,49 +879,35 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               })}
             </p>
           )}
-          {statistics && !showEmpty && (
-            <p className="text-xs text-muted-foreground">
-              {t("loginIpsPage.tradeProfit.groupsFootnote", {
-                grouped: statistics.groups_trades.toLocaleString(),
-                withIp: statistics.window_with_ip_trades.toLocaleString(),
-              })}
-            </p>
-          )}
-          {/* The three known blind spots, per the OPT-0063 spec — the reader
-              must know what this view CANNOT see. */}
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("loginIpsPage.tradeProfit.blindSpots")}
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* Detail card — community AG-Grid has no master/detail, so the
-          expansion renders as a card below the grid. */}
-      {expandedGroupId && (
-        <Card className="gap-3">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              {t("loginIpsPage.tradeProfit.detailTitle")}
-              {detail?.group.same_client && (
-                <Badge variant="secondary">
-                  {t("loginIpsPage.tradeProfit.sameClientBadge")}
-                </Badge>
-              )}
-              <span className="font-mono text-xs font-normal text-muted-foreground">
-                {expandedGroupId}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto h-8 w-8 p-0"
-                onClick={() => setExpandedGroupId(null)}
-                aria-label={t("loginIpsPage.tradeProfit.close")}
-              >
-                <IconX className="h-4 w-4" />
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          {/* Group detail — expands in place below the grid, inside the same
+              card. Community AG-Grid has no master/detail, and a full-width
+              row would fight user sorting, column filters and pagination, so
+              the expanded row is highlighted (getRowStyle) and the detail
+              renders as a bordered section under the grid. */}
+          {expandedGroupId && (
+            <div ref={detailRef} className="space-y-4 border-t pt-4">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold">
+                  {t("loginIpsPage.tradeProfit.detailTitle")}
+                </h3>
+                {detail?.group.same_client && (
+                  <Badge variant="secondary">
+                    {t("loginIpsPage.tradeProfit.sameClientBadge")}
+                  </Badge>
+                )}
+                <span className="font-mono text-xs text-muted-foreground">
+                  {expandedGroupId}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-8 w-8 p-0"
+                  onClick={() => setExpandedGroupId(null)}
+                  aria-label={t("loginIpsPage.tradeProfit.close")}
+                >
+                  <IconX className="h-4 w-4" />
+                </Button>
+              </div>
             {detailLoading && (
               <p className="text-sm text-muted-foreground">
                 {t("loginIpsPage.common.loading")}
@@ -1084,13 +1063,22 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
                               {t("loginIpsPage.tradeProfit.colCountry")}
                             </TableHead>
                             <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colWindowClients")}
+                              <ThHint
+                                label={t("loginIpsPage.tradeProfit.colWindowClients")}
+                                tip={t("loginIpsPage.tradeProfit.colWindowClientsTip")}
+                              />
                             </TableHead>
                             <TableHead className="text-right">
-                              {t("loginIpsPage.tradeProfit.colActiveDays")}
+                              <ThHint
+                                label={t("loginIpsPage.tradeProfit.colActiveDays")}
+                                tip={t("loginIpsPage.tradeProfit.colIpActiveDaysTip")}
+                              />
                             </TableHead>
                             <TableHead>
-                              {t("loginIpsPage.tradeProfit.colBridge")}
+                              <ThHint
+                                label={t("loginIpsPage.tradeProfit.colBridge")}
+                                tip={t("loginIpsPage.tradeProfit.colBridgeTip")}
+                              />
                             </TableHead>
                           </TableRow>
                         </TableHeader>
@@ -1131,9 +1119,23 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
                 </div>
               </>
             )}
-          </CardContent>
-        </Card>
-      )}
+            </div>
+          )}
+          {statistics && !showEmpty && (
+            <p className="text-xs text-muted-foreground">
+              {t("loginIpsPage.tradeProfit.groupsFootnote", {
+                grouped: statistics.groups_trades.toLocaleString(),
+                withIp: statistics.window_with_ip_trades.toLocaleString(),
+              })}
+            </p>
+          )}
+          {/* The three known blind spots, per the OPT-0063 spec — the reader
+              must know what this view CANNOT see. */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("loginIpsPage.tradeProfit.blindSpots")}
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
