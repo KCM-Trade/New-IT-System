@@ -154,7 +154,11 @@ function ThHint({ label, tip }: { label: string; tip: string }) {
 const SHARED_IP_CHIP_CLS =
   "rounded px-1 py-0.5 bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100";
 
-/** Below-threshold lookup: peers on the same open IP(s) in the window. */
+/**
+ * Lookup result: seed + peers who shared an open IP with the seed.
+ * Amber IPs = used by ≥2 distinct clients among the rows shown.
+ * No extra summary table / cluster-threshold banner — keep the sheet scannable.
+ */
 function TradeProfitLookupBody({
   result,
   onSearchIp,
@@ -163,85 +167,17 @@ function TradeProfitLookupBody({
   onSearchIp: (ip: string) => void;
 }) {
   const { t } = useI18n();
-  // Shared = same open IP used by ≥2 distinct client IDs in the peer table.
-  const sharedByIp = useMemo(
-    () => collectSharedOpenIps(result.peer_accounts),
-    [result.peer_accounts],
-  );
-  const sharedIpSet = useMemo(
-    () => new Set(sharedByIp.keys()),
-    [sharedByIp],
-  );
-  const sharedIpRows = useMemo(
-    () =>
-      [...sharedByIp.entries()].sort((a, b) =>
-        a[0].localeCompare(b[0], undefined, { numeric: true }),
-      ),
-    [sharedByIp],
-  );
+  const sharedIpSet = useMemo(() => {
+    const shared = collectSharedOpenIps(result.peer_accounts);
+    return new Set(shared.keys());
+  }, [result.peer_accounts]);
 
   return (
-    <div className="space-y-4 px-4 pb-6">
-      {result.below_cluster_threshold && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          {t("loginIpsPage.tradeProfit.lookupBelowThreshold", {
-            count: TRADE_PROFIT_IP_MIN_CLIENTS,
-          })}
+    <div className="space-y-3 px-4 pb-6">
+      {sharedIpSet.size > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("loginIpsPage.tradeProfit.lookupSharedIpHint")}
         </p>
-      )}
-      {sharedIpRows.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-sm font-medium">
-            {t("loginIpsPage.tradeProfit.lookupSharedIpsTitle")}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {t("loginIpsPage.tradeProfit.lookupSharedIpsHint")}
-          </p>
-          <div className="overflow-x-auto rounded-xl border bg-card">
-            <Table>
-              <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
-                <TableRow>
-                  <TableHead>
-                    {t("loginIpsPage.tradeProfit.colOpenIps")}
-                  </TableHead>
-                  <TableHead>
-                    {t("loginIpsPage.tradeProfit.colClient")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sharedIpRows.map(([ip, clientIds]) => (
-                  <TableRow key={ip}>
-                    <TableCell className="font-mono text-xs">
-                      <button
-                        type="button"
-                        className={cn(linkCls, SHARED_IP_CHIP_CLS)}
-                        onClick={() => onSearchIp(ip)}
-                      >
-                        {ip}
-                      </button>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {clientIds.map((id, i) => (
-                        <span key={id}>
-                          {i > 0 && ", "}
-                          <a
-                            href={crmUserUrl(id) ?? "#"}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={linkCls}
-                          >
-                            {id}
-                          </a>
-                        </span>
-                      ))}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
       )}
       <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>

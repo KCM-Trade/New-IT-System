@@ -624,10 +624,7 @@ export const zhCN = {
       lookupNotFound: "本窗口内未找到带下单 IP 的匹配记录",
       lookupFailed: "查找失败：{message}",
       lookupTitle: "查找结果",
-      lookupBelowThreshold:
-        "未达列表规则（同一 IP 需 {count} 个及以上不同客户）。以下为同 IP 关联账户，供调查参考。",
-      lookupSharedIpsTitle: "共用下单 IP",
-      lookupSharedIpsHint: "琥珀色标记 = 本窗口内 ≥2 个不同客户共用的下单 IP；右侧为对应 Client ID。",
+      lookupSharedIpHint: "琥珀色 = 结果中 ≥2 个客户共用的下单 IP（排在前面）",
       lookupSharedIpTip: "多个客户共用的下单 IP",
       colOpenIps: "下单 IP",
       lookupSeedBadge: "命中",

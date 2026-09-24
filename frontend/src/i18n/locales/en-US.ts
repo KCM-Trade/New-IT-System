@@ -623,11 +623,8 @@ export const enUS = {
       lookupNotFound: "No trades with an open IP matched in this window",
       lookupFailed: "Lookup failed: {message}",
       lookupTitle: "Lookup result",
-      lookupBelowThreshold:
-        "Below the list rule ({count}+ distinct clients on one IP). Peers on the same open IP(s) are shown for investigation.",
-      lookupSharedIpsTitle: "Shared open IPs",
-      lookupSharedIpsHint:
-        "Amber = open IP used by ≥2 distinct clients in this window; Client IDs on the right.",
+      lookupSharedIpHint:
+        "Amber = open IP shared by ≥2 clients in this result (listed first)",
       lookupSharedIpTip: "Open IP shared by multiple clients",
       colOpenIps: "Open IPs",
       lookupSeedBadge: "Hit",
