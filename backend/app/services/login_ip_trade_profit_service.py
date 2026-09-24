@@ -1195,3 +1195,270 @@ def get_group_detail(group_id: str, p: GroupParams) -> Optional[dict]:
         },
         "statistics": {"from_cache": from_cache},
     }
+
+
+# ---------------------------------------------------------------------------
+# Point lookup (OPT-0063 Option A)
+# ---------------------------------------------------------------------------
+
+# Same thresholds the Trade-IP Profit tab sends on every list/detail call.
+_LOOKUP_GROUP_PARAMS = GroupParams(
+    date_from="",  # filled per call
+    date_to="",
+    min_clients=5,
+    public_ip_clients=1000,
+    include_same_client=False,
+    ip_min_clients=5,
+)
+
+_IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+
+
+def _valid_ipv4(value: str) -> bool:
+    """True when every octet is 0–255 (basic IPv4 shape check)."""
+    if not _IPV4_RE.fullmatch(value):
+        return False
+    return all(0 <= int(octet) <= 255 for octet in value.split("."))
+
+
+def _resolve_lookup_kind(q: str, kind: str) -> tuple[str, Optional[int], Optional[str]]:
+    """Return (query_kind, id_value, ip_value). Raises ValueError on bad input."""
+    q = q.strip()
+    if not q:
+        raise ValueError("q is required")
+
+    if kind == "ip":
+        if not _valid_ipv4(q):
+            raise ValueError("q must be a valid IPv4 address")
+        return "ip", None, q
+    if kind == "id":
+        if not q.isdigit():
+            raise ValueError("q must be a numeric client or account ID")
+        return "id", int(q), None
+
+    # auto
+    if _valid_ipv4(q):
+        return "ip", None, q
+    if q.isdigit():
+        return "id", int(q), None
+    raise ValueError("q must be a numeric client/account ID or an IPv4 address")
+
+
+def _aggregate_lookup_accounts(
+    conn: Any,
+    date_from: str,
+    date_to: str,
+    members: list[tuple[str, int]],
+    *,
+    seed_keys: set[str],
+) -> list[dict]:
+    """Build lookup account rows for the given (server, account_id) pairs."""
+    if not members:
+        return []
+
+    acct_stats: dict[str, dict] = {}
+    acct_symbols: dict[str, Counter] = defaultdict(Counter)
+    acct_ips: dict[str, set[str]] = defaultdict(set)
+
+    for part in _chunks(members, _CHUNK):
+        ph = ",".join("(?,?)" for _ in part)
+        flat = [v for server, aid in part for v in (server, aid)]
+        for r in conn.execute(
+            f"""
+            SELECT server, account_id,
+                   MAX(user_id) AS user_id, MAX(ib_id) AS ib_id,
+                   COUNT(*) AS trades, SUM(profit_usd) AS profit_usd,
+                   SUM(lots) AS lots, SUM(hold_sec) AS hold_sec_sum,
+                   COUNT(DISTINCT close_date) AS active_days
+            FROM trade_ip_pnl
+            WHERE close_date BETWEEN ? AND ? AND open_ip IS NOT NULL
+              AND (server, account_id) IN ({ph})
+            GROUP BY server, account_id
+            """,
+            (date_from, date_to, *flat),
+        ):
+            acct_stats[_account_key(r["server"], r["account_id"])] = dict(r)
+        for r in conn.execute(
+            f"""
+            SELECT server, account_id, symbol, COUNT(*) AS trades
+            FROM trade_ip_pnl
+            WHERE close_date BETWEEN ? AND ? AND open_ip IS NOT NULL
+              AND (server, account_id) IN ({ph})
+            GROUP BY server, account_id, symbol
+            """,
+            (date_from, date_to, *flat),
+        ):
+            acct_symbols[_account_key(r["server"], r["account_id"])][
+                _norm_symbol(r["symbol"])
+            ] += r["trades"]
+        for r in conn.execute(
+            f"""
+            SELECT server, account_id, open_ip
+            FROM trade_ip_pnl
+            WHERE close_date BETWEEN ? AND ? AND open_ip IS NOT NULL
+              AND (server, account_id) IN ({ph})
+            GROUP BY server, account_id, open_ip
+            """,
+            (date_from, date_to, *flat),
+        ):
+            acct_ips[_account_key(r["server"], r["account_id"])].add(r["open_ip"])
+
+    out: list[dict] = []
+    for server, aid in sorted(members):
+        key = _account_key(server, aid)
+        s = acct_stats.get(key)
+        if s is None:
+            continue
+        sym = acct_symbols.get(key, Counter())
+        dom = sym.most_common(1)[0][0] if sym else ""
+        trades = s["trades"] or 0
+        out.append({
+            "account_key": key,
+            "server": server,
+            "account_id": aid,
+            "user_id": s["user_id"],
+            "ib_id": s["ib_id"],
+            "trades": trades,
+            "profit_usd": round(s["profit_usd"] or 0.0, 2),
+            "lots": round(s["lots"] or 0.0, 3),
+            "active_days": s["active_days"],
+            "avg_hold_min": round((s["hold_sec_sum"] or 0) / trades / 60, 1)
+            if trades
+            else 0.0,
+            "dominant_symbol": dom,
+            "open_ips": sorted(acct_ips.get(key, ())),
+            "is_seed": key in seed_keys,
+        })
+    out.sort(key=lambda r: (-r["profit_usd"], r["account_key"]))
+    return out
+
+
+def lookup(
+    date_from: str,
+    date_to: str,
+    q: str,
+    *,
+    kind: str = "auto",
+) -> dict:
+    """Point lookup by client ID, account ID, or open IP within a close-day window.
+
+    Peers are every account that shared any seed IP in the window — even when
+    that set does not meet the >=5-client grouping rule on the ranked list.
+    group_ids is computed under the same fixed thresholds the UI uses.
+    """
+    query_kind, id_value, ip_value = _resolve_lookup_kind(q, kind)
+    matched_as: Optional[list[str]] = None
+    seed_keys: set[str] = set()
+    seed_ips: list[str] = []
+
+    with login_ip_orders_db.get_connection() as conn:
+        if query_kind == "id":
+            assert id_value is not None
+            id_hits = conn.execute(
+                """
+                SELECT DISTINCT server, account_id, user_id
+                FROM trade_ip_pnl
+                WHERE close_date BETWEEN ? AND ? AND open_ip IS NOT NULL
+                  AND (account_id = ? OR user_id = ?)
+                """,
+                (date_from, date_to, id_value, id_value),
+            ).fetchall()
+            if not id_hits:
+                return _empty_lookup_response(q, query_kind, date_from, date_to)
+
+            matched: set[str] = set()
+            members: list[tuple[str, int]] = []
+            for r in id_hits:
+                key = _account_key(r["server"], r["account_id"])
+                seed_keys.add(key)
+                members.append((r["server"], r["account_id"]))
+                if r["account_id"] == id_value:
+                    matched.add("account_id")
+                if r["user_id"] == id_value:
+                    matched.add("user_id")
+            matched_as = sorted(matched)
+
+            ip_rows = conn.execute(
+                f"""
+                SELECT DISTINCT open_ip FROM trade_ip_pnl
+                WHERE close_date BETWEEN ? AND ? AND open_ip IS NOT NULL
+                  AND ({' OR '.join('(server = ? AND account_id = ?)' for _ in members)})
+                """,
+                (
+                    date_from,
+                    date_to,
+                    *[v for server, aid in members for v in (server, aid)],
+                ),
+            ).fetchall()
+            seed_ips = sorted({r["open_ip"] for r in ip_rows})
+        else:
+            assert ip_value is not None
+            seed_ips = [ip_value]
+            peer_rows = conn.execute(
+                """
+                SELECT DISTINCT server, account_id
+                FROM trade_ip_pnl
+                WHERE close_date BETWEEN ? AND ? AND open_ip = ?
+                """,
+                (date_from, date_to, ip_value),
+            ).fetchall()
+            if not peer_rows:
+                return _empty_lookup_response(q, query_kind, date_from, date_to)
+            for r in peer_rows:
+                seed_keys.add(_account_key(r["server"], r["account_id"]))
+
+        # Expand to every account that used any seed IP in the window.
+        peer_members: list[tuple[str, int]] = []
+        for part in _chunks(seed_ips, _CHUNK):
+            ph = ",".join("?" * len(part))
+            for r in conn.execute(
+                f"""
+                SELECT DISTINCT server, account_id
+                FROM trade_ip_pnl
+                WHERE close_date BETWEEN ? AND ? AND open_ip IN ({ph})
+                """,
+                (date_from, date_to, *part),
+            ):
+                peer_members.append((r["server"], r["account_id"]))
+
+        peer_accounts = _aggregate_lookup_accounts(
+            conn, date_from, date_to, peer_members, seed_keys=seed_keys
+        )
+        seed_accounts = [a for a in peer_accounts if a["is_seed"]]
+
+    # Which ranked groups (fixed thresholds) contain any seed account?
+    params = _LOOKUP_GROUP_PARAMS._replace(date_from=date_from, date_to=date_to)
+    groups, _from_cache = get_groups(params)
+    group_ids = [
+        g["group_id"]
+        for g in groups
+        if seed_keys & set(g.get("account_keys") or [])
+    ]
+
+    return {
+        "query": q.strip(),
+        "query_kind": query_kind,
+        "matched_as": matched_as,
+        "window": {"from": date_from, "to": date_to},
+        "group_ids": group_ids,
+        "seed_accounts": seed_accounts,
+        "peer_accounts": peer_accounts,
+        "seed_ips": seed_ips,
+        "below_cluster_threshold": len(group_ids) == 0,
+    }
+
+
+def _empty_lookup_response(
+    q: str, query_kind: str, date_from: str, date_to: str
+) -> dict:
+    return {
+        "query": q.strip(),
+        "query_kind": query_kind,
+        "matched_as": None,
+        "window": {"from": date_from, "to": date_to},
+        "group_ids": [],
+        "seed_accounts": [],
+        "peer_accounts": [],
+        "seed_ips": [],
+        "below_cluster_threshold": True,
+    }

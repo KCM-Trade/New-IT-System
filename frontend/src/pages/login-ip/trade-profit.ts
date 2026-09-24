@@ -91,6 +91,34 @@ export interface TradeProfitNoIpCause {
   profit_usd: number;
 }
 
+export interface TradeProfitLookupAccount {
+  account_key: string;
+  server: string;
+  account_id: number;
+  user_id: number | null;
+  ib_id: number | null;
+  trades: number;
+  profit_usd: number;
+  lots: number;
+  active_days: number;
+  avg_hold_min: number;
+  dominant_symbol: string;
+  open_ips: string[];
+  is_seed: boolean;
+}
+
+export interface TradeProfitLookupResponse {
+  query: string;
+  query_kind: "id" | "ip";
+  matched_as: ("account_id" | "user_id")[] | null;
+  window: { from: string; to: string };
+  group_ids: string[];
+  seed_accounts: TradeProfitLookupAccount[];
+  peer_accounts: TradeProfitLookupAccount[];
+  seed_ips: string[];
+  below_cluster_threshold: boolean;
+}
+
 export interface TradeProfitCoverageResponse {
   date_from: string;
   date_to: string;
@@ -216,6 +244,47 @@ export function buildTradeProfitParams(
     include_same_client: "false",
     ip_min_clients: String(TRADE_PROFIT_IP_MIN_CLIENTS),
   });
+}
+
+// ── Lookup query detection (OPT-0063 Option A) ───────────────────────────
+
+export type TradeProfitQueryKind = "id" | "ip";
+
+/** True when every IPv4 octet is 0–255. */
+export function isValidIpv4(value: string): boolean {
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((p) => {
+    if (!/^\d+$/.test(p)) return false;
+    const n = Number(p);
+    return n >= 0 && n <= 255;
+  });
+}
+
+/**
+ * Detect lookup mode from user input. Returns null when the string is neither
+ * a numeric client/account ID nor a valid IPv4 address.
+ */
+export function detectTradeProfitQueryKind(
+  q: string,
+): TradeProfitQueryKind | null {
+  const trimmed = q.trim();
+  if (!trimmed) return null;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(trimmed) && isValidIpv4(trimmed)) {
+    return "ip";
+  }
+  if (/^\d+$/.test(trimmed)) return "id";
+  return null;
+}
+
+/** Build query params for GET /login-ip/trade-profit/lookup. */
+export function buildTradeProfitLookupParams(
+  window: TradeProfitWindow,
+  q: string,
+): URLSearchParams {
+  const params = buildTradeProfitParams(window);
+  params.set("q", q.trim());
+  return params;
 }
 
 // ── Display helpers ──────────────────────────────────────────────────────

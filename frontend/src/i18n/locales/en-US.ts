@@ -616,6 +616,18 @@ export const enUS = {
       colBridgeTip:
         "Whether this IP directly linked ≥2 member accounts (the grouping evidence); non-bridge = used by a single member and in the group only by transitivity",
       bridgeYes: "bridge",
+      lookupPlaceholder: "Client ID / Account ID / IP",
+      lookupSearch: "Look up",
+      lookupSearching: "Looking up…",
+      lookupInvalid: "Enter a numeric client/account ID or an IPv4 address",
+      lookupNotFound: "No trades with an open IP matched in this window",
+      lookupFailed: "Lookup failed: {message}",
+      lookupTitle: "Lookup result",
+      lookupBelowThreshold:
+        "Below the list rule ({count}+ distinct clients on one IP). Peers on the same open IP(s) are shown for investigation.",
+      lookupSeedIps: "Related IPs: {list}",
+      colOpenIps: "Open IPs",
+      lookupSeedBadge: "Hit",
     },
   },
 

@@ -157,3 +157,39 @@ class TradeProfitCoverageResponse(BaseModel):
     incomplete_logs: List[TradeProfitIncompleteLog]
     # Window days with zero reconciled rows (reconcile never ran for them).
     unreconciled_dates: List[str]
+
+
+# ---------------------------------------------------------------------------
+# /lookup (OPT-0063 Option A — point lookup by client / account / IP)
+# ---------------------------------------------------------------------------
+
+
+class TradeProfitLookupAccount(BaseModel):
+    """One account aggregate in a lookup result (mirrors group detail fields)."""
+
+    account_key: str
+    server: str
+    account_id: int
+    user_id: Optional[int] = None
+    ib_id: Optional[int] = None
+    trades: int
+    profit_usd: float
+    lots: float
+    active_days: int
+    avg_hold_min: float
+    dominant_symbol: str
+    open_ips: List[str]  # distinct open IPs this account used in the window
+    is_seed: bool = False  # True = direct query hit (ID or IP mode)
+
+
+class TradeProfitLookupResponse(BaseModel):
+    query: str
+    query_kind: str  # "id" | "ip"
+    matched_as: Optional[List[str]] = None  # id mode: ["account_id"] / ["user_id"] / both
+    window: dict[str, str]
+    group_ids: List[str]
+    seed_accounts: List[TradeProfitLookupAccount]
+    # Full peer set on the seed IP(s), including seed rows (is_seed marks them).
+    peer_accounts: List[TradeProfitLookupAccount]
+    seed_ips: List[str]
+    below_cluster_threshold: bool

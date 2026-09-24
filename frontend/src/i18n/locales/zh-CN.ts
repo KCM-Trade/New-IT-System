@@ -617,6 +617,18 @@ export const zhCN = {
       colBridgeTip:
         "该 IP 是否直接连起了组内 ≥2 个账户（成组证据）；非桥接 = 只有单个成员用过，靠传递性进组",
       bridgeYes: "桥接",
+      lookupPlaceholder: "客户 ID / 账户 ID / IP",
+      lookupSearch: "查找",
+      lookupSearching: "查找中…",
+      lookupInvalid: "请输入数字客户/账户 ID 或 IPv4 地址",
+      lookupNotFound: "本窗口内未找到带下单 IP 的匹配记录",
+      lookupFailed: "查找失败：{message}",
+      lookupTitle: "查找结果",
+      lookupBelowThreshold:
+        "未达列表规则（同一 IP 需 {count} 个及以上不同客户）。以下为同 IP 关联账户，供调查参考。",
+      lookupSeedIps: "关联 IP：{list}",
+      colOpenIps: "下单 IP",
+      lookupSeedBadge: "命中",
     },
   },
 

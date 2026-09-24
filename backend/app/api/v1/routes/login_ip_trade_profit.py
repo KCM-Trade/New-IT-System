@@ -5,7 +5,7 @@ module page, but THIS prefix is carved out to the `risk` module in
 `core/auth_deps.MODULE_MAP` (longest tuple wins) — the boss-facing mule-cluster
 view is risk-only.
 
-All four endpoints are read-only GETs over the precomputed `trade_ip_pnl`
+All endpoints are read-only GETs over the precomputed `trade_ip_pnl`
 SQLite table (the nightly 08:30 reconcile owns the MySQL slave reads), so
 they are plain `def` — FastAPI runs them in the threadpool and a slow window
 scan cannot stall the event loop. Query-type GETs are never audited (the
@@ -29,6 +29,8 @@ from ....schemas.login_ip_trade_profit import (
     TradeProfitGroupsResponse,
     TradeProfitIpRow,
     TradeProfitIpsResponse,
+    TradeProfitLookupAccount,
+    TradeProfitLookupResponse,
     TradeProfitStatistics,
 )
 from ....services import login_ip_trade_profit_service as svc
@@ -202,3 +204,31 @@ def get_trade_profit_coverage(
     """How much of the window carries an open IP, and why the rest doesn't."""
     date_from, date_to = _window(date_from, date_to)
     return TradeProfitCoverageResponse(**svc.get_coverage(date_from, date_to))
+
+
+@router.get("/lookup", response_model=TradeProfitLookupResponse)
+def lookup_trade_profit(
+    date_from: str = Query(alias="from"),
+    date_to: str = Query(alias="to"),
+    q: str = Query(min_length=1),
+    kind: str = Query(default="auto", pattern="^(auto|id|ip)$"),
+):
+    """Point lookup by client ID, account ID, or open IP (order IP, not login IP).
+
+    When seed accounts already sit inside a ranked group under the fixed
+    >=5-client rule, group_ids carries that id so the UI can open the existing
+    detail sheet. Otherwise peer_accounts lists everyone who shared the seed
+    IP(s) in the window — including sub-threshold clusters.
+    """
+    date_from, date_to = _window(date_from, date_to)
+    try:
+        result = svc.lookup(date_from, date_to, q, kind=kind)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return TradeProfitLookupResponse(
+        **{
+            **result,
+            "seed_accounts": [TradeProfitLookupAccount(**a) for a in result["seed_accounts"]],
+            "peer_accounts": [TradeProfitLookupAccount(**a) for a in result["peer_accounts"]],
+        }
+    )

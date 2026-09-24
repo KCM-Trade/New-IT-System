@@ -35,7 +35,9 @@ import { useI18n } from "@/components/i18n-provider";
 import { useTheme } from "@/components/theme-provider";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -92,8 +94,10 @@ import {
 } from "@/hooks/useGridColumnPersist";
 import { useFilterPersist, readFilterState } from "@/hooks/useFilterPersist";
 import {
+  buildTradeProfitLookupParams,
   buildTradeProfitParams,
   computeTradeProfitWindow,
+  detectTradeProfitQueryKind,
   fmtHoldMin,
   fmtUsd,
   profitColorClass,
@@ -106,6 +110,8 @@ import {
   type TradeProfitGroupDetailResponse,
   type TradeProfitGroupRow,
   type TradeProfitGroupsResponse,
+  type TradeProfitLookupAccount,
+  type TradeProfitLookupResponse,
   type TradeProfitRangePreset,
   type TradeProfitStatistics,
 } from "./trade-profit";
@@ -139,6 +145,134 @@ function ThHint({ label, tip }: { label: string; tip: string }) {
         </TooltipContent>
       </Tooltip>
     </span>
+  );
+}
+
+/** Below-threshold lookup: peers on the same open IP(s) in the window. */
+function TradeProfitLookupBody({
+  result,
+  onSearchIp,
+}: {
+  result: TradeProfitLookupResponse;
+  onSearchIp: (ip: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-4 px-4 pb-6">
+      {result.below_cluster_threshold && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          {t("loginIpsPage.tradeProfit.lookupBelowThreshold", {
+            count: TRADE_PROFIT_IP_MIN_CLIENTS,
+          })}
+        </p>
+      )}
+      {result.seed_ips.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("loginIpsPage.tradeProfit.lookupSeedIps", {
+            list: result.seed_ips.join(", "),
+          })}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-xl border bg-card">
+        <Table>
+          <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+            <TableRow>
+              <TableHead>{t("loginIpsPage.tradeProfit.colAccount")}</TableHead>
+              <TableHead>{t("loginIpsPage.tradeProfit.colClient")}</TableHead>
+              <TableHead>{t("loginIpsPage.tradeProfit.colIb")}</TableHead>
+              <TableHead className="text-right">
+                {t("loginIpsPage.tradeProfit.colTrades")}
+              </TableHead>
+              <TableHead className="text-right">
+                {t("loginIpsPage.tradeProfit.colProfit")}
+              </TableHead>
+              <TableHead>{t("loginIpsPage.tradeProfit.colOpenIps")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {result.peer_accounts.map((a: TradeProfitLookupAccount) => {
+              const accountHref = crmAccountUrl(a.server, a.account_id);
+              return (
+                <TableRow key={a.account_key}>
+                  <TableCell className="font-mono text-sm">
+                    <span className="inline-flex items-center gap-1">
+                      {accountHref ? (
+                        <a
+                          href={accountHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={linkCls}
+                        >
+                          {a.account_key}
+                        </a>
+                      ) : (
+                        a.account_key
+                      )}
+                      {a.is_seed && (
+                        <Badge variant="secondary" className="px-1 py-0 text-[10px]">
+                          {t("loginIpsPage.tradeProfit.lookupSeedBadge")}
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {a.user_id ? (
+                      <a
+                        href={crmUserUrl(a.user_id) ?? "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={linkCls}
+                      >
+                        {a.user_id}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {a.ib_id ? (
+                      <a
+                        href={crmUserUrl(a.ib_id) ?? "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={linkCls}
+                      >
+                        {a.ib_id}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">{a.trades}</TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right font-mono",
+                      profitColorClass(a.profit_usd),
+                    )}
+                  >
+                    {fmtUsd(a.profit_usd)}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {a.open_ips.map((ip, i) => (
+                      <span key={ip}>
+                        {i > 0 && ", "}
+                        <button
+                          type="button"
+                          className={linkCls}
+                          onClick={() => onSearchIp(ip)}
+                        >
+                          {ip}
+                        </button>
+                      </span>
+                    ))}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
 
@@ -427,6 +561,11 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [lookupInput, setLookupInput] = useState("");
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupPeerResult, setLookupPeerResult] =
+    useState<TradeProfitLookupResponse | null>(null);
+  const [lookupSheetOpen, setLookupSheetOpen] = useState(false);
 
   // Collapse the open detail when the query parameters change: group_id
   // hashes (window, thresholds, account list), so after a filter change the
@@ -736,8 +875,57 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
   const onRowClicked = useCallback((e: { data?: TradeProfitGroupRow }) => {
     const id = e.data?.group_id;
     if (!id) return;
+    setLookupSheetOpen(false);
+    setLookupPeerResult(null);
     setExpandedGroupId(id);
   }, []);
+
+  const runLookup = useCallback(async () => {
+    const trimmed = lookupInput.trim();
+    if (!detectTradeProfitQueryKind(trimmed)) {
+      toast.error(t("loginIpsPage.tradeProfit.lookupInvalid"));
+      return;
+    }
+    setLookupLoading(true);
+    try {
+      const params = buildTradeProfitLookupParams(dateWindow, trimmed);
+      const res = await apiFetch(
+        `/api/v1/login-ip/trade-profit/lookup?${params}`,
+      );
+      if (!res.ok) {
+        const body: { detail?: unknown } = await res.json().catch(() => ({}));
+        throw new Error(
+          typeof body?.detail === "string"
+            ? body.detail
+            : `HTTP ${res.status}`,
+        );
+      }
+      const data: TradeProfitLookupResponse = await res.json();
+      const groupId = data.group_ids[0];
+      if (groupId) {
+        setLookupSheetOpen(false);
+        setLookupPeerResult(null);
+        setExpandedGroupId(groupId);
+        return;
+      }
+      if (data.peer_accounts.length > 0) {
+        setExpandedGroupId(null);
+        setLookupPeerResult(data);
+        setLookupSheetOpen(true);
+        return;
+      }
+      toast.message(t("loginIpsPage.tradeProfit.lookupNotFound"));
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      toast.error(
+        t("loginIpsPage.tradeProfit.lookupFailed", {
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    } finally {
+      setLookupLoading(false);
+    }
+  }, [lookupInput, dateWindow, t]);
 
   // Blue tint on the row whose sheet is open. rgba, not hsl(var(...)):
   // theme variables are oklch (ag-grid-style §3). Undefined keeps zebra.
@@ -843,6 +1031,28 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
               </Popover>
             )}
 
+            <div className="flex min-w-0 flex-col gap-2 sm:col-span-2 sm:flex-row">
+              <Input
+                className={cn(FILTER_CONTROL_CLASS, "font-mono")}
+                placeholder={t("loginIpsPage.tradeProfit.lookupPlaceholder")}
+                value={lookupInput}
+                onChange={(e) => setLookupInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void runLookup();
+                }}
+                disabled={lookupLoading || loading}
+                aria-label={t("loginIpsPage.tradeProfit.lookupPlaceholder")}
+              />
+              <Button
+                className={ACTION_BUTTON_CLASS}
+                onClick={() => void runLookup()}
+                disabled={lookupLoading || loading || !lookupInput.trim()}
+              >
+                {lookupLoading
+                  ? t("loginIpsPage.tradeProfit.lookupSearching")
+                  : t("loginIpsPage.tradeProfit.lookupSearch")}
+              </Button>
+            </div>
           </div>
           <p className="text-sm text-muted-foreground">
             {t("loginIpsPage.tradeProfit.rule", {
@@ -1006,6 +1216,35 @@ export function TradeProfitTab({ onSearchIp }: TradeProfitTabProps) {
 
       {/* Same interaction as Risk Monitor → Gap Trade: the row stays put and
           the detail slides in from the right (from the bottom on a phone). */}
+      <Sheet
+        open={lookupSheetOpen}
+        onOpenChange={(open) => {
+          setLookupSheetOpen(open);
+          if (!open) setLookupPeerResult(null);
+        }}
+      >
+        <SheetContent
+          side={isMobile ? "bottom" : "right"}
+          className={cn(
+            "gap-0 overflow-y-auto sm:max-w-none",
+            isMobile ? "h-[85vh] rounded-t-lg" : "w-[min(640px,92vw)]",
+          )}
+        >
+          <SheetHeader className="pr-10">
+            <SheetTitle>{t("loginIpsPage.tradeProfit.lookupTitle")}</SheetTitle>
+            <SheetDescription>
+              {lookupPeerResult?.query ?? ""}
+            </SheetDescription>
+          </SheetHeader>
+          {lookupPeerResult && (
+            <TradeProfitLookupBody
+              result={lookupPeerResult}
+              onSearchIp={onSearchIp}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
+
       <Sheet
         open={expandedGroupId !== null}
         onOpenChange={(open) => {

@@ -7,11 +7,14 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildTradeProfitLookupParams,
   buildTradeProfitParams,
   computeTradeProfitWindow,
+  detectTradeProfitQueryKind,
   fmtHoldMin,
   fmtUsd,
   hkDayShift,
+  isValidIpv4,
   LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
   profitColorClass,
   shouldShowEmptyState,
@@ -139,5 +142,43 @@ describe("display helpers", () => {
 describe("LOGIN_IP_TRADE_PROFIT_FILTERS_KEY", () => {
   it("matches the backend view-profile key pattern (snapshots 422 otherwise)", () => {
     expect(LOGIN_IP_TRADE_PROFIT_FILTERS_KEY).toMatch(/^[A-Z0-9_]+_FILTERS_V\d+$/);
+  });
+});
+
+describe("detectTradeProfitQueryKind", () => {
+  it("detects numeric IDs", () => {
+    expect(detectTradeProfitQueryKind("8522845")).toBe("id");
+    expect(detectTradeProfitQueryKind(" 123 ")).toBe("id");
+  });
+
+  it("detects valid IPv4", () => {
+    expect(detectTradeProfitQueryKind("58.10.224.247")).toBe("ip");
+    expect(detectTradeProfitQueryKind("10.0.0.1")).toBe("ip");
+  });
+
+  it("rejects invalid shapes", () => {
+    expect(detectTradeProfitQueryKind("")).toBeNull();
+    expect(detectTradeProfitQueryKind("abc")).toBeNull();
+    expect(detectTradeProfitQueryKind("999.999.1.1")).toBeNull();
+    expect(detectTradeProfitQueryKind("1.2.3")).toBeNull();
+  });
+});
+
+describe("isValidIpv4", () => {
+  it("validates octet bounds", () => {
+    expect(isValidIpv4("192.168.0.1")).toBe(true);
+    expect(isValidIpv4("256.0.0.1")).toBe(false);
+    expect(isValidIpv4("1.2.3.256")).toBe(false);
+  });
+});
+
+describe("buildTradeProfitLookupParams", () => {
+  it("includes q on top of the fixed threshold params", () => {
+    const p = buildTradeProfitLookupParams(
+      { from: "2026-09-16", to: "2026-09-22" },
+      " 1001 ",
+    );
+    expect(p.get("q")).toBe("1001");
+    expect(p.get("ip_min_clients")).toBe(String(TRADE_PROFIT_IP_MIN_CLIENTS));
   });
 });
