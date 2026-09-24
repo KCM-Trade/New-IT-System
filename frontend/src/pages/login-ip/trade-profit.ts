@@ -287,6 +287,48 @@ export function buildTradeProfitLookupParams(
   return params;
 }
 
+/**
+ * Open IPs used by ≥2 distinct CRM clients in the lookup peer set.
+ * Key = IP, value = sorted client IDs (accounts with null user_id are skipped
+ * for the client count — they cannot prove cross-client sharing).
+ */
+export function collectSharedOpenIps(
+  accounts: ReadonlyArray<Pick<TradeProfitLookupAccount, "user_id" | "open_ips">>,
+): Map<string, number[]> {
+  const clientsByIp = new Map<string, Set<number>>();
+  for (const a of accounts) {
+    if (a.user_id == null) continue;
+    for (const ip of a.open_ips) {
+      let set = clientsByIp.get(ip);
+      if (!set) {
+        set = new Set();
+        clientsByIp.set(ip, set);
+      }
+      set.add(a.user_id);
+    }
+  }
+  const shared = new Map<string, number[]>();
+  for (const [ip, clients] of clientsByIp) {
+    if (clients.size >= 2) {
+      shared.set(ip, [...clients].sort((x, y) => x - y));
+    }
+  }
+  return shared;
+}
+
+/** Put shared IPs first so investigators see the overlap without scrolling. */
+export function sortOpenIpsSharedFirst(
+  ips: readonly string[],
+  shared: ReadonlySet<string>,
+): string[] {
+  return [...ips].sort((a, b) => {
+    const as = shared.has(a) ? 0 : 1;
+    const bs = shared.has(b) ? 0 : 1;
+    if (as !== bs) return as - bs;
+    return a.localeCompare(b);
+  });
+}
+
 // ── Display helpers ──────────────────────────────────────────────────────
 
 /**

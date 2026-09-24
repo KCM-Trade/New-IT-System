@@ -625,7 +625,10 @@ export const enUS = {
       lookupTitle: "Lookup result",
       lookupBelowThreshold:
         "Below the list rule ({count}+ distinct clients on one IP). Peers on the same open IP(s) are shown for investigation.",
-      lookupSeedIps: "Related IPs: {list}",
+      lookupSharedIpsTitle: "Shared open IPs",
+      lookupSharedIpsHint:
+        "Amber = open IP used by ≥2 distinct clients in this window; Client IDs on the right.",
+      lookupSharedIpTip: "Open IP shared by multiple clients",
       colOpenIps: "Open IPs",
       lookupSeedBadge: "Hit",
     },

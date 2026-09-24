@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTradeProfitLookupParams,
   buildTradeProfitParams,
+  collectSharedOpenIps,
   computeTradeProfitWindow,
   detectTradeProfitQueryKind,
   fmtHoldMin,
@@ -18,6 +19,7 @@ import {
   LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
   profitColorClass,
   shouldShowEmptyState,
+  sortOpenIpsSharedFirst,
   TRADE_PROFIT_IP_MIN_CLIENTS,
   TRADE_PROFIT_PUBLIC_IP_CLIENTS,
 } from "./trade-profit";
@@ -180,5 +182,39 @@ describe("buildTradeProfitLookupParams", () => {
     );
     expect(p.get("q")).toBe("1001");
     expect(p.get("ip_min_clients")).toBe(String(TRADE_PROFIT_IP_MIN_CLIENTS));
+  });
+});
+
+describe("collectSharedOpenIps", () => {
+  it("keeps only IPs used by ≥2 distinct clients", () => {
+    const shared = collectSharedOpenIps([
+      { user_id: 104444, open_ips: ["1.1.1.1", "2.2.2.2"] },
+      { user_id: 119346, open_ips: ["1.1.1.1", "3.3.3.3"] },
+      { user_id: 161258, open_ips: ["1.1.1.1", "2.2.2.2"] },
+    ]);
+    expect([...shared.keys()].sort()).toEqual(["1.1.1.1", "2.2.2.2"]);
+    expect(shared.get("1.1.1.1")).toEqual([104444, 119346, 161258]);
+    expect(shared.get("2.2.2.2")).toEqual([104444, 161258]);
+    expect(shared.has("3.3.3.3")).toBe(false);
+  });
+
+  it("ignores accounts with null user_id for client counting", () => {
+    const shared = collectSharedOpenIps([
+      { user_id: 1, open_ips: ["9.9.9.9"] },
+      { user_id: null, open_ips: ["9.9.9.9"] },
+    ]);
+    expect(shared.size).toBe(0);
+  });
+});
+
+describe("sortOpenIpsSharedFirst", () => {
+  it("puts shared IPs first, then sorts alphabetically within each bucket", () => {
+    const shared = new Set(["10.0.0.2", "10.0.0.1"]);
+    expect(
+      sortOpenIpsSharedFirst(
+        ["10.0.0.9", "10.0.0.2", "10.0.0.1", "10.0.0.8"],
+        shared,
+      ),
+    ).toEqual(["10.0.0.1", "10.0.0.2", "10.0.0.8", "10.0.0.9"]);
   });
 });

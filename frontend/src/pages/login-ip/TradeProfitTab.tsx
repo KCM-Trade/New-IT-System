@@ -96,12 +96,14 @@ import { useFilterPersist, readFilterState } from "@/hooks/useFilterPersist";
 import {
   buildTradeProfitLookupParams,
   buildTradeProfitParams,
+  collectSharedOpenIps,
   computeTradeProfitWindow,
   detectTradeProfitQueryKind,
   fmtHoldMin,
   fmtUsd,
   profitColorClass,
   shouldShowEmptyState,
+  sortOpenIpsSharedFirst,
   LOGIN_IP_TRADE_PROFIT_FILTERS_KEY,
   TRADE_PROFIT_FILTER_DEFAULTS,
   TRADE_PROFIT_IP_MIN_CLIENTS,
@@ -148,6 +150,10 @@ function ThHint({ label, tip }: { label: string; tip: string }) {
   );
 }
 
+/** Amber chip for open IPs shared by ≥2 clients in this lookup result. */
+const SHARED_IP_CHIP_CLS =
+  "rounded px-1 py-0.5 bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-100";
+
 /** Below-threshold lookup: peers on the same open IP(s) in the window. */
 function TradeProfitLookupBody({
   result,
@@ -157,6 +163,23 @@ function TradeProfitLookupBody({
   onSearchIp: (ip: string) => void;
 }) {
   const { t } = useI18n();
+  // Shared = same open IP used by ≥2 distinct client IDs in the peer table.
+  const sharedByIp = useMemo(
+    () => collectSharedOpenIps(result.peer_accounts),
+    [result.peer_accounts],
+  );
+  const sharedIpSet = useMemo(
+    () => new Set(sharedByIp.keys()),
+    [sharedByIp],
+  );
+  const sharedIpRows = useMemo(
+    () =>
+      [...sharedByIp.entries()].sort((a, b) =>
+        a[0].localeCompare(b[0], undefined, { numeric: true }),
+      ),
+    [sharedByIp],
+  );
+
   return (
     <div className="space-y-4 px-4 pb-6">
       {result.below_cluster_threshold && (
@@ -166,12 +189,59 @@ function TradeProfitLookupBody({
           })}
         </p>
       )}
-      {result.seed_ips.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {t("loginIpsPage.tradeProfit.lookupSeedIps", {
-            list: result.seed_ips.join(", "),
-          })}
-        </p>
+      {sharedIpRows.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">
+            {t("loginIpsPage.tradeProfit.lookupSharedIpsTitle")}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t("loginIpsPage.tradeProfit.lookupSharedIpsHint")}
+          </p>
+          <div className="overflow-x-auto rounded-xl border bg-card">
+            <Table>
+              <TableHeader className="bg-black [&_th]:font-semibold [&_th]:text-white [&_th:first-child]:rounded-tl-xl [&_th:last-child]:rounded-tr-xl">
+                <TableRow>
+                  <TableHead>
+                    {t("loginIpsPage.tradeProfit.colOpenIps")}
+                  </TableHead>
+                  <TableHead>
+                    {t("loginIpsPage.tradeProfit.colClient")}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sharedIpRows.map(([ip, clientIds]) => (
+                  <TableRow key={ip}>
+                    <TableCell className="font-mono text-xs">
+                      <button
+                        type="button"
+                        className={cn(linkCls, SHARED_IP_CHIP_CLS)}
+                        onClick={() => onSearchIp(ip)}
+                      >
+                        {ip}
+                      </button>
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {clientIds.map((id, i) => (
+                        <span key={id}>
+                          {i > 0 && ", "}
+                          <a
+                            href={crmUserUrl(id) ?? "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={linkCls}
+                          >
+                            {id}
+                          </a>
+                        </span>
+                      ))}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
       )}
       <div className="overflow-x-auto rounded-xl border bg-card">
         <Table>
@@ -192,6 +262,7 @@ function TradeProfitLookupBody({
           <TableBody>
             {result.peer_accounts.map((a: TradeProfitLookupAccount) => {
               const accountHref = crmAccountUrl(a.server, a.account_id);
+              const orderedIps = sortOpenIpsSharedFirst(a.open_ips, sharedIpSet);
               return (
                 <TableRow key={a.account_key}>
                   <TableCell className="font-mono text-sm">
@@ -253,18 +324,29 @@ function TradeProfitLookupBody({
                     {fmtUsd(a.profit_usd)}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {a.open_ips.map((ip, i) => (
-                      <span key={ip}>
-                        {i > 0 && ", "}
-                        <button
-                          type="button"
-                          className={linkCls}
-                          onClick={() => onSearchIp(ip)}
-                        >
-                          {ip}
-                        </button>
-                      </span>
-                    ))}
+                    <span className="inline-flex flex-wrap gap-1">
+                      {orderedIps.map((ip) => {
+                        const shared = sharedIpSet.has(ip);
+                        return (
+                          <button
+                            key={ip}
+                            type="button"
+                            className={cn(
+                              linkCls,
+                              shared && SHARED_IP_CHIP_CLS,
+                            )}
+                            onClick={() => onSearchIp(ip)}
+                            title={
+                              shared
+                                ? t("loginIpsPage.tradeProfit.lookupSharedIpTip")
+                                : undefined
+                            }
+                          >
+                            {ip}
+                          </button>
+                        );
+                      })}
+                    </span>
                   </TableCell>
                 </TableRow>
               );

@@ -626,7 +626,9 @@ export const zhCN = {
       lookupTitle: "查找结果",
       lookupBelowThreshold:
         "未达列表规则（同一 IP 需 {count} 个及以上不同客户）。以下为同 IP 关联账户，供调查参考。",
-      lookupSeedIps: "关联 IP：{list}",
+      lookupSharedIpsTitle: "共用下单 IP",
+      lookupSharedIpsHint: "琥珀色标记 = 本窗口内 ≥2 个不同客户共用的下单 IP；右侧为对应 Client ID。",
+      lookupSharedIpTip: "多个客户共用的下单 IP",
       colOpenIps: "下单 IP",
       lookupSeedBadge: "命中",
     },
