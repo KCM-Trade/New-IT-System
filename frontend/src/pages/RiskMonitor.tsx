@@ -474,9 +474,6 @@ interface AlertsStats {
   event_count: number;
   servers: string[];
   by_rule?: QuickRuleBreakdownItem[] | null;
-  /** Intraday-return /stats extras (OPT-0062); absent on other tabs. */
-  max_peak_return_pct?: number | null;
-  sum_intraday_profit?: number | null;
 }
 
 interface BurstOpenRule {
@@ -9688,36 +9685,6 @@ function IntradayReturnTab({ active }: { active: boolean }) {
             设置
           </Button>
         </div>
-      </div>
-
-      <div className="grid w-full gap-1.5 sm:gap-2 grid-cols-1 sm:grid-cols-3">
-        <SummaryCard
-          label="命中帳戶數"
-          description="當前範圍內去重帳戶"
-          value={stats.suspicious_count}
-          dotColor="bg-violet-500"
-          textColor="text-violet-600 dark:text-violet-400"
-        />
-        <SummaryCard
-          label="峰值收益率最高"
-          description="範圍內單帳戶單日最高峰值"
-          value={stats.max_peak_return_pct ?? 0}
-          valueText={fmtPct(stats.max_peak_return_pct)}
-          dotColor="bg-rose-500"
-          textColor="text-rose-600 dark:text-rose-400"
-        />
-        <SummaryCard
-          label="命中帳戶當日盈利合計"
-          description="範圍內告警行的當日盈利求和（同帳戶命中多檔會重複計）"
-          value={stats.sum_intraday_profit ?? 0}
-          valueText={
-            stats.sum_intraday_profit == null
-              ? "—"
-              : fmtCurrency(stats.sum_intraday_profit)
-          }
-          dotColor="bg-emerald-500"
-          textColor="text-emerald-600 dark:text-emerald-400"
-        />
       </div>
 
       {config && config.rules.length > 0 ? (
