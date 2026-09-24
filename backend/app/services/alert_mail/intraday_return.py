@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .subject import build_subject
+from .subject import build_trade_risk_subject, english_count_tail
 from ...core.sql_helpers import SID_MAP
 from ...core.risk_monitor_db import (
     fetch_intraday_return_alerts_after,
@@ -285,7 +285,12 @@ def build_intraday_return_digest_email(
     accounts are listed per section when present.
     """
     n = len(hits)
-    subject = build_subject("即日高收益 Intraday Return", f"{n} 个账户", test)
+    subject = build_trade_risk_subject(
+        "即日高收益",
+        "Intraday Return",
+        english_count_tail(n, "account"),
+        test=test,
+    )
 
     sections: List[str] = []
     for i, (alert, match) in enumerate(hits):

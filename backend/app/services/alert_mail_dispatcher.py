@@ -70,20 +70,11 @@ from ..core.risk_monitor_db import (
     update_mail_dispatch_cursor,
 )
 from ..core.sql_helpers import SID_MAP
-from .alert_mail.subject import build_subject
+from .alert_mail.subject import build_trade_risk_subject, english_count_tail
 
 logger = logging.getLogger(__name__)
 
 HEDGE_MODULE = "hedge_open"
-
-# Own subject tag instead of the shared "[风控告警]": that tag is on every risk
-# digest, so it separates risk mail from the other automated reports but not
-# the risk sources from each other. This one is per-source, not per-rule — all
-# of rule band 91-100 shares it, so mailbox filters survive new rules.
-# A bilingual "[交易风控 Trade Risk]" department tag leads so the mail is
-# attributable (and filterable) as trade-risk business even for readers who
-# don't recognize the per-source Chinese tag.
-HEDGE_SUBJECT_PREFIX = "[交易风控 Trade Risk] [对冲刷单]"
 
 HKT = ZoneInfo("Asia/Hong_Kong")
 
@@ -617,11 +608,11 @@ def build_hedge_digest_email(
     UTC day (the 60011332/60011333 pairing signal).
     """
     n = len(hits)
-    subject = build_subject(
+    subject = build_trade_risk_subject(
+        "对冲刷单",
         "Hedge Open",
-        f"{n} account{'s' if n != 1 else ''} suspected",
-        test,
-        prefix=HEDGE_SUBJECT_PREFIX,
+        english_count_tail(n, "account", suffix="suspected"),
+        test=test,
     )
 
     sections = "".join(

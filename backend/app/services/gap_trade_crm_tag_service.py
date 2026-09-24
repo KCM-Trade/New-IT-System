@@ -297,12 +297,14 @@ def _process_round(
 
 def build_digest_subject(rows: List[Dict[str, Any]], scan_label: str,
                          live: bool) -> str:
-    """Subject carries counts + a FAILED prefix inbox rules can key on."""
+    """Subject carries counts; failures lead with ``[FAILED]`` for inbox rules."""
+    from .alert_mail.subject import trade_risk_prefix
+
     tagged = sum(1 for r in rows if r["result"] == "tagged")
     failed = sum(1 for r in rows if r["result"] == "failed")
     skipped_cid = sum(1 for r in rows if r["result"] == "skipped_cid")
     dry = sum(1 for r in rows if r["result"] == "dry_run")
-    prefix = "[GAP-TAG FAILED]" if failed or skipped_cid else "[GAP-TAG]"
+    status_prefix = "[FAILED] " if failed or skipped_cid else ""
     mode = "LIVE" if live else "LOG-ONLY"
     parts = [f"{tagged} tagged"]
     if dry:
@@ -311,7 +313,11 @@ def build_digest_subject(rows: List[Dict[str, Any]], scan_label: str,
         parts.append(f"{failed} FAILED")
     if skipped_cid:
         parts.append(f"{skipped_cid} skipped-cid")
-    return f"{prefix} {', '.join(parts)} — {scan_label} ({mode})"
+    # Same two-layer trade-risk prefix as Alert Mail Center digests.
+    return (
+        f"{status_prefix}{trade_risk_prefix('Gap交易')} Gap Trade CRM — "
+        f"{', '.join(parts)} — {scan_label} ({mode})"
+    )
 
 
 def build_digest_html(rows: List[Dict[str, Any]], scan_label: str,

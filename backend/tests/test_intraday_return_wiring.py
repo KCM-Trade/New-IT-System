@@ -350,7 +350,7 @@ def test_mail_template_and_rules_loader(temp_db):
         sibling_map={alert["id"]: ["5-67044209"]},
         test=True,
     )
-    assert subject == "[TEST] [风控告警] 即日高收益 Intraday Return — 1 个账户"
+    assert subject == "[TEST] [交易风控 Trade Risk] [即日高收益] Intraday Return — 1 account"
     assert "67044208" in body and "Intraday Return · 即日高收益" in body
     assert "peak today 957%" in body
     assert "Withdrawal flag" in body and "40.00" in body
@@ -368,7 +368,9 @@ def test_mail_test_send_uses_fallback_sample(temp_db):
     assert result["used_fallback"] is True
     assert result["alert_id"] == ir_mail.TEST_SEND_SAMPLE_ALERT["id"]
     assert len(sent) == 1
-    assert sent[0]["subject"].startswith("[TEST] [风控告警] 即日高收益 Intraday Return")
+    assert sent[0]["subject"].startswith(
+        "[TEST] [交易风控 Trade Risk] [即日高收益] Intraday Return"
+    )
     assert "67044208" in sent[0]["body"]
     assert ir_mail.TEST_SEND_SAMPLE_ALERT["return_pct"] == 957.0  # sample not mutated
 
@@ -387,7 +389,9 @@ def test_mail_dispatch_matches_persisted_alert(temp_db):
     assert sent[0]["to"] == "risk@kcmtrade.com"
     assert "lawrence.li@kohleservices.com" in (sent[0]["cc"] or "")
     assert "67044208" in sent[0]["body"]
-    assert sent[0]["subject"].startswith("[风控告警] 即日高收益 Intraday Return")
+    assert sent[0]["subject"].startswith(
+        "[交易风控 Trade Risk] [即日高收益] Intraday Return"
+    )
 
 
 # ── (i) scheduler job ──────────────────────────────────────────────────────

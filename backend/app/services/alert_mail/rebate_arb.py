@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .subject import build_subject
+from .subject import build_trade_risk_subject, english_count_tail
 from ...core.risk_monitor_db import (
     fetch_rebate_arb_alerts_after,
     fetch_rebate_arb_alerts_by_ids,
@@ -299,7 +299,12 @@ def build_rebate_arb_digest_email(
     so there is no meaningful "sibling account" concept.
     """
     n = len(hits)
-    subject = build_subject("返佣套利 Rebate Arbitrage", f"{n} 个客户", test)
+    subject = build_trade_risk_subject(
+        "返佣套利",
+        "Rebate Arbitrage",
+        english_count_tail(n, "client"),
+        test=test,
+    )
 
     sections = "".join(
         _client_section(i + 1, alert, match)
