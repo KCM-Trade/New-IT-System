@@ -111,8 +111,10 @@ export const zhCN = {
     yes: "是",
     no: "否",
     status: {
-      tokens: "tok",
-      today: "今日",
+      thisTurn: "本轮",
+      todayUsed: "今日已用",
+      turnsUnit: "轮",
+      tooltip: "本轮 = 上一次回答消耗的 tokens 与费用；今日已用 = 你今天的提问轮数 / 每日上限，以及费用 / 每日上限（香港时间零点重置）",
     },
     toolErrors: {
       subject_not_found: "该 ID 不存在。",

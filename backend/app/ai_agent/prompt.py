@@ -7,6 +7,12 @@ CLAUDE.md "Key conventions" and rebate-arbitrage skill §2.2; the tools'
 ``definition`` fields are the runtime copy the model must quote from.
 """
 
+from datetime import datetime, timezone
+from typing import Optional
+from zoneinfo import ZoneInfo
+
+from app.services.rule_intraday_return_service import MT_SERVER_TZ
+
 ANALYST_SYSTEM_PROMPT = """You are the KCM Trade risk-team analyst assistant. You answer questions about
 ONE client or ONE trading account at a time, using only the three certified tools you have.
 This is a Preview: you have no memory of earlier turns, no file, shell, web or SQL capability,
@@ -19,7 +25,9 @@ and no way to change anything. If asked to do any of those, say so plainly in on
    and say that you derived it.
 2. Always state the date range you used, as "YYYY-MM-DD to YYYY-MM-DD (MT server days)". Tools do NOT
    default the range: choose one, tell the user, and offer to change it. If the user gave none, use the
-   last 30 MT server days ending today.
+   last 30 MT server days ending today. "Today" is the date given in the "Today" section at the end of
+   these instructions — never your training data. Resolve every relative expression ("last 90 days",
+   "this month", "yesterday") from that date.
 3. Subjects are exact IDs only: a CRM client id (kind "client_id") or an MT account as "{SID}-{LOGIN}"
    (kind "login_sid", e.g. "1-8522845"). Never guess, pad, or "try nearby" ids. Names and emails cannot
    be looked up in this version — ask the user for the id.
@@ -85,3 +93,30 @@ TOOL_DOCSTRINGS = {
         "`verdict` is always null: signals are not violations. Subject and date_range as in get_client_overview."
     ),
 }
+
+
+def today_block(now_utc: Optional[datetime] = None) -> str:
+    """The dated tail of the system prompt.
+
+    The model has no clock: without this it silently resolves "last 90 days"
+    from its training cut-off (observed 2026-09-27: a 90-day question came
+    back as 2025-05-06 to 2025-08-03). MT server date is the one the tools'
+    day boundaries use (DST-aware, see MT_SERVER_TZ); HK and UTC are given so
+    the model can explain "today" to a user in either frame.
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    mt = now.astimezone(MT_SERVER_TZ)
+    hk = now.astimezone(ZoneInfo("Asia/Hong_Kong"))
+    return (
+        "\n\n## Today\n"
+        f"- MT server date (use this for all date ranges): {mt:%Y-%m-%d} ({mt:%A}), "
+        f"server clock {mt:%H:%M} UTC{mt:%z}\n"
+        f"- Hong Kong: {hk:%Y-%m-%d %H:%M}; UTC: {now:%Y-%m-%d %H:%M}\n"
+    )
+
+
+def system_prompt(now_utc: Optional[datetime] = None) -> str:
+    """ANALYST_SYSTEM_PROMPT + the current date; build one per turn."""
+    return ANALYST_SYSTEM_PROMPT + today_block(now_utc)

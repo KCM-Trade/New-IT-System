@@ -12,7 +12,9 @@ export interface TodayUsage {
 }
 
 /**
- * Footer status line: `gpt-5.6-terra · 12.3k tok · $0.02 · 今日 7/100`.
+ * Status line: `gpt-5.6-terra · 本轮 12.3k tokens · $0.02 · 今日已用 7/100 轮 · $0.28/$20.00`.
+ * "本轮" = the last completed answer; "今日已用" = this person's turns and
+ * spend against the daily quota (02 §6), reset at HK midnight.
  *
  * Tertiary information by design (docs/ai-agent/02 §6): it answers "what did
  * that just cost me and how much is left today" without competing with the
@@ -30,14 +32,19 @@ export function AiStatusBar({
   today: TodayUsage | null
 }) {
   const { t } = useI18n()
-  const turnTokens = turnUsage ? turnUsage.input_tokens + turnUsage.output_tokens : null
 
+  // Before the first turn there is nothing to say about "this turn", so say
+  // nothing rather than printing dashes the reader has to decode.
   const parts: string[] = [model]
-  parts.push(turnTokens === null ? `— ${t("ai.status.tokens")}` : `${formatTokens(turnTokens)} ${t("ai.status.tokens")}`)
-  parts.push(turnUsage?.cost_usd == null ? "$—" : formatUsd(turnUsage.cost_usd))
+  if (turnUsage) {
+    const cost = turnUsage.cost_usd == null ? "" : ` · ${formatUsd(turnUsage.cost_usd)}`
+    parts.push(
+      `${t("ai.status.thisTurn")} ${formatTokens(turnUsage.input_tokens + turnUsage.output_tokens)} tokens${cost}`,
+    )
+  }
   if (today) {
     parts.push(
-      `${t("ai.status.today")} ${today.turns}/${today.turns_limit} · ${formatUsd(today.cost_usd)}/${formatUsd(today.cost_limit_usd)}`,
+      `${t("ai.status.todayUsed")} ${today.turns}/${today.turns_limit} ${t("ai.status.turnsUnit")} · ${formatUsd(today.cost_usd)}/${formatUsd(today.cost_limit_usd)}`,
     )
   }
 
@@ -45,6 +52,7 @@ export function AiStatusBar({
     <div
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
       aria-live="polite"
+      title={t("ai.status.tooltip")}
     >
       {parts.map((p, i) => (
         <span key={i} className="flex items-center gap-2">

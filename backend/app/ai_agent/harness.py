@@ -36,7 +36,7 @@ from agent_framework.openai import OpenAIChatClient
 
 from app.core.logging_config import get_logger
 
-from .prompt import ANALYST_SYSTEM_PROMPT, TOOL_DOCSTRINGS
+from .prompt import TOOL_DOCSTRINGS, system_prompt
 from .tools import TOOL_IMPLS, CallerCtx
 
 logger = get_logger(__name__)
@@ -161,7 +161,7 @@ async def run_turn(ctx: CallerCtx, message: str, model: str) -> AsyncIterator[tu
     agent = Agent(
         client=get_client(model),
         name="risk-analyst",
-        instructions=ANALYST_SYSTEM_PROMPT,
+        instructions=system_prompt(),
         tools=build_tools(ctx, emit),
     )
     session = AgentSession()

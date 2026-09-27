@@ -102,8 +102,10 @@ export const enUS = {
     yes: "Yes",
     no: "No",
     status: {
-      tokens: "tok",
-      today: "Today",
+      thisTurn: "This turn",
+      todayUsed: "Today",
+      turnsUnit: "turns",
+      tooltip: "This turn = tokens and cost of the last answer; Today = your turns / daily limit and spend / daily limit (resets at midnight Hong Kong time)",
     },
     toolErrors: {
       subject_not_found: "That ID does not exist.",
