@@ -67,10 +67,10 @@ risk team 要一个登录后按人隔离的分析 agent：问「客户 123456 �
 | §2.5 信封 | ✅ | `definition` + `source.certified=true` + `scope.cids_applied` + `truncated` 每次都带 |
 | §2.6 错误码 | ✅+ | 六个都有；**新增** `invalid_argument`（格式错） |
 | §2.7 上限 | ✅ | 366 / 200 行 / 500 告警 / MySQL 5s·20s·15s / 单工具 25s |
-| §3.1 overview | ⚠ | `net_gain_definition` 用服务真实 STRICT 公式；账户实时 `mt4_users` 而非契约点名的 `client_pnl_service.get_client_accounts`（ETL 快照、`credit` 恒 0、无 sid/cent/regdate）——**建议回填进 02** |
+| §3.1 overview | ✅ | `net_gain_definition` 用服务真实 STRICT 公式；账户实时 `mt4_users`（契约原点名的 `client_pnl_service.get_client_accounts` 是 ETL 快照、`credit` 恒 0）——**02 §3.1 已于 09-27 回填** |
 | §3.2 trade_activity | ✅ | 新 `trade_activity_service.by_subject`，口径 helper 全部 import `window_scan_service` |
 | §3.3 risk_signals | ⚠ | `verdict` 恒 null ✅；`severity` 恒 null（源无列）；`days_cooccur` null（源无共现天数）；共用 IP 截最近 30 天；对端按 scope 过滤 + `peers_masked_by_scope` ✅；IP /24 ✅ |
-| §4.1 `/ai/turn` | ⚠ | POST + SSE ✅、免 API key ✅、`async def` + `to_thread` ✅；前端用 `apiFetch` 流式读而非 `EventSource`（做不到 POST，用户拍板 A） |
+| §4.1 `/ai/turn` | ✅ | POST + SSE、免 API key、`async def` + `to_thread`；前端 `apiFetch` 流式读（`EventSource` 做不到 POST，用户拍板 A，**02 §4.1 已回填**） |
 | §4.2 内部接口 | ✅ | `X-Internal-Token` compare_digest、无宿主端口、身份整体传、每请求 `Agent`+`AgentSession`、只三个工具 |
 | §4.3 事件 | ✅+ | 七种事件；`tool_done` 失败带 `error_code`；`usage.cost_usd` 由主 API 填 |
 | §5 审计 | ✅ | 每轮一行含失败，`finally` 写；`audit_deferred` 机制；未进 `AUDIT_EXEMPT_ROUTES`；`audit-log-design.md` 已加行 |
