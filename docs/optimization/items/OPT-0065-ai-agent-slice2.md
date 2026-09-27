@@ -1,7 +1,7 @@
 ---
 id: OPT-0065
 title: AI 分析 agent 第二刀 —— 会话记忆（MAF session blob 落库）+ `ai` 进数据范围 + `run_sql` 未认证逃生口 + 群体级受信工具（`rank_accounts` / `get_economic_calendar`）
-status: ready
+status: wip
 priority: P1
 area: mixed
 effort: XL

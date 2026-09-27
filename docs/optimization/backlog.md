@@ -17,13 +17,13 @@
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
 | [OPT-0064](./items/OPT-0064-ai-agent-slice1.md) | main（原 feat/ai-agent-slice1） | 2026-09-27 | AI 分析 agent 第一刀 **已上 prod 09-27**（`ac21437`，回滚 `pre-ai-slice1-20260927`）；UI 二轮 + prompt 日期 + PG `ai_agent_ro` **09-27 15:44 已上**（回滚 `pre-ai-ui2-20260927`）；MySQL `ai_agent_ro` 用户拍板不建（run_sql 时重议）；第二刀已另 file 为 OPT-0065 |
 | [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | main（原 opt/trade-ip-profit-attribution） | 2026-09-22 | Phase 1–3 + 定点查找（2026-09-24 `78882c0`…`16cc5d3`）均在 main/prod。列表固定「同 IP ≥5 客户」；lookup = Client/账户/开仓 IP → peers + 琥珀色共用 IP。剩 cs-only 抽查 + Phase 1 时间项（可选） |
+| [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | feat/ai-agent-slice2 | 2026-09-27 | AI 分析 agent 第二刀：①会话记忆 → ②`ai` 进数据范围 → ③`run_sql`（共享 `readonly` + AST 加固）→ ④`rank_accounts` + `get_economic_calendar`；每项独立 commit 可分开上线；SSOT `docs/ai-agent/`（02 §8–§13 / 05 §6） |
 ## ✅ 待领取（Ready）
 
 > AC 已经在 item 文件里定义好了。按 priority + effort + 你的当前心智状态挑一个。
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
-| [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | P1 | mixed | XL | AI 分析 agent 第二刀：会话记忆（session blob 落库）→ `ai` 进数据范围 → `run_sql` 未认证逃生口（共享 `readonly` + AST 加固，账号前置已取消）→ `rank_accounts` + `get_economic_calendar`；SSOT `docs/ai-agent/`（03 给人看 / 02 §8–§13 / 05 §6），分支 `feat/ai-agent-slice2` |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
 | [OPT-0044](./items/OPT-0044-alert-mail-hardening.md) | P2 | backend | M | 告警邮件中心 hardening：发送移出扫描锁 / digest 渲染上限 / digest UNIQUE 认领 / 注册表 dataclass 化 |
