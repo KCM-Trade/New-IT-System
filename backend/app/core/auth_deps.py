@@ -282,6 +282,15 @@ MODULE_MAP: dict[tuple[str, ...], ModulePolicy] = {
     ("aggregate",): "risk",      # only caller is the Profit page
     ("client-pnl",): "risk",     # dead endpoint, classified rather than deleted
     ("etl",): "risk",            # dead endpoint, classified rather than deleted
+    # ── ai (OPT-0064, 2026-09-27) ────────────────────────────────────────────
+    # /api/v1/ai/** — the AI analyst agent. A plain string, not a frozenset:
+    # nothing here is shared with another page. Brand-new capability, so the
+    # live users table was NOT backfilled (02 §1.2: holders of ["*"] get it
+    # automatically, explicit lists get it when a manager ticks it). It is
+    # deliberately absent from data_scope.SCOPED_MODULES until slice 2 (02
+    # §1.3): a restricted (country-scoped) caller who is granted `ai` today is
+    # refused by enforce_data_scope_coverage — loudly, not leaked to.
+    ("ai",): "ai",
 }
 
 # `other` is a real module with zero backend routes — /template is a

@@ -737,7 +737,9 @@ def test_modules_endpoint_is_the_catalogue_the_checkboxes_render_from(client):
     sid = _mint(MANAGER)
 
     data = client.get(f"{ADMIN}/modules", headers=_bearer(sid)).json()["data"]
-    assert [m["key"] for m in data] == ["dashboard", "cs", "data", "risk", "other"]
+    # `ai` joined on 2026-09-27 (OPT-0064) and is last: a brand-new capability
+    # that is never backfilled, so it belongs after the department groups.
+    assert [m["key"] for m in data] == ["dashboard", "cs", "data", "risk", "other", "ai"]
     assert all(m["label_en"] and m["label_zh"] for m in data)
 
 

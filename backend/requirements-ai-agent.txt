@@ -1,0 +1,5 @@
+# Extra layer for the ai-agent container (OPT-0064). The base requirements.txt
+# is installed first so the certified tools can import app.services unchanged.
+agent-framework-openai==1.14.4
+agent-framework-core==1.19.0
+httpx>=0.28,<1

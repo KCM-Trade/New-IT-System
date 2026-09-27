@@ -669,6 +669,21 @@ _ACTIVITY_STATUS_CASE = """
             ELSE 'no_fund'
         END"""
 
+
+def activity_status_case(asof_expr: str = "current_date") -> str:
+    """The activity-status CASE with its "today" anchored to ``asof_expr``.
+
+    The constant above is written against ``current_date`` because the
+    watchlist evaluates "now". A caller that must evaluate the waterfall as of
+    another day (the AI tools, which report the status at the END of the
+    requested date range — OPT-0064) passes a SQL expression such as
+    ``"%(asof)s::date"``. The substitution lives HERE, next to the constant,
+    so the five ``current_date`` sites can never be edited without this
+    function seeing the same text — a ``.replace`` in a distant module would
+    silently miss a renamed anchor.
+    """
+    return _ACTIVITY_STATUS_CASE.replace("current_date", asof_expr)
+
 # The five user_profile boolean flags are ALL parameterized filters
 # (crm_true, see _activity_where): the former hard-coded universe WHERE
 # (is_lead = FALSE AND is_all_demo = FALSE) is gone — checkbox state maps

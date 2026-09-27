@@ -2,6 +2,9 @@ __pycache__
 *.pyc
 .git
 .env
+# Every dotenv variant: .env.ai-agent holds the Azure OpenAI key and COPY . /app
+# would otherwise bake it into both image layers (OPT-0064).
+.env.*
 logs
 logs-dev
 logs-prod

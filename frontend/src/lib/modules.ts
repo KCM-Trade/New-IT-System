@@ -24,8 +24,8 @@
  * if `App.tsx` grows a route that is not in it.
  */
 
-/** The five grantable modules. Mirrors MODULE_KEYS in backend schemas/admin.py. */
-export const MODULE_KEYS = ["dashboard", "cs", "data", "risk", "other"] as const
+/** The six grantable modules. Mirrors MODULE_KEYS in backend schemas/admin.py. */
+export const MODULE_KEYS = ["dashboard", "cs", "data", "risk", "other", "ai"] as const
 export type ModuleKey = (typeof MODULE_KEYS)[number]
 
 /**
@@ -133,6 +133,13 @@ export const PAGE_POLICIES: Record<string, PagePolicy> = {
 
   // ── other ──────────────────────────────────────────────────────────────────
   "/template": "other",
+
+  // ── ai ─────────────────────────────────────────────────────────────────────
+  // The risk-team analyst agent (OPT-0064, contract docs/ai-agent/02-contracts.md
+  // §1). A brand-new capability, not a page carved out of an existing group, so
+  // nobody's grant is backfilled: `["*"]` holders get it automatically, everyone
+  // else is ticked by a manager in /cfg/managers.
+  "/ai/assistant": "ai",
 
   // ── manager only ───────────────────────────────────────────────────────────
   "/cfg/managers": MANAGER,

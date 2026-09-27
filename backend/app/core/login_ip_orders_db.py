@@ -184,6 +184,21 @@ def get_connection():
         conn.close()
 
 
+def open_readonly() -> sqlite3.Connection:
+    """A read-only (``mode=ro``) connection for a process that must not write.
+
+    Same shape and reason as ``risk_monitor_db.open_readonly``: the ai-agent
+    container reads this file through a read-only mount, where
+    ``get_connection()`` would fail on its ``journal_mode=WAL`` pragma. No
+    pragma that writes, never committed; the WAL sidecars it needs are kept
+    alive by the main API's ``core/sqlite_wal_keepalive.py``. Caller closes.
+    """
+    conn = sqlite3.connect(f"file:{_DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def init_login_ip_orders_db() -> None:
     """Create tables + indexes on first run. Safe to call repeatedly."""
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)

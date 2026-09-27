@@ -22,6 +22,9 @@ __pycache__
 *.json
 *.svg
 *.txt
+# The ai-agent image's pip layer (OPT-0064); `*.txt` above would otherwise
+# drop it from every clean clone and break `COPY requirements-ai-agent.txt`.
+!backend/requirements-ai-agent.txt
 frontend/public/profit_last_refresh.txt
 *.csv
 *.xlsx
@@ -96,3 +99,6 @@ backend/scripts/zipcode_set_by_idlist.py
 # per-file form only ignored the 2026-06-04 run and leaked every later one.
 backend/scripts/logs/*.jsonl
 .local-backup/
+
+# ai-agent Azure OpenAI credentials (IT-owned resource), see docs/ai-agent/04-api-access.md
+.env.ai-agent

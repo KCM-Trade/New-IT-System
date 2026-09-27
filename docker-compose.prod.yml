@@ -118,6 +118,9 @@ services:
       # ⚠ A listed account WILL show up in real alerts/stats — that's intended.
       # 5-60000017 (NAME='test-acc') = risk team's leverage-abuse validation acct.
       - RISK_MONITOR_FORCE_INCLUDE_LOGINSIDS=5-60000017
+      # OPT-0064 AI analyst agent relay target + shared secret (root .env).
+      - AI_AGENT_URL=http://ai-agent:8010
+      - AI_AGENT_INTERNAL_TOKEN=${AI_AGENT_INTERNAL_TOKEN:?AI_AGENT_INTERNAL_TOKEN must be set in backend/.env (dev) / .env (prod)}
     restart: unless-stopped
     depends_on:
       - redis-prod
@@ -125,6 +128,71 @@ services:
       - ./backend/logs-prod:/app/logs
       - ./backend/logs_login_ip:/app/logs_login_ip
       - ./backend/data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        compress: "true"
+
+  # OPT-0064: the AI analyst agent. Same shape as backend/docker-compose.dev.yml
+  # (read that service's comment block for the why); differences are only the
+  # names and paths. No `ports:` — reachable as http://ai-agent:8010 only.
+  #
+  # ⚠ Prod substitution reads the ROOT .env (this file's project dir). It
+  # already carries DB_*, MYSQL_*, POSTGRES_*, RISK_CASES_PG_* and
+  # AI_AGENT_INTERNAL_TOKEN. Before the first prod deploy it must ALSO gain:
+  #   FXBACK_DB_NAME          (no code default; the api gets it from backend/.env)
+  #   MYSQL_DATABASE_FXBACKOFFICE (defaults to `fxbackoffice` in config.py — the
+  #                            `:-` below matches that default)
+  # DB_PORT / DB_CHARSET / MYSQL_PORT / POSTGRES_PORT / POSTGRES_DBNAME_MT5
+  # fall back to the same defaults config.py / client_pnl_service.py use.
+  #
+  # TODO(ai_agent_ro): see the dev file — until AI_AGENT_DB_USER/PASSWORD and
+  # AI_AGENT_PG_USER/PASSWORD exist in the root .env, the fallbacks reuse the
+  # api's shared account.
+  ai-agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ai-agent
+    container_name: new-it-ai-agent-prod
+    command: uvicorn app.ai_agent.server:app --host 0.0.0.0 --port 8010 --no-server-header
+    env_file:
+      - ./backend/.env.ai-agent
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Hong_Kong
+      - REDIS_HOST=redis-prod
+      - REDIS_PORT=6379
+      - AI_AGENT_INTERNAL_TOKEN=${AI_AGENT_INTERNAL_TOKEN:?AI_AGENT_INTERNAL_TOKEN must be set in backend/.env (dev) / .env (prod)}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_CHARSET=${DB_CHARSET:-utf8mb4}
+      - DB_USER=${AI_AGENT_DB_USER:-${DB_USER}}
+      - DB_PASSWORD=${AI_AGENT_DB_PASSWORD:-${DB_PASSWORD}}
+      - FXBACK_DB_NAME=${FXBACK_DB_NAME}
+      - MYSQL_DATABASE_FXBACKOFFICE=${MYSQL_DATABASE_FXBACKOFFICE:-fxbackoffice}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${AI_AGENT_DB_USER:-${MYSQL_USER}}
+      - MYSQL_PASSWORD=${AI_AGENT_DB_PASSWORD:-${MYSQL_PASSWORD}}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DBNAME=${POSTGRES_DBNAME}
+      - POSTGRES_DBNAME_MT5=${POSTGRES_DBNAME_MT5:-MT5_ETL}
+      - POSTGRES_USER=${AI_AGENT_PG_USER:-${POSTGRES_USER}}
+      - POSTGRES_PASSWORD=${AI_AGENT_PG_PASSWORD:-${POSTGRES_PASSWORD}}
+      - RISK_CASES_PG_DBNAME=${RISK_CASES_PG_DBNAME}
+      - RISK_CASES_PG_USER=${AI_AGENT_PG_USER:-${RISK_CASES_PG_USER}}
+      - RISK_CASES_PG_PASSWORD=${AI_AGENT_PG_PASSWORD:-${RISK_CASES_PG_PASSWORD}}
+    volumes:
+      # Read-only: alerts (risk_monitor.db) + shared-IP lookups
+      # (login_ip_orders.db). The agent never writes local state.
+      - ./backend/data:/app/data:ro
+    restart: unless-stopped
+    depends_on:
+      - redis-prod
     logging:
       driver: "json-file"
       options:

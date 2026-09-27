@@ -35,6 +35,8 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+
+from app.core.sse import SSE_HEADERS, SSE_KEEPALIVE_SECONDS, SSE_PING
 from pydantic import BaseModel
 
 from ....core.alerts_pubsub import subscribe as sse_subscribe
@@ -216,9 +218,9 @@ def _parse_iso_utc(value: str) -> datetime:
 
 # ── GET /alerts/stream — OPT-0013 SSE push ────────────────
 
-# Keepalive ping interval. Cloudflare Tunnel / nginx tend to drop idle
-# long connections around 60s; 15s gives a wide safety margin.
-_SSE_KEEPALIVE_SEC = 15
+# Keepalive ping interval — the shared figure in core/sse.py (Cloudflare
+# Tunnel / nginx drop idle long connections around 60s).
+_SSE_KEEPALIVE_SEC = SSE_KEEPALIVE_SECONDS
 
 
 @router.get("/alerts/stream")
@@ -260,7 +262,7 @@ async def alerts_stream(request: Request):
                     )
                     yield f"data: {json.dumps(event, default=str)}\n\n".encode("utf-8")
                 except asyncio.TimeoutError:
-                    yield b": ping\n\n"
+                    yield SSE_PING
                 except StopAsyncIteration:
                     break
         finally:
@@ -271,12 +273,9 @@ async def alerts_stream(request: Request):
     return StreamingResponse(
         _event_gen(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            # Disable nginx response buffering for SSE streams
-            "X-Accel-Buffering": "no",
-        },
+        # Shared with the AI streams: includes X-Accel-Buffering: no so nginx
+        # passes events through instead of buffering them.
+        headers=SSE_HEADERS,
     )
 
 

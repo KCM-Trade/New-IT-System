@@ -1408,6 +1408,29 @@ def get_risk_monitor_db():
         conn.close()
 
 
+def open_readonly() -> sqlite3.Connection:
+    """A read-only connection (``mode=ro``) for a process that must not write.
+
+    The ai-agent container (OPT-0064) reads this file through a ``:ro`` bind
+    mount of ``backend/data``. ``get_risk_monitor_db()`` cannot be used there:
+    ``_apply_pragmas`` sets ``journal_mode = WAL`` (a write on a non-WAL file)
+    and the context manager commits on exit. This connection applies no
+    pragma that could write and is never committed; SQLite refuses any
+    statement that would modify the file.
+
+    A WAL reader still needs the ``-wal`` / ``-shm`` sidecars to exist — it can
+    open them read-only but cannot create them on a read-only mount. The main
+    API keeps them alive with ``core/sqlite_wal_keepalive.py``; without that
+    the open below fails with "unable to open database file".
+
+    The caller owns the connection and closes it.
+    """
+    conn = sqlite3.connect(f"file:{_DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    conn.execute("PRAGMA busy_timeout = 5000")  # read-only pragma, safe on ro
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 # ── Config helpers ─────────────────────────────────────────
 
 def load_config() -> dict[str, Any]:
@@ -2491,8 +2514,13 @@ def _build_alert_filters(
     zipcode: str | None,
     time_field: str = "scanned_at",
     leverage: list[int] | None = None,
+    logins: list[int] | None = None,
 ) -> tuple[str, list[Any]]:
     """Build a shared WHERE clause + params list for alert_events queries.
+
+    ``logins`` is the IN-list form of ``login`` (one client's accounts on one
+    server, OPT-0064 AI tools). The two are alternatives: passing both is a
+    ValueError rather than a silent AND that could only ever match one row.
 
     Extracted so paginated, streaming, and stats queries stay in sync —
     any new filter only needs to be added here once.
@@ -2521,9 +2549,15 @@ def _build_alert_filters(
     if server:
         where.append("ae.server = ?")
         params.append(server)
+    if login is not None and logins:
+        raise ValueError("pass either login or logins, not both")
     if login is not None:
         where.append("ae.login = ?")
         params.append(login)
+    if logins:
+        placeholders = ", ".join(["?"] * len(logins))
+        where.append(f"ae.login IN ({placeholders})")
+        params.extend(int(v) for v in logins)
     if symbol:
         where.append("ae.symbol = ?")
         params.append(symbol)
@@ -2753,12 +2787,20 @@ def query_alert_events(
     sort_order: str | None = None,
     time_field: str = "scanned_at",
     leverage: list[int] | None = None,
+    *,
+    logins: list[int] | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[list[dict], int]:
     """Query alert events by time range + optional filters.
 
     Args:
         since / until: UTC ISO8601 strings (inclusive / exclusive).
         server / login / symbol / rule_id: optional equality filters.
+        logins: IN-list alternative to ``login`` (not both).
+        conn: an already-open connection to use instead of opening one —
+            the ai-agent container passes ``open_readonly()`` because the
+            default connection path writes (WAL pragma + commit) and its data
+            mount is read-only. The caller keeps ownership of ``conn``.
         zipcode: substring match (`%x%`), case-insensitive. NULLs never
             match so rows without CRM zipcode are silently excluded
             when this filter is active.
@@ -2774,17 +2816,16 @@ def query_alert_events(
     """
     where_sql, params = _build_alert_filters(
         since, until, server, login, symbol, rule_id, rule_id_min, rule_id_max, zipcode,
-        time_field=time_field, leverage=leverage,
+        time_field=time_field, leverage=leverage, logins=logins,
     )
     order_sql = _resolve_alert_order(sort_by, sort_order)
 
-    with get_risk_monitor_db() as conn:
-        total = conn.execute(
+    def _run(c: sqlite3.Connection) -> tuple[list[dict], int]:
+        total = c.execute(
             f"SELECT COUNT(*) {_ALERT_FROM_CLAUSE} WHERE {where_sql}",
             params,
         ).fetchone()[0]
-
-        rows = conn.execute(
+        rows = c.execute(
             f"""
             SELECT {_ALERT_SELECT_SQL}
             {_ALERT_FROM_CLAUSE}
@@ -2794,8 +2835,47 @@ def query_alert_events(
             """,
             params + [limit, offset],
         ).fetchall()
+        return [_row_to_alert_dict(r) for r in rows], total
 
-    return [_row_to_alert_dict(r) for r in rows], total
+    if conn is not None:
+        return _run(conn)
+    with get_risk_monitor_db() as own:
+        return _run(own)
+
+
+def count_alert_events_by_rule(
+    since: str,
+    until: str,
+    server: str | None = None,
+    *,
+    logins: list[int] | None = None,
+    time_field: str = "scanned_at",
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, int]:
+    """``{rule_id: count}`` over the SAME filter as ``query_alert_events``.
+
+    Exists so a capped page (``limit``) can still be accompanied by full
+    per-rule counts — 02-contracts.md §3.3 wants ``alerts_by_rule`` unaffected
+    by truncation. Sharing ``_build_alert_filters`` keeps the two answers about
+    the same set of rows by construction.
+    """
+    where_sql, params = _build_alert_filters(
+        since, until, server, None, None, None, None, None, None,
+        time_field=time_field, logins=logins,
+    )
+
+    def _run(c: sqlite3.Connection) -> dict[int, int]:
+        rows = c.execute(
+            f"SELECT ae.rule_id AS rule_id, COUNT(*) AS n {_ALERT_FROM_CLAUSE} "
+            f"WHERE {where_sql} GROUP BY ae.rule_id",
+            params,
+        ).fetchall()
+        return {int(r["rule_id"]): int(r["n"]) for r in rows}
+
+    if conn is not None:
+        return _run(conn)
+    with get_risk_monitor_db() as own:
+        return _run(own)
 
 
 def stream_alert_events(

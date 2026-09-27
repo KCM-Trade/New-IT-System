@@ -61,13 +61,13 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import pymysql
-import pymysql.cursors
 from fastapi import HTTPException, Request, status
 
 from app.core.auth_deps import classify_path, module_names
 from app.core.auth_middleware import client_ip
 from app.core.config import Settings, get_settings
 from app.core.logging_config import get_logger
+from app.core.mysql_readonly import connect_readonly
 from app.core.users_db import get_users_db
 from app.schemas.admin import MODULE_KEYS
 from app.services.auth_service import SessionUser, record_auth_event
@@ -610,30 +610,13 @@ Only MAX_EXECUTION_TIME makes the SERVER stop.
 def _connect(settings: Settings) -> pymysql.connections.Connection:
     """Open a read-only connection to the fxbackoffice replica.
 
-    autocommit=True is not decoration: with the DB-API default of False the
-    first SELECT opens a transaction that holds metadata locks until COMMIT,
-    while showing up in PROCESSLIST as a harmless-looking ``Sleep``. That is
-    verbatim the kcm-risk-pipeline failure of 2026-08-09.
+    Thin wrapper over ``core/mysql_readonly.connect_readonly`` — the three
+    timeouts, ``autocommit=True`` and the 2026-08-09 rationale all live there
+    now (OPT-0064 moved them so the AI tools could share the shape with a
+    different statement budget instead of copying it). Kept under this name
+    because tests monkeypatch ``data_scope._connect``.
     """
-    conn = pymysql.connect(
-        host=settings.DB_HOST,
-        user=settings.DB_USER,
-        password=settings.DB_PASSWORD,
-        database=settings.FXBACK_DB_NAME,
-        port=int(settings.DB_PORT),
-        charset=settings.DB_CHARSET,
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=5,
-        read_timeout=20,
-        autocommit=True,
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"SET SESSION MAX_EXECUTION_TIME = {_MAX_EXECUTION_TIME_MS}")
-    except Exception:
-        conn.close()
-        raise
-    return conn
+    return connect_readonly(settings, max_execution_ms=_MAX_EXECUTION_TIME_MS)
 
 
 # Same reason as login_ip_enrichment_service: keep the IN-clause well under

@@ -4,8 +4,8 @@ API Key Middleware
 Validates X-API-Key header on all /api/* requests.
 If API_KEY is not configured (None), validation is skipped (dev mode).
 OPTIONS requests are always allowed (CORS preflight never carries custom headers).
-Exempt: the SSE stream and the two OIDC navigations — requests a browser cannot
-attach a header to. They authenticate by session cookie instead (auth P3).
+Exempt: the SSE stream, the two OIDC navigations, and the AI agent's streamed
+turn — requests that authenticate by session cookie instead (auth P3 / OPT-0064).
 
 Note what this key is and is not: it answers "is this caller our frontend?", and
 it is compiled into the JS bundle, so every visitor holds it. It is not identity.
@@ -42,8 +42,24 @@ NAVIGATION_PATHS: frozenset[str] = frozenset(
 )
 
 
+# Session-only endpoints (OPT-0064). POST /api/v1/ai/turn answers with a
+# Server-Sent Events body; the SPA consumes it with fetch + ReadableStream
+# (EventSource cannot POST), so it COULD carry the header — it is exempted for
+# the same reason the alert stream is: the session cookie is the credential on
+# a streamed path, and the key adds nothing a person with a session does not
+# already prove. Keeping the two streaming paths under one rule also means one
+# nginx `location` shape for both. /api/v1/ai/usage/today is an ordinary GET
+# and keeps the key. frontend/nginx.conf mirrors this exemption.
+SESSION_ONLY_PATHS: frozenset[str] = frozenset({"/api/v1/ai/turn"})
+
+
 def _needs_no_api_key(path: str) -> bool:
-    return path.rstrip("/") in NAVIGATION_PATHS or path.endswith(SSE_PATH_SUFFIXES)
+    normalised = path.rstrip("/")
+    return (
+        normalised in NAVIGATION_PATHS
+        or normalised in SESSION_ONLY_PATHS
+        or path.endswith(SSE_PATH_SUFFIXES)
+    )
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):

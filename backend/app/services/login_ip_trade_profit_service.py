@@ -53,9 +53,11 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 from itertools import combinations
 from typing import Any, Callable, Iterable, NamedTuple, Optional
 from zoneinfo import ZoneInfo
@@ -1339,19 +1341,24 @@ def lookup(
     q: str,
     *,
     kind: str = "auto",
+    conn: Optional[sqlite3.Connection] = None,
 ) -> dict:
     """Point lookup by client ID, account ID, or open IP within a close-day window.
 
     Peers are every account that shared any seed IP in the window — even when
     that set does not meet the >=5-client grouping rule on the ranked list.
     group_ids is computed under the same fixed thresholds the UI uses.
+
+    ``conn`` lets a caller that cannot use ``get_connection()`` (the ai-agent
+    container, whose data mount is read-only) pass ``open_readonly()``; the
+    caller keeps ownership of it.
     """
     query_kind, id_value, ip_value = _resolve_lookup_kind(q, kind)
     matched_as: Optional[list[str]] = None
     seed_keys: set[str] = set()
     seed_ips: list[str] = []
 
-    with login_ip_orders_db.get_connection() as conn:
+    with (nullcontext(conn) if conn is not None else login_ip_orders_db.get_connection()) as conn:
         if query_kind == "id":
             assert id_value is not None
             id_hits = conn.execute(

@@ -123,6 +123,18 @@ class AuditMissingMiddleware(BaseHTTPMiddleware):
             return
         if getattr(request.state, "audit_records", 0):
             return
+        # Streamed responses (OPT-0064, POST /api/v1/ai/turn): this check runs
+        # when the response HEADERS come back through the middleware stack,
+        # which for a StreamingResponse is before a single body byte — and the
+        # AI route records its row at the END of the stream (turn end, so the
+        # row can say which tools ran and what it cost). The route sets this
+        # flag to say "the generator's finally block records; do not warn".
+        # It is a promise, not an exemption: the row is still expected, still
+        # required, and tests/test_ai_route.py asserts it exists after every
+        # turn including failed ones. A route must only set this flag if it
+        # records in a finally block that cannot be skipped.
+        if getattr(request.state, "audit_deferred", False):
+            return
 
         logger.warning(
             "AUDIT_MISSING method=%s route=%s path=%s status=%s — a successful "

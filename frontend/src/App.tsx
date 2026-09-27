@@ -47,6 +47,8 @@ const RiskAlertMailCenterPage = lazyWithRetry(() => import("@/pages/RiskAlertMai
 const RiskWatchlistPage = lazyWithRetry(() => import("@/pages/RiskWatchlist"))
 const WindowScanPage = lazyWithRetry(() => import("@/pages/WindowScan"))
 const FundFlowMonitorPage = lazyWithRetry(() => import("@/pages/cs/FundFlowMonitor"))
+// OPT-0064: risk-team analyst agent, `ai` module (Preview).
+const AiAssistantPage = lazyWithRetry(() => import("@/pages/AiAssistant"))
 const IBTreeQueryPage = lazyWithRetry(() => import("@/pages/cs/IBTreeQuery"))
 const CsIbDepositsPage = lazyWithRetry(() => import("@/pages/cs/IbDeposits"))
 const SettingsPage = lazyWithRetry(() => import("@/pages/Settings"))
@@ -139,6 +141,7 @@ function App() {
               <Route path="window-scan" element={<WindowScanPage />} />
               <Route path="cs/fund-flow-monitor" element={<FundFlowMonitorPage />} />
               <Route path="cs/ib-tree" element={<IBTreeQueryPage />} />
+              <Route path="ai/assistant" element={<AiAssistantPage />} />
               <Route path="cs/ib-deposits" element={<CsIbDepositsPage />} />
               {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />
