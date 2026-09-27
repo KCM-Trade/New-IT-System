@@ -25,10 +25,17 @@ from pydantic import BaseModel, Field, model_validator
 # ⚠ Adding a key here changes what EXISTING accounts can reach, and in the
 # direction that takes access away: a row holding the ALL_MODULES sentinel
 # below means "every module, including ones added later" and is unaffected, but
-# every explicit row loses the new module until somebody ticks it. The
-# 2026-08-19 rollout backfilled `dashboard` into all six explicit rows before
-# deploying, which is the step to repeat when `ai` joins this list.
-MODULE_KEYS: tuple[str, ...] = ("dashboard", "cs", "data", "risk", "other")
+# every explicit row loses the new module until somebody ticks it. Whether to
+# backfill depends on WHAT KIND of module it is (rule of 2026-08-27):
+#   - split-off modules (a page that already existed and is being carved out of
+#     the always-open layer, like `dashboard` on 2026-08-19): backfill every
+#     explicit row before deploying, or those accounts silently lose a page;
+#   - brand-new capabilities (like `ai`, contract in docs/ai-agent/02-contracts.md):
+#     do NOT backfill — that is a fresh authorisation decision a manager makes
+#     per person in /cfg/managers, not something a deploy should hand out.
+# The backfill SQL, when it does apply, must carry
+# `AND allowed_modules <> '["*"]'` so the sentinel row is left alone.
+MODULE_KEYS: tuple[str, ...] = ("dashboard", "cs", "data", "risk", "other", "ai")
 
 # The "every module, including ones that do not exist yet" grant, spelled as a
 # VALUE rather than as the absence of one (2026-08-27).
@@ -65,6 +72,9 @@ MODULE_CATALOGUE: list[Module] = [
     Module(key="data", label_en="Data Query", label_zh="数据查询"),
     Module(key="risk", label_en="Risk Control", label_zh="风险控制"),
     Module(key="other", label_en="Other", label_zh="其他"),
+    # OPT-0064 (2026-09-27): brand-new capability, NOT backfilled — see the
+    # comment above MODULE_KEYS and docs/ai-agent/02-contracts.md §1.2.
+    Module(key="ai", label_en="AI Assistant", label_zh="AI 助手"),
 ]
 
 

@@ -55,6 +55,9 @@ PROBE_PATHS = [
     "/risk/window-scan",
     "/risk-monitor/burst-open/alerts",
     "/risk-cases/watchlist",
+    # OPT-0064: the `ai` module (a plain string policy, added 2026-09-27).
+    "/ai/turn",
+    "/ai/usage/today",
     # Deliberately absent from MODULE_MAP: the fail-closed path.
     "/not-classified/at-all",
 ]

@@ -1,0 +1,41 @@
+# ai-agent container (OPT-0064, docs/ai-agent/02-contracts.md §4.2 / §7).
+#
+# Same base, venv and requirements.txt layers as ./Dockerfile so the certified
+# tools import app.services unchanged, plus ONE extra pip layer for the agent
+# framework. A literal `FROM <backend image>` was deliberately not used: docker
+# compose does not order image builds between two services, so the first
+# `up --build` on a clean host would race the api image and fail.
+#
+# Posture (enforced by compose, listed here so a reader of this file sees it):
+#   * no host port — reachable only as http://ai-agent:8010 on the compose net
+#   * backend/.env is NOT mounted; DB variables arrive via compose environment:
+#     and the Azure OpenAI credentials via env_file backend/.env.ai-agent
+#   * backend/data is mounted read-only (SQLite alert + order-IP stores)
+# backend/.dockerignore excludes every dotenv variant (`.env` and `.env.*`), so
+# `COPY . /app` below cannot bake backend/.env.ai-agent (the Azure OpenAI key)
+# into a layer. Keep it that way: the credentials file only ever reaches the
+# container through compose `env_file:`.
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv
+
+RUN python -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+WORKDIR /app
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY requirements-ai-agent.txt /tmp/requirements-ai-agent.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-ai-agent.txt
+
+COPY . /app
+
+EXPOSE 8010
+
+CMD ["uvicorn", "app.ai_agent.server:app", "--host", "0.0.0.0", "--port", "8010", "--no-server-header"]

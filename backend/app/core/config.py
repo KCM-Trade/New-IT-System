@@ -18,6 +18,49 @@ load_dotenv()
 # "letmein" as the only credential in front of a session-minting endpoint.
 BREAK_GLASS_SECRET_MIN_LEN = 32
 
+# Same bar for the api <-> ai-agent shared secret (OPT-0064). Compose injects
+# it into both containers; a value this short would only ever be a placeholder
+# somebody forgot to replace, and the safe reading of a placeholder is "off".
+AI_INTERNAL_TOKEN_MIN_LEN = 32
+
+# Defaults for AI_MODEL_PRICES, USD per MTok [input, output] — the three
+# GPT-5.6 deployments on kcm-ai-agent-east-us (docs/ai-agent/04 §0.1.1).
+_DEFAULT_MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "gpt-5.6-terra": (2.5, 15.0),
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-5.6-luna": (1.0, 6.0),
+}
+
+
+def _parse_model_prices(raw: str | None) -> dict[str, tuple[float, float]]:
+    """Parse AI_MODEL_PRICES (JSON) tolerantly; fall back to the defaults.
+
+    A malformed value must not take the whole app down at import time (this
+    runs inside get_settings(), i.e. on the request hot path the first time),
+    so it degrades to the built-in table with a log line rather than raising.
+    Unknown deployments simply price at zero downstream, which the usage event
+    makes visible as `cost_usd: 0` next to non-zero token counts.
+    """
+    if raw is None or not raw.strip():
+        return dict(_DEFAULT_MODEL_PRICES)
+    import json
+    import logging
+
+    try:
+        parsed = json.loads(raw)
+        out: dict[str, tuple[float, float]] = {}
+        for model, pair in parsed.items():
+            inp, outp = pair
+            out[str(model)] = (float(inp), float(outp))
+        if not out:
+            raise ValueError("empty price table")
+        return out
+    except Exception:  # noqa: BLE001 — degrade, do not crash settings
+        logging.getLogger(__name__).error(
+            "AI_MODEL_PRICES is not valid JSON of {model: [in, out]}; using defaults"
+        )
+        return dict(_DEFAULT_MODEL_PRICES)
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     """Read a boolean env var tolerantly.
@@ -126,6 +169,13 @@ class Settings:
     AUTH_EVENTS_RETENTION_DAYS: int
     AUDIT_LOG_RETENTION_DAYS: int
     AUDIT_MISSING_ALERT_ENABLED: bool
+
+    # AI analyst agent (OPT-0064, docs/ai-agent/02-contracts.md §4-§6)
+    AI_AGENT_URL: str
+    AI_AGENT_INTERNAL_TOKEN: str | None
+    AI_DAILY_TURNS_LIMIT: int
+    AI_DAILY_COST_LIMIT_USD: float
+    AI_MODEL_PRICES: dict[str, tuple[float, float]]
 
     # Interactive API docs surface (Swagger /docs, ReDoc /redoc, /openapi.json)
     API_DOCS_ENABLED: bool
@@ -590,6 +640,38 @@ class Settings:
         # only for the case where one noisy known-unaudited endpoint would
         # otherwise drown the token the health check greps for.
         self.AUDIT_MISSING_ALERT_ENABLED = _env_flag("AUDIT_MISSING_ALERT_ENABLED", True)
+
+        # ── AI analyst agent (OPT-0064) ───────────────────────────────────────
+        # The main API owns /api/v1/ai/* (module gate, audit, quota) and relays
+        # each turn to the ai-agent container over the compose network. The
+        # container is reachable ONLY by that name: it publishes no host port
+        # and trusts nobody without the shared token below.
+        self.AI_AGENT_URL = (
+            os.environ.get("AI_AGENT_URL") or "http://ai-agent:8010"
+        ).strip().rstrip("/")
+        # Shared secret injected into BOTH containers by compose `environment:`
+        # (never written into backend/.env.ai-agent, which holds the Azure
+        # credentials and is mounted only into the agent). Anything under 32
+        # characters is treated as "not configured": the route then refuses
+        # every turn with `agent_unavailable` rather than sending a weak token
+        # across the wire and letting the agent decide.
+        _tok = (os.environ.get("AI_AGENT_INTERNAL_TOKEN") or "").strip()
+        self.AI_AGENT_INTERNAL_TOKEN = _tok if len(_tok) >= AI_INTERNAL_TOKEN_MIN_LEN else None
+        # Per-person daily quota (02 §6). Checked BEFORE the turn is forwarded,
+        # so an exhausted user never costs a model call. Both limits are
+        # inclusive-exhaustive: a user AT the limit is refused.
+        self.AI_DAILY_TURNS_LIMIT = int(
+            (os.environ.get("AI_DAILY_TURNS_LIMIT") or "100").strip()
+        )
+        self.AI_DAILY_COST_LIMIT_USD = float(
+            (os.environ.get("AI_DAILY_COST_LIMIT_USD") or "20").strip()
+        )
+        # USD per million tokens, {deployment: [input, output]}. The main API
+        # is the ONLY place cost is computed (the agent reports raw token
+        # counts, the browser is never trusted), so a price change is one env
+        # edit here and nowhere else. Cache-read input tokens are billed at
+        # 10% of the input price, which is Azure OpenAI's published discount.
+        self.AI_MODEL_PRICES = _parse_model_prices(os.environ.get("AI_MODEL_PRICES"))
 
         # ── Entra ID (Azure AD) OIDC provider (auth design P3) ───────────────
         # App registration lives in tenant 11cf6a7b-… (design doc §8.1). The

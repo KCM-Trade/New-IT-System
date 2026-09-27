@@ -55,11 +55,31 @@ risk team 要一个登录后按人隔离的分析 agent：问「客户 123456 �
 
 ### 契约对账（主线程逐条对 02，实施完成后填）
 
-（待填：02 §1 / §2.1 / §2.2 / §2.5 / §2.6 / §2.7 / §3.1–3.3 / §4.1–4.3 / §5 / §6 / §7 逐条 ✅/⚠，偏差写明原因。）
+| 02 条目 | 状态 | 说明 |
+|---|---|---|
+| §1.1 落点四处 | ✅ | `MODULE_KEYS` + 目录 + `MODULE_MAP ("ai",)` 同一 commit；前端走 `PAGE_POLICIES`（代码里没有 `<ModuleRoute module=…>`，语义相同） |
+| §1.2 不回填 / §1.3 不进 SCOPED_MODULES | ✅ | 活库未动；anson/rose 未勾；受限者调 `/ai/*` 由覆盖闸 403（单测钉住） |
+| §1.4 anti-drift | ✅ | `test_app_assembly.py` 两条自动覆盖 + `test_module_gate.py` probe 加 `/ai/turn` `/ai/usage/today` |
+| §2.1 闭包 + `is None` | ✅ | `build_tools(ctx, emit)` 每请求构造；静态 grep 无 falsy scope 判定；`scope_denied` 走 `_refusal_log_decision`；`auth_events` 行由**主 API**在收到 `tool_done scope_denied` 时写（容器内 users.db 只读，冷审 H1） |
+| §2.2 口径分解 | ✅ | 交易净入金 / IB 提现分列；CEN ÷100；demo/员工 → `subject_excluded`；sid=5 归一化；`.cent/.kcmc` 判 cent；日界 `MT_SERVER_TZ` |
+| §2.3 主体只收精确 ID | ✅ | `client_id` / `login_sid`；MT 账户无 CRM 归属 → `subject_excluded(no_crm_user)` |
+| §2.4 366 天 | ✅ | `range_too_wide` 单测；活体里模型自己拆段 |
+| §2.5 信封 | ✅ | `definition` + `source.certified=true` + `scope.cids_applied` + `truncated` 每次都带 |
+| §2.6 错误码 | ✅+ | 六个都有；**新增** `invalid_argument`（格式错） |
+| §2.7 上限 | ✅ | 366 / 200 行 / 500 告警 / MySQL 5s·20s·15s / 单工具 25s |
+| §3.1 overview | ⚠ | `net_gain_definition` 用服务真实 STRICT 公式；账户实时 `mt4_users` 而非契约点名的 `client_pnl_service.get_client_accounts`（ETL 快照、`credit` 恒 0、无 sid/cent/regdate）——**建议回填进 02** |
+| §3.2 trade_activity | ✅ | 新 `trade_activity_service.by_subject`，口径 helper 全部 import `window_scan_service` |
+| §3.3 risk_signals | ⚠ | `verdict` 恒 null ✅；`severity` 恒 null（源无列）；`days_cooccur` null（源无共现天数）；共用 IP 截最近 30 天；对端按 scope 过滤 + `peers_masked_by_scope` ✅；IP /24 ✅ |
+| §4.1 `/ai/turn` | ⚠ | POST + SSE ✅、免 API key ✅、`async def` + `to_thread` ✅；前端用 `apiFetch` 流式读而非 `EventSource`（做不到 POST，用户拍板 A） |
+| §4.2 内部接口 | ✅ | `X-Internal-Token` compare_digest、无宿主端口、身份整体传、每请求 `Agent`+`AgentSession`、只三个工具 |
+| §4.3 事件 | ✅+ | 七种事件；`tool_done` 失败带 `error_code`；`usage.cost_usd` 由主 API 填 |
+| §5 审计 | ✅ | 每轮一行含失败，`finally` 写；`audit_deferred` 机制；未进 `AUDIT_EXEMPT_ROUTES`；`audit-log-design.md` 已加行 |
+| §6 配额 | ✅ | `backend/data/ai_agent.db`；转发前拦截；100 轮 / $20 env 可调；状态条 |
+| §7 禁止项 | ⚠ | 无文件/Bash/网络工具 ✅（MAF 结构性）；无宿主端口 ✅；不挂 `backend/.env` ✅；🔴 **DB 账号仍是共享账号**（`ai_agent_ro` 待开）；mounts 无 honeypot ✅；返回无姓名/邮箱/手机/完整 IP ✅ |
 
 ### 实施记录
 
-（待填：每个 Day 做了什么 / 验证了什么 / 卡在哪。）
+见 `docs/ai-agent/05-rollout.md` §5（实施记录，含 12 条实现层偏差、dev 实测数字、待办）。冷审（独立 Opus agent，2026-09-27）结论与处理：H1 容器内 `record_auth_event` 必失败 → 改主 API 写；H2 `risk_monitor_db` 私有符号重写 → 改公开 `query_alert_events(conn=, logins=)`；H3 共用 IP 腿失败拖垮整个工具 → 降级为 null+caveat；M4 MySQL 连接拷贝 → 收口 `core/mysql_readonly.py`；M5 对他人 SQL 常量 `.replace` → 服务暴露 `activity_status_case()`；M6 SSE 序列化三份 → `core/sse.py`；M7 每工具重解主体 → per-turn memo；L10 `requirements-ai-agent.txt` 被 `*.txt` gitignore → 加 `!`；L11 测试收集依赖 `agent_framework` → importorskip；前端每 token 全量 re-render → rAF 批量 + memo。未采纳：L8 删 API key 豁免（kickoff 硬约束 4 要求豁免）；L9 dev 整目录挂载（硬约束 6 要求挂载无 honeypot）。
 
 ## 结果
 

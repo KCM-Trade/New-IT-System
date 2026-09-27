@@ -295,6 +295,24 @@ def test_sse_needs_no_api_key_because_eventsource_cannot_send_one(
     assert r.status_code != 403
 
 
+def test_ai_turn_needs_no_api_key_but_usage_does(app_main, monkeypatch):
+    """OPT-0064: POST /api/v1/ai/turn is session-only, like the alert stream.
+
+    The SPA consumes its SSE body with fetch, so it COULD send the header —
+    the exemption exists so both streaming paths share one rule (and one nginx
+    location shape), with the session cookie as the credential. The sibling
+    GET /usage/today is an ordinary request and keeps the key, which is what
+    proves the exemption is a path, not a prefix.
+    """
+    monkeypatch.setenv("API_KEY", "the-real-key")
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    client = TestClient(app_main.create_app())
+
+    r = client.post("/api/v1/ai/turn", json={"message": "x"})
+    assert r.status_code != 403, r.text
+    assert client.get("/api/v1/ai/usage/today").status_code == 403
+
+
 # ── P4.0: session exemptions are exact paths, not prefixes ───────────────────
 
 

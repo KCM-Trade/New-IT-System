@@ -35,6 +35,7 @@ from .routes.hold_bucket import router as hold_bucket_router
 from .routes.window_scan import router as window_scan_router
 from .routes.ibid_lots import router as ibid_lots_router
 from .routes.honeypot import router as honeypot_router
+from .routes.ai import router as ai_router
 
 
 # The page-level permission gate (auth P4b) is mounted ONCE, here, on the
@@ -114,3 +115,7 @@ api_v1_router.include_router(ibid_lots_router, tags=["ibid-lots"])
 # public key but no session can reach them — that outsider is exactly who they
 # are meant to catch. See routes/honeypot.py for the full rationale.
 api_v1_router.include_router(honeypot_router, tags=["honeypot"])
+# AI analyst agent (OPT-0064): /api/v1/ai/* — classified `ai` in MODULE_MAP.
+# The route relays to the ai-agent container; policy (gate, quota, audit)
+# stays here so the parent router's two dependencies cover it like any page.
+api_v1_router.include_router(ai_router, tags=["ai"])

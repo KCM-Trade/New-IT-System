@@ -36,6 +36,8 @@ from app.core.api_key_middleware import APIKeyMiddleware
 from app.core.auth_middleware import AuthMiddleware
 from app.core.audit_missing_middleware import AuditMissingMiddleware
 from app.core.users_db import init_users_db
+from app.core.ai_usage_db import init_ai_usage_db
+from app.core.sqlite_wal_keepalive import hold_wal_sidecars
 from app.core.database import init_db
 from app.core.risk_monitor_db import init_risk_monitor_db
 from app.core.client_return_export_db import init_client_return_export_db
@@ -116,6 +118,13 @@ async def lifespan(app: FastAPI):
     init_fund_flow_monitor_db()
     init_view_profiles_db()
     init_users_db()
+    init_ai_usage_db()
+    # OPT-0064: the ai-agent container reads risk_monitor.db / login_ip_orders.db
+    # through a read-only mount, which can open WAL sidecars but not create
+    # them. Holding one connection here keeps them on disk — see the module.
+    from app.core import login_ip_orders_db as _lio_db
+    from app.core import risk_monitor_db as _rm_db
+    hold_wal_sidecars([_rm_db._DB_PATH, _lio_db._DB_PATH])
     # OPT-0047 risk-V2 case layer (cloud PG). Fail-open: returns False when
     # PG is down/unconfigured — the app must still serve everything else.
     init_risk_cases_pg()

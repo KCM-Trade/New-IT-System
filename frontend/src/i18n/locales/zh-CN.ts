@@ -68,6 +68,9 @@ export const zhCN = {
     // Auth P4b: tooltip on the greyed-out /docs/ entry. The entry stays visible
     // for everyone — a vanished link reads as "the docs were deleted".
     docsManagerOnly: "文档站仅管理员可访问，请联系管理员开通",
+    // OPT-0064: the `ai` module's sidebar group and its one page.
+    aiSection: "AI 助手",
+    aiAssistant: "分析助手",
   },
 
   // Auth P4b — module names, as shown on the 403 page. Must match the labels
@@ -79,6 +82,61 @@ export const zhCN = {
     data: "Data Query（数据查询）",
     risk: "Risk Control（风险控制）",
     other: "Other（其他）",
+    ai: "AI Assistant（AI 助手）",
+  },
+
+  // OPT-0064 — /ai/assistant, the risk-team analyst agent (slice 1, Preview).
+  ai: {
+    title: "AI 分析助手",
+    preview: "Preview",
+    statelessNote: "每轮独立，暂无对话历史（第二刀加入）。目前只支持精确 Client ID 或账户 loginSid（如 1-8522845）。",
+    placeholder: "输入问题，例如：客户 123456 最近 30 天怎么样？（Enter 发送，Shift+Enter 换行）",
+    send: "发送",
+    stop: "停止",
+    clear: "清空",
+    enterHint: "Enter 发送 · Shift+Enter 换行",
+    modelLabel: "模型",
+    modelStandard: "标准",
+    modelDeep: "深度分析",
+    exampleOverview: "客户 123456 的概况",
+    exampleActivity: "客户 123456 最近 30 天的交易行为",
+    exampleSignals: "客户 123456 命中过哪些风控信号",
+    emptyTitle: "问一个关于客户的问题",
+    emptySub: "每个数字旁都会带来源徽章；徽章可点开查看口径来源。工具给的是信号，结论由人来下。",
+    thinking: "思考中…",
+    querying: "正在查 {tool}…",
+    stopped: "已停止。",
+    badgeCertified: "认证口径",
+    badgeTooltip: "认证口径 · 点击查看来源",
+    sourceTitle: "来源",
+    sourceService: "服务",
+    sourceFunction: "函数",
+    sourceAsOf: "数据时点",
+    sourceCertified: "认证",
+    sourceMissing: "该工具未返回来源信息。",
+    yes: "是",
+    no: "否",
+    status: {
+      tokens: "tok",
+      today: "今日",
+    },
+    toolErrors: {
+      subject_not_found: "该 ID 不存在。",
+      subject_excluded: "该主体是 demo / 员工账户，不在客户口径内。",
+      scope_denied: "该主体不在你的数据范围内。",
+      range_too_wide: "日期范围超过 366 天。",
+      upstream_timeout: "数据库查询超时，请缩小范围重试。",
+      internal: "工具内部错误。",
+      error: "工具调用失败。",
+    },
+    errors: {
+      quota_exceeded: "今日 AI 配额已用完，明天再试或联系 IT。",
+      agent_unavailable: "AI 服务暂时不可用（agent 容器未响应），请稍后再试。",
+      internal: "内部错误，请附 trace 联系 IT。",
+      model_error: "模型调用失败，请稍后再试。",
+      forbidden: "你的账号未开通 AI 助手模块，请联系管理员在「管理员」页勾选。",
+      network: "网络中断，请重试。",
+    },
   },
 
   // Auth P4b — the 403 page. Written for someone whose next action is to ask
@@ -127,6 +185,7 @@ export const zhCN = {
     csIbDeposits: "IB 出入金查询",
     riskAlertMail: "告警邮件中心",
     riskWatchlist: "Client Activity Monitor", // English in both locales — see nav block
+    aiAssistant: "AI 分析助手（Preview）",
     windowScan: "Trade Window Scan", // English in both locales — see nav block
   },
 

@@ -10,6 +10,7 @@ import {
   IconListDetails,
   IconSearch,
   IconSettings,
+  IconSparkles,
   IconUsers,
   IconUsersGroup,
 } from "@tabler/icons-react";
@@ -116,6 +117,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             // [HIDDEN] Profit Analysis - temporarily hidden
             // { title: t("nav.profitAnalysis"), url: "/profit" },
           ],
+        },
+        {
+          // OPT-0064: the risk-team analyst agent. Its own group because it is
+          // its own grantable module (`ai`) — putting it under Risk Control
+          // would imply the risk grant covers it, and it does not.
+          title: t("nav.aiSection"),
+          icon: IconSparkles,
+          children: [{ title: t("nav.aiAssistant"), url: "/ai/assistant" }],
         },
         {
           title: t("nav.otherSection"),

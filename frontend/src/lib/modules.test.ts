@@ -129,7 +129,9 @@ describe("the grant states of allowedModules", () => {
     }
     // The point of ["*"] rather than "all five ticked": a sixth module would be
     // granted automatically to these people and NOT to the five-ticked ones.
-    expect(hasModule(staff([ALL_MODULES]), "ai" as never)).toBe(true)
+    // `ai` became a real key on 2026-09-27; keep the probe on a key that is
+    // still hypothetical so the assertion keeps testing "not yet existing".
+    expect(hasModule(staff([ALL_MODULES]), "future_module" as never)).toBe(true)
   })
 
   it("keeps \"*\" out of the grantable module list", () => {
