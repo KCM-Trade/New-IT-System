@@ -1,19 +1,17 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import {
+  IconArrowUp,
   IconMessageChatbot,
-  IconPlayerStop,
-  IconSend,
-  IconSparkles,
-  IconTrash,
+  IconPlayerStopFilled,
+  IconPlus,
 } from "@tabler/icons-react"
 
 import { AiStatusBar, type TodayUsage } from "@/components/ai/AiStatusBar"
 import { SourceBadge } from "@/components/ai/SourceBadge"
 import { useI18n } from "@/components/i18n-provider"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   DEFAULT_AI_MODEL,
   useAiTurn,
@@ -27,19 +25,24 @@ import { cn } from "@/lib/utils"
 /**
  * /ai/assistant — the risk-team analyst agent (slice 1, Preview).
  *
- * Layout is a single column: transcript on top, composer pinned below, a
- * one-line status bar in the footer. The hierarchy is deliberately flat —
- * the assistant's text is the primary content, the provenance badges under it
- * are the one accented element, and everything about cost / quota / model is
- * tertiary and muted (Refactoring UI: emphasise by de-emphasising).
+ * Second UI pass (2026-09-27): modelled on the plain ChatGPT / Gemini chat
+ * window. The page owns the viewport below the site header; before the first
+ * question there is nothing but the product name, the composer and the muted
+ * status line (model · tokens · cost · today's quota — the user asked to keep
+ * it visible at all times). Once a conversation exists the transcript scrolls
+ * in the middle and the composer stays pinned at the bottom. Everything that
+ * used to explain the page (title, Preview badge, stateless note, badge
+ * legend, keyboard hint, example chips) is gone — the site header already
+ * names the page, and the rest was reading material nobody asked for.
  *
- * Slice 1 has no history: every turn is independent (docs/ai-agent/05 §1),
- * and the page says so instead of implying a memory it does not have.
+ * Slice 1 has no history: every turn is independent (docs/ai-agent/05 §1).
+ * The "new conversation" button only clears the visible transcript.
  */
 
-const PILL_GROUP = "inline-flex items-center rounded-full bg-muted p-0.5"
-const PILL_ITEM =
-  "flex-1 rounded-full px-3 py-1 text-center text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+// The DashboardLayout wrapper is a plain block with `pt-4` (1rem) under a
+// 3.5rem header, so the page takes the rest of the viewport itself.
+const PAGE_HEIGHT = "h-[calc(100svh-var(--header-height)-1rem)]"
+const COLUMN = "mx-auto w-full max-w-3xl"
 
 export default function AiAssistantPage() {
   const { t } = useI18n()
@@ -60,7 +63,7 @@ export default function AiAssistantPage() {
       setToday((await res.json()) as TodayUsage)
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return
-      // The status bar simply keeps its last value; the quota is enforced
+      // The status line simply keeps its last value; the quota is enforced
       // server-side regardless of whether the browser can display it.
     }
   }, [])
@@ -76,6 +79,7 @@ export default function AiAssistantPage() {
       fetchToday()
     },
   })
+  const hasConversation = messages.length > 0
 
   const onTranscriptScroll = useCallback(() => {
     const el = transcriptRef.current
@@ -105,130 +109,138 @@ export default function AiAssistantPage() {
     void send(q, model)
   }, [draft, streaming, send, model])
 
-  const fillExample = useCallback((text: string) => {
-    setDraft(text)
+  const newConversation = useCallback(() => {
+    clear()
+    setDraft("")
     textareaRef.current?.focus()
-  }, [])
+  }, [clear])
 
-  const examples = [t("ai.exampleOverview"), t("ai.exampleActivity"), t("ai.exampleSignals")]
-
-  return (
-    <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
-      {/* Header: title + Preview badge on one line, the no-history note under it. */}
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold leading-tight">{t("ai.title")}</h1>
-            <Badge variant="secondary" className="font-normal">
-              {t("ai.preview")}
-            </Badge>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">{t("ai.statelessNote")}</p>
-        </div>
-        {messages.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={clear} disabled={streaming} className="gap-1.5">
-            <IconTrash className="h-4 w-4" />
-            {t("ai.clear")}
+  const composer = (
+    <div className="rounded-2xl border bg-card px-4 pb-2.5 pt-3 shadow-sm">
+      <Textarea
+        ref={textareaRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            submit()
+          }
+        }}
+        placeholder={t("ai.placeholder")}
+        rows={1}
+        maxLength={4000}
+        disabled={streaming}
+        autoFocus
+        className="max-h-48 min-h-6 resize-none overflow-y-auto border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 md:text-sm"
+      />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Select value={model} onValueChange={(v) => setModel(v as AiModel)} disabled={streaming}>
+          <SelectTrigger
+            size="sm"
+            aria-label={t("ai.modelLabel")}
+            className="h-7 w-auto gap-1 rounded-full border-0 bg-muted px-2.5 text-xs shadow-none focus-visible:ring-0 [&_[data-desc]]:hidden"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            <SelectItem value="gpt-5.6-terra" className="items-start py-2">
+              <ModelOption label={t("ai.modelStandard")} desc={t("ai.modelStandardDesc")} />
+            </SelectItem>
+            <SelectItem value="gpt-5.6-sol" className="items-start py-2">
+              <ModelOption label={t("ai.modelDeep")} desc={t("ai.modelDeepDesc")} />
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {streaming ? (
+          <Button
+            size="icon"
+            variant="secondary"
+            onClick={stop}
+            aria-label={t("ai.stop")}
+            title={t("ai.stop")}
+            className="size-8 rounded-full"
+          >
+            <IconPlayerStopFilled className="h-4 w-4" />
+          </Button>
+        ) : (
+          <Button
+            size="icon"
+            onClick={submit}
+            disabled={!draft.trim()}
+            aria-label={t("ai.send")}
+            title={t("ai.send")}
+            className="size-8 rounded-full"
+          >
+            <IconArrowUp className="h-4 w-4" />
           </Button>
         )}
       </div>
+    </div>
+  )
 
-      {/* Transcript */}
-      <div
-        ref={transcriptRef}
-        onScroll={onTranscriptScroll}
-        className="flex min-h-[320px] flex-1 flex-col overflow-y-auto rounded-xl border bg-card px-4 py-4 md:px-6"
-      >
-        {messages.length === 0 ? (
-          <EmptyState examples={examples} onPick={fillExample} />
-        ) : (
-          <div className="flex flex-col gap-5">
-            {messages.map((m) => (
-              <MessageRow key={m.id} message={m} streaming={streaming} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Composer */}
-      <div className="rounded-xl border bg-card px-4 py-3 md:px-6">
-        <Textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          placeholder={t("ai.placeholder")}
-          rows={3}
-          maxLength={4000}
-          disabled={streaming}
-          className="min-h-[72px] resize-y border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
-        />
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          <ToggleGroup
-            type="single"
-            value={model}
-            onValueChange={(v) => v && setModel(v as AiModel)}
-            className={PILL_GROUP}
-            aria-label={t("ai.modelLabel")}
-          >
-            <ToggleGroupItem value="gpt-5.6-terra" className={PILL_ITEM} disabled={streaming}>
-              {t("ai.modelStandard")}
-            </ToggleGroupItem>
-            <ToggleGroupItem value="gpt-5.6-sol" className={PILL_ITEM} disabled={streaming}>
-              {t("ai.modelDeep")}
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <div className="flex items-center gap-2">
-            <span className="hidden text-xs text-muted-foreground sm:inline">{t("ai.enterHint")}</span>
-            {streaming ? (
-              <Button variant="outline" size="sm" onClick={stop} className="gap-1.5">
-                <IconPlayerStop className="h-4 w-4" />
-                {t("ai.stop")}
-              </Button>
-            ) : (
-              <Button size="sm" onClick={submit} disabled={!draft.trim()} className="gap-1.5">
-                <IconSend className="h-4 w-4" />
-                {t("ai.send")}
-              </Button>
-            )}
+  if (!hasConversation) {
+    // Empty state: the composer alone, vertically centred, the way a fresh
+    // ChatGPT / Gemini window opens — product name above, status line below.
+    return (
+      <div className={cn(PAGE_HEIGHT, "flex flex-col items-center justify-center pb-16")}>
+        <div className={cn(COLUMN, "flex flex-col gap-5")}>
+          <h1 className="text-center text-2xl font-medium tracking-tight">{t("ai.greeting")}</h1>
+          {composer}
+          <div className="flex justify-center px-1">
+            <AiStatusBar model={model} turnUsage={usage} today={today} />
           </div>
         </div>
       </div>
+    )
+  }
 
-      <AiStatusBar model={model} turnUsage={usage} today={today} />
+  return (
+    <div className={cn(PAGE_HEIGHT, "flex flex-col")}>
+      {/* Transcript — scrolls on its own; the composer below never moves. */}
+      <div
+        ref={transcriptRef}
+        onScroll={onTranscriptScroll}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <div className={cn(COLUMN, "flex flex-col gap-6 py-4")}>
+          {messages.map((m) => (
+            <MessageRow key={m.id} message={m} streaming={streaming} />
+          ))}
+        </div>
+      </div>
+
+      {/* Composer + one muted status line */}
+      <div className={cn(COLUMN, "flex flex-col gap-2 pb-4 pt-2")}>
+        {composer}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <AiStatusBar model={model} turnUsage={usage} today={today} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={newConversation}
+            disabled={streaming}
+            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+          >
+            <IconPlus className="h-3.5 w-3.5" />
+            {t("ai.newConversation")}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
 
-function EmptyState({ examples, onPick }: { examples: string[]; onPick: (text: string) => void }) {
-  const { t } = useI18n()
+function ModelOption({ label, desc }: { label: string; desc: string }) {
+  // The closed trigger renders the same children, so keep the label first and
+  // hide the description there via the `[&_[data-desc]]:hidden` rule below.
   return (
-    <div className="m-auto flex max-w-lg flex-col items-center gap-4 py-8 text-center">
-      <div className="rounded-lg bg-muted p-2">
-        <IconSparkles className="h-5 w-5 text-muted-foreground" />
-      </div>
-      <div className="space-y-1">
-        <p className="text-sm font-medium">{t("ai.emptyTitle")}</p>
-        <p className="text-sm text-muted-foreground">{t("ai.emptySub")}</p>
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {examples.map((ex) => (
-          <button
-            key={ex}
-            type="button"
-            onClick={() => onPick(ex)}
-            className="rounded-full border bg-background px-3 py-1 text-xs text-foreground transition-colors hover:bg-accent"
-          >
-            {ex}
-          </button>
-        ))}
-      </div>
-    </div>
+    <span className="flex flex-col gap-0.5">
+      <span>{label}</span>
+      <span data-desc className="text-xs text-muted-foreground">
+        {desc}
+      </span>
+    </span>
   )
 }
 
