@@ -32,3 +32,29 @@ def test_system_prompt_is_static_prompt_plus_dated_tail():
 def test_system_prompt_defaults_to_now():
     text = system_prompt()
     assert datetime.now(timezone.utc).strftime("%Y") in text
+
+
+def test_prompt_no_longer_claims_amnesia_but_still_denies_other_capabilities():
+    """Slice 2 (02 §8.6): the "no memory" sentence is gone, the capability
+    denials stay. The model must know it MAY use earlier turns and MUST NOT
+    invent file/web/SQL abilities."""
+    assert "no memory" not in ANALYST_SYSTEM_PROMPT
+    assert "Preview" not in ANALYST_SYSTEM_PROMPT
+    assert "remember the earlier turns of THIS conversation" in ANALYST_SYSTEM_PROMPT
+    assert "no file, shell, web or SQL capability" in ANALYST_SYSTEM_PROMPT
+
+
+def test_rule_one_allows_restated_figures_only_when_marked():
+    """The exact wording 02 §8.6 froze; a paraphrase would change what the
+    model is allowed to do with an earlier number."""
+    flat = " ".join(ANALYST_SYSTEM_PROMPT.split())  # the prompt is hard-wrapped
+    assert (
+        "or from a figure you already stated earlier in this conversation, marked "
+        '"(earlier in this conversation)"' in flat
+    )
+    assert "A follow-up that needs a NEW figure must call the tool again." in flat
+
+
+def test_prompt_tells_the_model_how_to_resolve_an_omitted_id():
+    flat = " ".join(ANALYST_SYSTEM_PROMPT.split())
+    assert "use the subject from earlier in this conversation and say which one you assumed" in flat

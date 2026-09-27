@@ -1,10 +1,26 @@
 """Microsoft Agent Framework wiring — the ONLY module that imports it.
 
 One ``OpenAIChatClient`` per deployment name, created lazily and reused
-across requests (the client is concurrency-safe). One ``Agent`` +
-``AgentSession`` per turn, built with tools that are CLOSURES over the
-caller's identity (docs/ai-agent/02-contracts.md §2.1): the model never sees
-a "who am I" parameter and no tool reads process-level identity.
+across requests (the client is concurrency-safe). One ``Agent`` per turn,
+built with tools that are CLOSURES over the caller's identity
+(docs/ai-agent/02-contracts.md §2.1): the model never sees a "who am I"
+parameter and no tool reads process-level identity.
+
+Memory (02 §8, slice 2): the container stays stateless. The main API hands in
+the previous ``AgentSession.to_dict()`` blob, this module rehydrates it,
+runs the turn, and hands the new blob back as a ``session_state`` event
+before ``done``. Nothing is written to disk here. Two framework facts decide
+the wiring and are pinned by tests:
+
+  * ``OpenAIChatClient`` speaks the Responses API and ``STORES_BY_DEFAULT``
+    is True — without ``store: False`` the transcript would live on the
+    Azure side, the session would hold only a ``resp_*`` id, and compaction
+    would never see the messages. ``store`` is an Agent-level option (the
+    client constructor has no ``default_options``).
+  * The agent-level ``compaction_strategy`` only shrinks what is SENT to the
+    model; the persisted history in ``session.state`` is compacted by a
+    ``CompactionProvider.after_strategy``. The blob would otherwise grow by
+    every tool result forever, so the provider path is the one used here.
 
 Streaming shape: the framework yields ``AgentResponseUpdate`` objects whose
 ``contents`` are typed ``Content`` items. Text deltas and usage come from
@@ -31,7 +47,17 @@ from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, 
 # python:3.11-slim while the host venv is 3.12 — the tests would not catch it.
 from typing_extensions import TypedDict
 
-from agent_framework import Agent, AgentSession, tool
+from agent_framework import (
+    Agent,
+    AgentSession,
+    CompactionProvider,
+    InMemoryHistoryProvider,
+    SlidingWindowStrategy,
+    SummarizationStrategy,
+    TokenBudgetComposedStrategy,
+    ToolResultCompactionStrategy,
+    tool,
+)
 from agent_framework.openai import OpenAIChatClient
 
 from app.core.logging_config import get_logger
@@ -59,6 +85,21 @@ def default_model() -> str:
 
 def deep_model() -> str:
     return os.environ.get("AI_AGENT_MODEL_DEEP", "gpt-5.6-sol")
+
+
+def summary_model() -> str:
+    """Deployment used for compaction summaries (02 §8.5: ``gpt-5.6-luna``).
+
+    Same tenant as the analyst models on purpose: the summary INPUT is the
+    conversation, i.e. client data, so it must not leave the Azure boundary.
+    ``AI_AGENT_MODEL_SMALL`` is the name the compose files already carry for
+    the same deployment; ``AI_AGENT_MODEL_SUMMARY`` wins when both are set.
+    """
+    return (
+        os.environ.get("AI_AGENT_MODEL_SUMMARY")
+        or os.environ.get("AI_AGENT_MODEL_SMALL")
+        or "gpt-5.6-luna"
+    )
 
 
 def allowed_models() -> tuple[str, ...]:
@@ -145,14 +186,178 @@ def build_tools(ctx: CallerCtx, emit: Emit) -> list:
     return [get_client_overview, get_trade_activity, get_risk_signals]
 
 
+
+# ── session memory + compaction (02 §8.5) ────────────────────────────────────
+
+# The history provider's source id; CompactionProvider.after_strategy finds the
+# persisted messages under session.state[HISTORY_SOURCE_ID]["messages"].
+HISTORY_SOURCE_ID = "in_memory"
+
+# Compaction knobs — the "起手式" from 02 §8.5, kept as constants so the live
+# numbers written into 05 §6 are traceable to one place.
+SESSION_TOKEN_BUDGET = 32_000
+# Chars per token for the budget estimate. The framework's
+# CharacterEstimatorTokenizer assumes 4 (English prose); this history is JSON
+# tool results with numbers and CJK text and measured ~3.2 bytes/token against
+# the billed input (2026-09-27: 151 KB of stored history billed as ~47k tokens
+# while the 4-char estimate said 17k — under budget, so compaction never ran).
+# 3 errs on the side of compacting slightly early rather than never.
+ESTIMATOR_CHARS_PER_TOKEN = 3
+KEEP_LAST_TOOL_CALL_GROUPS = 2      # a 20k tool result is the main growth source: fold it first
+SUMMARY_TARGET_GROUPS = 8
+SUMMARY_THRESHOLD_GROUPS = 4
+SLIDING_WINDOW_GROUPS = 30
+
+# Options every model call made on behalf of a session must carry. `store` is
+# the one that matters: the Responses API keeps transcripts server-side by
+# default (STORES_BY_DEFAULT is True on this client), which is exactly the
+# "history lives in Azure, 30-day TTL, compaction blind" failure 02 §8.5 rules
+# out. It is applied at the Agent level AND injected into the summariser's
+# calls, because the summariser talks to its client directly.
+SESSION_CHAT_OPTIONS: dict[str, Any] = {"store": False}
+
+
+class SessionTokenizer:
+    """``TokenizerProtocol`` with a chars-per-token ratio calibrated for this
+    history (see ESTIMATOR_CHARS_PER_TOKEN). Same shape as the framework's
+    CharacterEstimatorTokenizer, different constant."""
+
+    def count_tokens(self, text: str) -> int:
+        return max(1, len(text) // ESTIMATOR_CHARS_PER_TOKEN)
+
+
+class _StoreOffClient:
+    """Duck-typed ``SupportsChatGetResponse`` that forces ``store: False``.
+
+    ``SummarizationStrategy`` calls ``client.get_response(messages,
+    stream=False)`` with no options, so the summary request — whose input is
+    the conversation, i.e. client data — would be stored on the Azure side
+    under the service default. This wrapper is the only way to reach that call
+    without forking the strategy.
+    """
+
+    def __init__(self, inner: OpenAIChatClient) -> None:
+        self._inner = inner
+
+    async def get_response(self, messages: Any, *, stream: bool = False, options: Any = None, **kwargs: Any):
+        merged: dict[str, Any] = dict(options or {})
+        merged.update(SESSION_CHAT_OPTIONS)
+        return await self._inner.get_response(messages, stream=stream, options=merged, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:  # anything else the framework may probe
+        return getattr(self._inner, name)
+
+
+def build_compaction_strategy() -> TokenBudgetComposedStrategy:
+    tokenizer = SessionTokenizer()
+    return TokenBudgetComposedStrategy(
+        token_budget=SESSION_TOKEN_BUDGET,
+        tokenizer=tokenizer,
+        strategies=[
+            ToolResultCompactionStrategy(keep_last_tool_call_groups=KEEP_LAST_TOOL_CALL_GROUPS),
+            SummarizationStrategy(
+                client=_StoreOffClient(get_client(summary_model())),
+                target_count=SUMMARY_TARGET_GROUPS,
+                threshold=SUMMARY_THRESHOLD_GROUPS,
+                tokenizer=tokenizer,
+            ),
+            SlidingWindowStrategy(keep_last_groups=SLIDING_WINDOW_GROUPS),
+        ],
+    )
+
+
+def build_context_providers() -> list:
+    """History + compaction, per turn (providers are cheap; the state is in the session).
+
+    The same composed strategy runs twice: ``before_strategy`` on the history
+    loaded from the blob (a guard against a blob that was written before the
+    budget changed) and ``after_strategy`` on the history about to be
+    persisted (what actually keeps the blob from growing turn over turn).
+    Both are no-ops while the history is under budget.
+    """
+    strategy = build_compaction_strategy()
+    return [
+        # skip_excluded: compaction marks old messages `_excluded` in the stored
+        # state (they are kept so the annotations survive); without this flag
+        # the provider loads them anyway and the model is billed for them.
+        InMemoryHistoryProvider(HISTORY_SOURCE_ID, load_messages=True, skip_excluded=True),
+        CompactionProvider(
+            before_strategy=strategy,
+            after_strategy=strategy,
+            tokenizer=SessionTokenizer(),
+            history_source_id=HISTORY_SOURCE_ID,
+        ),
+    ]
+
+
+def restore_session(blob: Optional[dict], trace_id: str) -> tuple[AgentSession, bool]:
+    """``AgentSession.from_dict(blob)`` or a fresh session.
+
+    Returns ``(session, rehydrated)``. A blob that no longer deserialises
+    (framework upgrade, hand-edited row) must not kill the turn: the user gets
+    a fresh session and the main API is told via ``rehydrated: false`` so the
+    row can be marked read-only (05 §6.4).
+    """
+    if not blob:
+        return AgentSession(), False
+    try:
+        return AgentSession.from_dict(blob), True
+    except Exception as exc:  # noqa: BLE001 — any decode failure is "start fresh"
+        logger.warning(
+            "AI agent session blob could not be restored trace=%s (%s); starting a fresh session",
+            trace_id,
+            type(exc).__name__,
+        )
+        return AgentSession(), False
+
+
+def _message_role(message: Any) -> str:
+    if isinstance(message, dict):
+        role = message.get("role")
+    else:
+        role = getattr(message, "role", None)
+    role = getattr(role, "value", role)
+    return str(role or "")
+
+
+def session_turns(session: AgentSession) -> int:
+    """Number of user messages in the persisted history = completed turns.
+
+    Counted from the live state, not the serialised blob, so it is the same
+    number whether or not compaction has replaced early messages with a
+    summary (a summary is not a user message, so this can go DOWN — the main
+    API keeps MAX(existing, turns), 02 §8.3).
+    """
+    history = session.state.get(HISTORY_SOURCE_ID) if isinstance(session.state, dict) else None
+    messages = history.get("messages") if isinstance(history, dict) else None
+    if not isinstance(messages, list):
+        return 0
+    return sum(1 for m in messages if _message_role(m) == "user")
+
+
+def session_state_event(session: AgentSession, *, rehydrated: bool) -> dict:
+    """The ``session_state`` payload (02 §8.3): the blob the main API stores."""
+    return {"blob": session.to_dict(), "turns": session_turns(session), "rehydrated": rehydrated}
+
+
 # ── one turn ─────────────────────────────────────────────────────────────────
 
 _END = object()
 
 
-async def run_turn(ctx: CallerCtx, message: str, model: str) -> AsyncIterator[tuple[str, dict]]:
-    """Yield ``(event, data)`` pairs for one turn: text / tool_use / tool_done /
-    usage, then exactly one ``done`` (or ``error`` + ``done``)."""
+async def run_turn(
+    ctx: CallerCtx,
+    message: str,
+    model: str,
+    session_blob: Optional[dict] = None,
+) -> AsyncIterator[tuple[str, dict]]:
+    """Yield ``(event, data)`` pairs for one turn: text / tool_use / tool_done,
+    then ``session_state`` (always — a failed turn must not lose the history
+    it was given), ``usage``, and exactly one ``done`` (or ``error`` + ``done``).
+
+    ``session_blob`` is the previous turn's ``AgentSession.to_dict()`` from the
+    main API's store, or None for a new conversation (02 §8.3).
+    """
     queue: asyncio.Queue = asyncio.Queue()
 
     async def emit(event: str, data: dict) -> None:
@@ -161,10 +366,14 @@ async def run_turn(ctx: CallerCtx, message: str, model: str) -> AsyncIterator[tu
     agent = Agent(
         client=get_client(model),
         name="risk-analyst",
+        # Instructions travel as a per-call option, not as a stored message:
+        # the "## Today" tail changes daily and must not accumulate in the blob.
         instructions=system_prompt(),
         tools=build_tools(ctx, emit),
+        default_options=dict(SESSION_CHAT_OPTIONS),
+        context_providers=build_context_providers(),
     )
-    session = AgentSession()
+    session, rehydrated = restore_session(session_blob, ctx.trace_id)
     started = time.monotonic()
     model_calls = 0
     usage_total = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
@@ -216,6 +425,13 @@ async def run_turn(ctx: CallerCtx, message: str, model: str) -> AsyncIterator[tu
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+    # The blob goes back BEFORE usage/done so the main API always has it when
+    # the terminal event arrives, on the error path too (02 §8.3).
+    try:
+        yield ("session_state", session_state_event(session, rehydrated=rehydrated))
+    except Exception:  # noqa: BLE001 — a serialisation bug must not eat the turn
+        logger.error("AI agent session could not be serialised trace=%s", ctx.trace_id, exc_info=True)
 
     yield ("usage", {**usage_total, "cost_usd": None})
     if failure is not None:

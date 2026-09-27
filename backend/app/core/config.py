@@ -176,6 +176,7 @@ class Settings:
     AI_DAILY_TURNS_LIMIT: int
     AI_DAILY_COST_LIMIT_USD: float
     AI_MODEL_PRICES: dict[str, tuple[float, float]]
+    AI_SESSION_RETENTION_DAYS: int
 
     # Interactive API docs surface (Swagger /docs, ReDoc /redoc, /openapi.json)
     API_DOCS_ENABLED: bool
@@ -672,6 +673,14 @@ class Settings:
         # edit here and nowhere else. Cache-read input tokens are billed at
         # 10% of the input price, which is Azure OpenAI's published discount.
         self.AI_MODEL_PRICES = _parse_model_prices(os.environ.get("AI_MODEL_PRICES"))
+        # OPT-0065 §8.2: how long a soft-deleted conversation (ai_sessions +
+        # ai_messages) is kept before the daily sweep hard-deletes it. Same
+        # convention as the users.db retention knobs: 0 = keep forever, NOT
+        # "delete everything". Sessions the user has not deleted are never
+        # swept regardless of age.
+        self.AI_SESSION_RETENTION_DAYS = int(
+            (os.environ.get("AI_SESSION_RETENTION_DAYS") or "90").strip()
+        )
 
         # ── Entra ID (Azure AD) OIDC provider (auth design P3) ───────────────
         # App registration lives in tenant 11cf6a7b-… (design doc §8.1). The

@@ -1,24 +1,34 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import {
   IconArrowUp,
+  IconHistory,
   IconMessageChatbot,
   IconPlayerStopFilled,
-  IconPlus,
 } from "@tabler/icons-react"
 
 import { AiStatusBar, type TodayUsage } from "@/components/ai/AiStatusBar"
+import { SessionList } from "@/components/ai/SessionList"
 import { SourceBadge } from "@/components/ai/SourceBadge"
 import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
+  AI_MODELS,
   DEFAULT_AI_MODEL,
   useAiTurn,
   type AiMessage,
   type AiModel,
   type TurnError,
 } from "@/hooks/useAiTurn"
+import {
+  readStoredSessionId,
+  sessionModel,
+  writeStoredSessionId,
+  type AiSessionListResponse,
+  type AiSessionSummary,
+} from "@/lib/ai-session"
 import { apiFetch } from "@/lib/fetch"
 import { cn } from "@/lib/utils"
 
@@ -35,8 +45,13 @@ import { cn } from "@/lib/utils"
  * legend, keyboard hint, example chips) is gone — the site header already
  * names the page, and the rest was reading material nobody asked for.
  *
- * Slice 1 has no history: every turn is independent (docs/ai-agent/05 §1).
- * The "new conversation" button only clears the visible transcript.
+ * Slice 2 adds memory (docs/ai-agent/02 §8): the server keeps every
+ * conversation, so a history column sits to the left on wide screens (a
+ * sheet behind one icon on narrow ones) with rename / delete per row and a
+ * single "new conversation" entry point at its top. The id of the open
+ * conversation lives in sessionStorage — tab-scoped on purpose: a refresh
+ * comes back to the same investigation, a new tab starts clean, and nothing
+ * about *what* was being investigated is stored as a preference.
  */
 
 // The DashboardLayout wrapper is a plain block with `pt-4` (1rem) under a
@@ -74,12 +89,109 @@ export default function AiAssistantPage() {
     return () => controller.abort()
   }, [fetchToday])
 
-  const { messages, streaming, usage, send, stop, clear } = useAiTurn({
-    onTurnEnd: () => {
-      fetchToday()
-    },
-  })
+  // ── history ──────────────────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<AiSessionSummary[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const fetchSessions = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await apiFetch("/api/v1/ai/sessions?limit=50", { signal })
+      if (!res.ok) return
+      const body = (await res.json()) as AiSessionListResponse
+      setSessions(Array.isArray(body.data) ? body.data : [])
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      // The list keeps its last value; the conversation itself is unaffected.
+    }
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchSessions(controller.signal)
+    return () => controller.abort()
+  }, [fetchSessions])
+
+  const { messages, streaming, usage, sessionId, loadingSession, send, stop, resumeSession, newConversation } =
+    useAiTurn({
+      onTurnEnd: () => {
+        fetchToday()
+        // The first turn gives the row its title; later turns move it to the top.
+        fetchSessions()
+      },
+    })
   const hasConversation = messages.length > 0
+
+  // Keep the tab's "current conversation" in step with the hook.
+  useEffect(() => {
+    writeStoredSessionId(sessionId)
+  }, [sessionId])
+
+  // Refresh-resume: reopen the conversation this tab had before the reload.
+  // A 404 (deleted elsewhere, or a stale id) is silently dropped.
+  useEffect(() => {
+    const stored = readStoredSessionId()
+    if (!stored) return
+    const controller = new AbortController()
+    void resumeSession(stored, controller.signal).then((detail) => {
+      if (controller.signal.aborted) return
+      if (!detail) {
+        writeStoredSessionId(null)
+        return
+      }
+      const m = sessionModel(detail.session.model, AI_MODELS)
+      if (m) setModel(m)
+    })
+    return () => controller.abort()
+    // Mount-only on purpose: `resumeSession` is stable (useCallback with no deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const openSession = useCallback(
+    async (id: string) => {
+      if (streaming || id === sessionId) {
+        setHistoryOpen(false)
+        return
+      }
+      setHistoryOpen(false)
+      const detail = await resumeSession(id)
+      if (!detail) {
+        // Gone since the list was fetched — drop it from the list too.
+        setSessions((prev) => prev.filter((s) => s.session_id !== id))
+        return
+      }
+      const m = sessionModel(detail.session.model, AI_MODELS)
+      if (m) setModel(m)
+    },
+    [streaming, sessionId, resumeSession],
+  )
+
+  const renameSession = useCallback(async (id: string, title: string) => {
+    // Optimistic: the row reads the new name at once; a failed PATCH is
+    // corrected by the refetch.
+    setSessions((prev) => prev.map((s) => (s.session_id === id ? { ...s, title } : s)))
+    try {
+      await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      })
+    } finally {
+      fetchSessions()
+    }
+  }, [fetchSessions])
+
+  const deleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, { method: "DELETE" })
+      } finally {
+        setSessions((prev) => prev.filter((s) => s.session_id !== id))
+        if (id === sessionId) newConversation()
+        fetchSessions()
+      }
+    },
+    [sessionId, newConversation, fetchSessions],
+  )
 
   const onTranscriptScroll = useCallback(() => {
     const el = transcriptRef.current
@@ -109,11 +221,45 @@ export default function AiAssistantPage() {
     void send(q, model)
   }, [draft, streaming, send, model])
 
-  const newConversation = useCallback(() => {
-    clear()
+  const startNew = useCallback(() => {
+    newConversation()
     setDraft("")
+    setHistoryOpen(false)
     textareaRef.current?.focus()
-  }, [clear])
+  }, [newConversation])
+
+  const showHistory = sessions.length > 0 || hasConversation
+  const historyList = (
+    <SessionList
+      sessions={sessions}
+      activeId={sessionId}
+      busy={streaming || loadingSession}
+      onSelect={(id) => void openSession(id)}
+      onNew={startNew}
+      onRename={renameSession}
+      onDelete={deleteSession}
+    />
+  )
+  // Narrow screens: the same list behind one icon, in a sheet.
+  const historyToggle = showHistory ? (
+    <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
+      <SheetTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t("ai.history")}
+          title={t("ai.history")}
+          className="size-8 text-muted-foreground md:hidden"
+        >
+          <IconHistory className="h-4 w-4" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-72 p-3 pt-10">
+        <SheetTitle className="sr-only">{t("ai.history")}</SheetTitle>
+        {historyList}
+      </SheetContent>
+    </Sheet>
+  ) : null
 
   const composer = (
     <div className="rounded-2xl border bg-card px-4 pb-2.5 pt-3 shadow-sm">
@@ -135,6 +281,8 @@ export default function AiAssistantPage() {
         className="max-h-48 min-h-6 resize-none overflow-y-auto border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 md:text-sm"
       />
       <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+        {historyToggle}
         <Select value={model} onValueChange={(v) => setModel(v as AiModel)} disabled={streaming}>
           <SelectTrigger
             size="sm"
@@ -152,6 +300,7 @@ export default function AiAssistantPage() {
             </SelectItem>
           </SelectContent>
         </Select>
+        </div>
         {streaming ? (
           <Button
             size="icon"
@@ -179,24 +328,27 @@ export default function AiAssistantPage() {
     </div>
   )
 
-  if (!hasConversation) {
+  // Wide screens: the history column sits left of the conversation once there
+  // is anything to list. With no sessions the page is exactly the slice-1
+  // empty state — nothing to explain, nothing to navigate.
+  const historyColumn = showHistory ? (
+    <aside className="hidden w-60 shrink-0 py-3 md:block">{historyList}</aside>
+  ) : null
+
+  const main = !hasConversation ? (
     // Empty state: the composer alone, vertically centred, the way a fresh
     // ChatGPT / Gemini window opens — product name above, status line below.
-    return (
-      <div className={cn(PAGE_HEIGHT, "flex flex-col items-center justify-center pb-16")}>
-        <div className={cn(COLUMN, "flex flex-col gap-5")}>
-          <h1 className="text-center text-2xl font-medium tracking-tight">{t("ai.greeting")}</h1>
-          {composer}
-          <div className="flex justify-center px-1">
-            <AiStatusBar model={model} turnUsage={usage} today={today} />
-          </div>
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center pb-16">
+      <div className={cn(COLUMN, "flex flex-col gap-5")}>
+        <h1 className="text-center text-2xl font-medium tracking-tight">{t("ai.greeting")}</h1>
+        {composer}
+        <div className="flex justify-center px-1">
+          <AiStatusBar model={model} turnUsage={usage} today={today} />
         </div>
       </div>
-    )
-  }
-
-  return (
-    <div className={cn(PAGE_HEIGHT, "flex flex-col")}>
+    </div>
+  ) : (
+    <div className="flex min-w-0 flex-1 flex-col">
       {/* Transcript — scrolls on its own; the composer below never moves. */}
       <div
         ref={transcriptRef}
@@ -215,18 +367,15 @@ export default function AiAssistantPage() {
         {composer}
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">
           <AiStatusBar model={model} turnUsage={usage} today={today} />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={newConversation}
-            disabled={streaming}
-            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-          >
-            <IconPlus className="h-3.5 w-3.5" />
-            {t("ai.newConversation")}
-          </Button>
         </div>
       </div>
+    </div>
+  )
+
+  return (
+    <div className={cn(PAGE_HEIGHT, "flex gap-4")}>
+      {historyColumn}
+      {main}
     </div>
   )
 }

@@ -64,6 +64,10 @@ class TurnRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     model: str = Field(min_length=1, max_length=64)
     trace_id: str = ""
+    # Previous turn's AgentSession.to_dict() from the main API's store; null
+    # starts a new conversation (02 §8.3). Opaque here: this process never
+    # persists it, it only rehydrates, runs, and hands the new one back.
+    session_blob: Optional[dict[str, Any]] = None
 
 
 # One serialiser for every SSE hop (core/sse.py); the main API relays these
@@ -97,12 +101,16 @@ async def turn(
         tools_called: list[str] = []
         usage: dict[str, Any] = {}
         reason = "error"
+        state_turns: Any = None
+        rehydrated: Any = None
         queue: asyncio.Queue = asyncio.Queue()
         end = object()
 
         async def pump() -> None:
             try:
-                async for event, data in harness.run_turn(ctx, body.message, body.model):
+                async for event, data in harness.run_turn(
+                    ctx, body.message, body.model, session_blob=body.session_blob
+                ):
                     await queue.put((event, data))
             except Exception as exc:  # noqa: BLE001 — the stream must end cleanly
                 logger.error("AI agent turn crashed trace=%s: %s", ctx.trace_id, type(exc).__name__, exc_info=True)
@@ -128,21 +136,31 @@ async def turn(
                     usage = data
                 elif event == "done":
                     reason = str(data.get("terminal_reason"))
+                elif event == "session_state":
+                    state_turns = data.get("turns")
+                    rehydrated = data.get("rehydrated")
                 yield _sse(event, data)
         finally:
             if not task.done():
                 task.cancel()
             logger.info(
-                "AI agent turn: user=%s model=%s tools=%s in=%s out=%s reason=%s %.1fs trace=%s",
+                "AI agent turn: user=%s model=%s tools=%s in=%s out=%s reason=%s "
+                "resumed=%s turns=%s %.1fs trace=%s",
                 ctx.user_id,
                 body.model,
                 ",".join(tools_called) or "-",
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 reason,
+                body.session_blob is not None,
+                state_turns,
                 time.monotonic() - started,
                 ctx.trace_id,
             )
+            if body.session_blob is not None and rehydrated is False:
+                # Loud on purpose: the person just lost their conversation
+                # context and the main API will mark the row read-only.
+                logger.warning("AI agent session blob rejected, turn ran on a fresh session trace=%s", ctx.trace_id)
             logger.debug("AI agent question trace=%s: %s", ctx.trace_id, body.message[:200])
 
     return StreamingResponse(

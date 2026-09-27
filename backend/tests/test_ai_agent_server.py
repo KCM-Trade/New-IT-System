@@ -44,14 +44,16 @@ def scripted_turn(monkeypatch):
 
     seen: dict = {}
 
-    async def fake_run_turn(ctx, message, model):
+    async def fake_run_turn(ctx, message, model, session_blob=None):
         seen["ctx"] = ctx
         seen["message"] = message
         seen["model"] = model
+        seen["session_blob"] = session_blob
         yield ("tool_use", {"name": "get_client_overview", "input": {"subject": {"kind": "client_id", "value": "123456"}}})
         yield ("tool_done", {"name": "get_client_overview", "ok": True, "source": {"function": "f", "certified": True}, "certified": True})
         yield ("text", {"delta": "Client 123456 "})
         yield ("text", {"delta": "looks fine."})
+        yield ("session_state", {"blob": {"session_id": "s", "state": {}}, "turns": 1, "rehydrated": session_blob is not None})
         yield ("usage", {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0, "cost_usd": None})
         yield ("done", {"terminal_reason": "end_turn", "num_turns": 2})
 
@@ -92,10 +94,30 @@ def test_turn_passes_restricted_scope_through(client, scripted_turn):
     assert scripted_turn["ctx"].scope == frozenset({1})
 
 
+def test_turn_without_blob_is_a_new_session_and_relays_session_state(client, scripted_turn):
+    """02 §8.3: the main API omits session_blob for a new conversation; the
+    agent still answers with a session_state frame BEFORE done."""
+    r = client.post("/v1/turn", json=BODY, headers={"X-Internal-Token": TOKEN})
+    assert scripted_turn["session_blob"] is None
+    text = r.text
+    assert 'event: session_state\ndata: {"blob": {"session_id": "s", "state": {}}, "turns": 1, "rehydrated": false}' in text
+    assert text.index("event: session_state") < text.index("event: done")
+
+
+def test_turn_passes_session_blob_through_opaque(client, scripted_turn):
+    """The blob is the main API's property: whatever it sends arrives unchanged
+    in run_turn, and the agent never needs to understand it."""
+    blob = {"session_id": "abc", "state": {"in_memory": {"messages": [{"role": "user"}]}}, "anything": [1, 2]}
+    r = client.post("/v1/turn", json={**BODY, "session_blob": blob}, headers={"X-Internal-Token": TOKEN})
+    assert r.status_code == 200
+    assert scripted_turn["session_blob"] == blob
+    assert '"rehydrated": true' in r.text
+
+
 def test_turn_crash_ends_with_error_and_done(client, monkeypatch):
     from app.ai_agent import harness
 
-    async def boom(ctx, message, model):
+    async def boom(ctx, message, model, session_blob=None):
         yield ("text", {"delta": "partial"})
         raise RuntimeError("secret connection string")
 

@@ -36,7 +36,7 @@ from app.core.api_key_middleware import APIKeyMiddleware
 from app.core.auth_middleware import AuthMiddleware
 from app.core.audit_missing_middleware import AuditMissingMiddleware
 from app.core.users_db import init_users_db
-from app.core.ai_usage_db import init_ai_usage_db
+from app.core.ai_usage_db import init_ai_usage_db, purge_ai_sessions
 from app.core.sqlite_wal_keepalive import hold_wal_sidecars
 from app.core.database import init_db
 from app.core.risk_monitor_db import init_risk_monitor_db
@@ -293,6 +293,11 @@ async def lifespan(app: FastAPI):
                 f"Purged {events} auth_event(s) and {audits} audit_log row(s) "
                 "past their retention window"
             )
+        # OPT-0065: same complement for the AI conversation store (the daily
+        # 04:10 HKT job in core/scheduler.py is the primary mechanism).
+        ai_sessions = purge_ai_sessions(_auth_settings.AI_SESSION_RETENTION_DAYS)
+        if ai_sessions:
+            logger.info(f"Purged {ai_sessions} soft-deleted AI session(s) past retention")
         start_scheduler()
         start_burst_scheduler()
         start_login_ip_scheduler()

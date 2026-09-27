@@ -1,22 +1,27 @@
 /**
- * One AI analyst turn over `POST /api/v1/ai/turn` (SSE).
+ * One AI analyst turn over `POST /api/v1/ai/turn` (SSE), plus the session
+ * bookkeeping around it.
  *
- * Contract: docs/ai-agent/02-contracts.md §4.1 / §4.3. The stream is consumed
- * with `apiFetch` + `ReadableStream`, not `EventSource`: the question travels in
- * a POST body and EventSource can only GET. `apiFetch` still injects the API
- * key header and the session cookie, and returns the `Response` before reading
- * the body, so streaming works once its timeout and retry are switched off
- * (a retry would resend the question; a timeout would cut a long analysis).
+ * Contract: docs/ai-agent/02-contracts.md §4.1 / §4.3 / §8.4. The stream is
+ * consumed with `apiFetch` + `ReadableStream`, not `EventSource`: the question
+ * travels in a POST body and EventSource can only GET. `apiFetch` still injects
+ * the API key header and the session cookie, and returns the `Response` before
+ * reading the body, so streaming works once its timeout and retry are switched
+ * off (a retry would resend the question; a timeout would cut a long analysis).
  *
- * Slice 1 keeps no history: every turn is independent and the `session_id`
- * only groups audit rows. The hook therefore holds the visible transcript in
- * component state and nothing else — nothing is persisted, because what a risk
- * analyst is investigating is context, not a preference.
+ * Memory model (slice 2): the SERVER remembers. Every turn is sent with the
+ * current `session_id`; the main API feeds the agent the conversation so far
+ * and stores the turn afterwards. The browser holds only the visible
+ * transcript — live turns are built from the SSE frames, a reopened
+ * conversation is rebuilt from `GET /ai/sessions/{id}` through the same
+ * `AiMessage` shape (lib/ai-session.ts), so both render identically.
+ * `newConversation()` just forgets the id; the server row stays in the list.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { createDeltaBuffer } from "@/lib/delta-buffer";
+import { mapSessionMessages, type AiSessionDetail } from "@/lib/ai-session";
 import { apiFetch } from "@/lib/fetch";
 import { SseParser, parseFrameJson } from "@/lib/sse-parser";
 
@@ -76,9 +81,18 @@ export interface UseAiTurnResult {
   /** The last completed turn's usage. */
   usage: TurnUsage | null;
   sessionId: string | null;
+  /** True while a stored conversation is being loaded for redisplay. */
+  loadingSession: boolean;
   send: (message: string, model: AiModel) => Promise<void>;
   stop: () => void;
-  clear: () => void;
+  /**
+   * Replace the transcript with a stored conversation and continue it.
+   * Resolves to the session detail, or `null` when it does not exist (404) or
+   * the load was aborted — callers drop the id in that case.
+   */
+  resumeSession: (id: string, signal?: AbortSignal) => Promise<AiSessionDetail | null>;
+  /** Forget the current session id and clear the transcript. No server call. */
+  newConversation: () => void;
 }
 
 interface UseAiTurnOptions {
@@ -112,6 +126,7 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
   const [error, setError] = useState<TurnError | null>(null);
   const [usage, setUsage] = useState<TurnUsage | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [loadingSession, setLoadingSession] = useState(false);
 
   const controllerRef = useRef<AbortController | null>(null);
   const onTurnEndRef = useRef(options.onTurnEnd);
@@ -132,12 +147,42 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
     controllerRef.current?.abort();
   }, []);
 
-  const clear = useCallback(() => {
+  const newConversation = useCallback(() => {
     if (streaming) return;
     setMessages([]);
     setError(null);
     setUsage(null);
+    setSessionId(null);
   }, [streaming]);
+
+  const resumeSession = useCallback(
+    async (id: string, signal?: AbortSignal): Promise<AiSessionDetail | null> => {
+      if (controllerRef.current) return null;
+      setLoadingSession(true);
+      try {
+        const res = await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, { signal });
+        if (res.status === 404) return null;
+        if (!res.ok) {
+          setError({ code: res.status === 403 ? "forbidden" : `http_${res.status}`, message: res.statusText });
+          return null;
+        }
+        const detail = (await res.json()) as AiSessionDetail;
+        if (signal?.aborted) return null;
+        setMessages(mapSessionMessages(detail.messages));
+        setError(null);
+        setUsage(null);
+        setSessionId(detail.session.session_id);
+        return detail;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return null;
+        setError({ code: "network", message: err instanceof Error ? err.message : String(err) });
+        return null;
+      } finally {
+        setLoadingSession(false);
+      }
+    },
+    [],
+  );
 
   const send = useCallback(
     async (message: string, model: AiModel) => {
@@ -189,8 +234,15 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
           } catch {
             /* non-JSON body */
           }
+          if (res.status === 404) {
+            // The conversation we were continuing is gone (deleted in another
+            // tab, or never ours). Forget the id so the next question starts
+            // a fresh one instead of failing the same way again.
+            setSessionId(null);
+          }
           fail({
-            code: res.status === 403 ? "forbidden" : `http_${res.status}`,
+            code:
+              res.status === 403 ? "forbidden" : res.status === 404 ? "session_not_found" : `http_${res.status}`,
             message: detail || res.statusText,
             traceId: res.headers.get("X-Trace-ID") ?? undefined,
           });
@@ -314,5 +366,16 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
     [patchAssistant, sessionId],
   );
 
-  return { messages, streaming, error, usage, sessionId, send, stop, clear };
+  return {
+    messages,
+    streaming,
+    error,
+    usage,
+    sessionId,
+    loadingSession,
+    send,
+    stop,
+    resumeSession,
+    newConversation,
+  };
 }

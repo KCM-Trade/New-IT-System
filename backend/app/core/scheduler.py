@@ -23,6 +23,7 @@ DIGEST_JOB_ID = "alert_mail_digest_dispatch"
 CASE_BASELINE_JOB_ID = "risk_cases_daily_baseline"
 USER_ID_REPAIR_JOB_ID = "alert_events_user_id_repair"
 RETENTION_JOB_ID = "users_db_retention_sweep"
+AI_SESSIONS_RETENTION_JOB_ID = "ai_sessions_retention_sweep"
 HKT = ZoneInfo("Asia/Hong_Kong")
 
 # Module-level singleton; initialised by start_scheduler()
@@ -158,6 +159,25 @@ def _users_db_retention_job() -> None:
     logger.info("users.db retention sweep removed: %s", removed)
 
 
+def _ai_sessions_retention_job() -> None:
+    """Job function: hard-delete AI conversations soft-deleted past retention.
+
+    OPT-0065 §8.2. Same shape as the users.db sweep above: the recurring job
+    is the primary mechanism and the lifespan startup pass is its complement
+    for a box that was off across the window. Only rows the user already
+    deleted are eligible (`deleted_at IS NOT NULL`); 0 days = keep forever.
+    """
+    try:
+        from ..core.ai_usage_db import purge_ai_sessions
+        from ..core.config import get_settings
+
+        removed = purge_ai_sessions(get_settings().AI_SESSION_RETENTION_DAYS)
+    except Exception:
+        logger.error("ai_sessions retention sweep failed (non-fatal)", exc_info=True)
+        return
+    logger.info("ai_sessions retention sweep removed %d session(s)", removed)
+
+
 def start_scheduler() -> None:
     """Start the background scheduler using report_config from SQLite.
 
@@ -241,6 +261,20 @@ def start_scheduler() -> None:
             max_instances=1,
         )
         logger.info("users.db retention sweep scheduled: 04:00 HKT daily")
+    # OPT-0065: AI conversation retention. Ten minutes after the users.db sweep
+    # so the two never contend, in the same quiet hour, for the same reasons.
+    # No separate kill switch: AI_SESSION_RETENTION_DAYS=0 already means "never
+    # delete anything", which is the only thing a switch would add.
+    _scheduler.add_job(
+        _ai_sessions_retention_job,
+        CronTrigger(hour=4, minute=10, timezone=HKT),
+        id=AI_SESSIONS_RETENTION_JOB_ID,
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
+    logger.info("ai_sessions retention sweep scheduled: 04:10 HKT daily")
     _scheduler.start()
     logger.info(f"Scheduler started: daily report at {hour:02d}:{minute:02d} HKT")
 

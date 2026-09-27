@@ -1,10 +1,24 @@
-"""AI analyst agent — browser-facing endpoints (OPT-0064).
+"""AI analyst agent — browser-facing endpoints (OPT-0064, sessions OPT-0065).
 
-    POST /api/v1/ai/turn         one question -> Server-Sent Events
-    GET  /api/v1/ai/usage/today  the caller's quota position for the status bar
+    POST   /api/v1/ai/turn            one question -> Server-Sent Events
+    GET    /api/v1/ai/usage/today     the caller's quota position for the status bar
+    GET    /api/v1/ai/sessions        the caller's conversations, newest first
+    GET    /api/v1/ai/sessions/{id}   one conversation's transcript (never the blob)
+    DELETE /api/v1/ai/sessions/{id}   soft delete            (audit ai.session.delete)
+    PATCH  /api/v1/ai/sessions/{id}   rename                 (audit ai.session.rename)
 
 Contract: docs/ai-agent/02-contracts.md §4.1 (request/response), §4.3 (events),
-§5 (audit), §6 (quota). Design decisions: docs/ai-agent/01-decisions.md.
+§5 (audit), §6 (quota), §8.3–§8.4 (sessions). Decisions: docs/ai-agent/01.
+
+Memory (OPT-0065 §8): the agent container is stateless. The model's context
+for a conversation is the serialised framework session (`blob`) that THIS
+process stores in ai_agent.db, hands to the agent in the request body
+(`session_blob`) and writes back from the agent's `session_state` event —
+which is consumed here and never forwarded to the browser. Ownership is
+checked before the stream opens: a session that is not the caller's answers a
+plain 404 (403 is the module gate's word; 404 also does not confirm the id
+exists), and the four `/sessions*` endpoints match on the owner inside the SQL
+so there is no code path that can forget the check.
 
 Why these routes live on the main API and not on the agent container: the
 module gate is mounted ONCE on ``api_v1_router`` (core/auth_deps.py), so a
@@ -35,12 +49,13 @@ purpose:
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 import uuid
 from typing import Any, AsyncIterator
 
 import anyio
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.core import ai_usage_db
@@ -49,7 +64,14 @@ from app.core.auth_middleware import client_ip
 from app.core.config import get_settings
 from app.core.data_scope import caller_cids
 from app.core.logging_config import get_logger, trace_id_var
-from app.schemas.ai import TurnRequest, UsageToday
+from app.schemas.ai import (
+    OkResponse,
+    SessionDetail,
+    SessionList,
+    SessionRename,
+    TurnRequest,
+    UsageToday,
+)
 from app.services import ai_gateway_service as gateway
 from app.services.ai_gateway_service import (
     KEEPALIVE_SECONDS,
@@ -65,6 +87,10 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/ai")
 
 AUDIT_ACTION = "ai.query.submit"
+AUDIT_SESSION_DELETE = "ai.session.delete"
+AUDIT_SESSION_RENAME = "ai.session.rename"
+
+SESSION_NOT_FOUND = "session not found"
 
 # How much of the question the audit row keeps. Enough to see what was asked,
 # not so much that a pasted document lands in users.db (02 §5).
@@ -110,6 +136,31 @@ def _subject_label(tool_input: Any) -> str | None:
     return f"{kind}:{value}"
 
 
+def _resolve_tool_entry(entries: list[dict[str, Any]], done: dict) -> None:
+    """Fold a ``tool_done`` event into the oldest still-pending entry of the
+    same name (the agent finishes tools in the order it started them — the
+    same rule the browser applies)."""
+    name = str(done.get("name") or "")
+    for entry in entries:
+        if entry["name"] == name and entry["ok"] is None:
+            entry["ok"] = bool(done.get("ok"))
+            entry["certified"] = bool(done.get("certified", False))
+            entry["source"] = done.get("source") if done.get("ok") else None
+            entry["error_code"] = None if done.get("ok") else str(done.get("error_code") or "error")
+            return
+    if name:
+        entries.append(
+            {
+                "name": name,
+                "ok": bool(done.get("ok")),
+                "certified": bool(done.get("certified", False)),
+                "source": done.get("source") if done.get("ok") else None,
+                "error_code": None if done.get("ok") else str(done.get("error_code") or "error"),
+                "input": None,
+            }
+        )
+
+
 @router.post("/turn")
 async def turn(
     body: TurnRequest,
@@ -121,6 +172,52 @@ async def turn(
     scope = caller_cids(request)
     session_id = body.session_id or uuid.uuid4().hex
     trace_id = trace_id_var.get() or "-"
+    owner_uid = _quota_user_id(user)
+
+    # ── the conversation row: resume, refuse, or create (02 §8.4) ────────────
+    # Decided BEFORE any SSE byte goes out so a refusal is a real HTTP 404 the
+    # browser can act on, not an event inside a 200 stream.
+    session_blob: dict | None = None
+    resumed = False
+    try:
+        existing = (
+            await anyio.to_thread.run_sync(ai_usage_db.get_session_for_turn, session_id)
+            if body.session_id
+            else None
+        )
+    except sqlite3.Error:
+        # ai_agent.db unreadable/unwritable is a deployment fault (ownership,
+        # disk), not a user fault: say so with a 503 before any model call is
+        # spent, and log at ERROR every time — this makes the feature dead.
+        logger.error("AI turn refused: ai_agent.db is not accessible (trace_id=%s)", trace_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="conversation store unavailable")
+    if existing is not None:
+        if existing["deleted"] or existing["user_id"] != owner_uid:
+            # Somebody else's conversation (or a deleted one). Throttled
+            # auth_events row like every other permission_denied — this is
+            # the id-enumeration attempt the 404 is there to not confirm.
+            await anyio.to_thread.run_sync(
+                lambda: record_auth_event(
+                    "permission_denied",
+                    email=user.email if user else None,
+                    detail="ai_session_owner",
+                    ip=client_ip(request),
+                    ua=request.headers.get("User-Agent"),
+                )
+            )
+            raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND)
+        session_blob = existing["blob"]
+        resumed = session_blob is not None
+    else:
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: ai_usage_db.create_session(
+                    session_id, owner_uid, title=body.message.strip(), model=body.model
+                )
+            )
+        except sqlite3.Error:
+            logger.error("AI turn refused: ai_agent.db is not writable (trace_id=%s)", trace_id, exc_info=True)
+            raise HTTPException(status_code=503, detail="conversation store unavailable")
 
     # See the module docstring: the audit row is written when the stream ends.
     request.state.audit_deferred = True
@@ -132,13 +229,20 @@ async def turn(
         scope_denied = 0
         input_tokens = 0
         output_tokens = 0
+        cache_read_tokens = 0
         cost_usd = 0.0
         terminal_reason = "error"
         num_turns = 0
         error_code: str | None = None
         started = time.monotonic()
-        quota_uid = _quota_user_id(user)
+        quota_uid = owner_uid
         day = ai_usage_db.today_hk()
+        # Transcript of this turn for ai_messages (02 §8.2): the answer text
+        # and one summary per tool call. `input` is kept so a later run_sql
+        # call can show its SQL in the history view.
+        answer_parts: list[str] = []
+        tool_entries: list[dict[str, Any]] = []
+        state_saved = False
 
         def _fail(code: str, message: str) -> list[bytes]:
             nonlocal error_code, terminal_reason
@@ -197,6 +301,10 @@ async def turn(
                 "message": body.message,
                 "model": body.model,
                 "trace_id": trace_id,
+                # The stored framework session, or null for a fresh one
+                # (02 §8.3). The agent restores it, runs the turn, and sends
+                # the new state back as `session_state`.
+                "session_blob": session_blob,
             }
 
             stream = gateway.open_agent_stream(settings, payload, token=token)
@@ -221,14 +329,45 @@ async def turn(
                     except StopAsyncIteration:
                         break
 
-                    if event == "tool_use" and isinstance(data, dict):
+                    if event == "text" and isinstance(data, dict):
+                        delta = data.get("delta")
+                        if isinstance(delta, str) and delta:
+                            answer_parts.append(delta)
+                    elif event == "tool_use" and isinstance(data, dict):
                         name = str(data.get("name") or "")
                         if name:
                             tools_called.append(name)
+                            tool_entries.append(
+                                {
+                                    "name": name,
+                                    "ok": None,
+                                    "certified": False,
+                                    "source": None,
+                                    "error_code": None,
+                                    "input": data.get("input"),
+                                }
+                            )
                         label = _subject_label(data.get("input"))
                         if label and label not in subjects:
                             subjects.append(label)
+                    elif event == "session_state" and isinstance(data, dict):
+                        # Consumed here, never forwarded (02 §8.3): the blob
+                        # is the framework's private format and carries raw
+                        # tool results the browser has no business holding.
+                        blob = data.get("blob")
+                        if isinstance(blob, dict):
+                            state_saved = await anyio.to_thread.run_sync(
+                                lambda: ai_usage_db.save_session_state(
+                                    session_id,
+                                    owner_uid,
+                                    blob=blob,
+                                    turns=int(data.get("turns") or 0),
+                                    model=body.model,
+                                )
+                            )
+                        continue
                     elif event == "tool_done" and isinstance(data, dict):
+                        _resolve_tool_entry(tool_entries, data)
                         if data.get("ok") is False and data.get("error_code") == "scope_denied":
                             scope_denied += 1
                             # The agent container cannot write users.db (its
@@ -259,6 +398,7 @@ async def turn(
                         data = {**data, "cost_usd": usd}
                         input_tokens += i
                         output_tokens += o
+                        cache_read_tokens += c
                         cost_usd += usd
                         await anyio.to_thread.run_sync(
                             ai_usage_db.add_usage, quota_uid, day, i, o, usd
@@ -304,6 +444,8 @@ async def turn(
                 "output_tokens": output_tokens,
                 "cost_usd": round(cost_usd, 6),
                 "scope_denied_count": scope_denied,
+                # True when the agent was handed an earlier turn's context.
+                "resumed": resumed,
             }
             if error_code is not None:
                 new_value["error_code"] = error_code
@@ -312,6 +454,37 @@ async def turn(
                     AUDIT_ACTION, target=f"ai_session:{session_id}", new_value=new_value
                 )
             )
+            # The transcript rows (02 §8.2), on every path past the ownership
+            # check — a refused or failed turn is still part of the
+            # conversation the person sees. Never raises past here: the
+            # stream is already closing and the audit row is written.
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda: ai_usage_db.append_turn_messages(
+                        session_id,
+                        question=body.message,
+                        answer="".join(answer_parts),
+                        tools=tool_entries,
+                        usage={
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "cache_read_input_tokens": cache_read_tokens,
+                            "cost_usd": round(cost_usd, 6),
+                        },
+                        error_code=error_code,
+                    )
+                )
+                if not state_saved:
+                    await anyio.to_thread.run_sync(
+                        ai_usage_db.touch_session, session_id, owner_uid
+                    )
+            except Exception:  # noqa: BLE001
+                logger.error(
+                    "AI turn: could not write ai_messages for session %s (trace_id=%s)",
+                    session_id,
+                    trace_id,
+                    exc_info=True,
+                )
             # The one INFO line per turn (OPT-0058: never one per event).
             logger.info(
                 "AI turn: user=%s model=%s tools=%s subjects=%d tokens=%d/%d cost=%.4f "
@@ -347,3 +520,77 @@ def usage_today(request: Request) -> UsageToday:
         input_tokens=usage["input_tokens"],
         output_tokens=usage["output_tokens"],
     )
+
+
+# ── sessions (OPT-0065 §8.4) ─────────────────────────────────────────────────
+#
+# Plain `def`: SQLite reads and writes, sub-millisecond, no awaiting. Behind
+# the same API key + `ai` module gate as everything else on this router; not
+# added to SESSION_ONLY_PATHS (that list is for the SSE POST the browser must
+# reach without a header, and apiFetch sends the key on these anyway).
+#
+# Ownership: every store call takes the caller's user_id and matches on it in
+# SQL. A foreign, unknown or deleted session is indistinguishable from the
+# outside — 404 in all three cases, never 403 (that is the module gate's word).
+
+
+@router.get("/sessions", response_model=SessionList)
+def list_sessions(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> SessionList:
+    user: SessionUser | None = getattr(request.state, "user", None)
+    data, total = ai_usage_db.list_sessions(_quota_user_id(user), limit=limit)
+    return SessionList(data=data, total=total)
+
+
+@router.get("/sessions/{session_id}", response_model=SessionDetail)
+def get_session(session_id: str, request: Request) -> SessionDetail:
+    user: SessionUser | None = getattr(request.state, "user", None)
+    detail = ai_usage_db.get_session_detail(session_id, _quota_user_id(user))
+    if detail is None:
+        raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND)
+    return SessionDetail(**detail)
+
+
+@router.delete("/sessions/{session_id}", response_model=OkResponse)
+def delete_session(
+    session_id: str,
+    request: Request,
+    audit: Auditor = Depends(get_auditor),
+) -> OkResponse:
+    user: SessionUser | None = getattr(request.state, "user", None)
+    before = ai_usage_db.soft_delete_session(session_id, _quota_user_id(user))
+    if before is None:
+        raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND)
+    audit.record(
+        AUDIT_SESSION_DELETE,
+        target=f"ai_session:{session_id}",
+        old_value={"title": before["title"], "turns": before["turns"]},
+    )
+    return OkResponse()
+
+
+@router.patch("/sessions/{session_id}", response_model=OkResponse)
+def rename_session(
+    session_id: str,
+    body: SessionRename,
+    request: Request,
+    audit: Auditor = Depends(get_auditor),
+) -> OkResponse:
+    user: SessionUser | None = getattr(request.state, "user", None)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title must not be blank")
+    old = ai_usage_db.rename_session(session_id, _quota_user_id(user), title=title)
+    if old is None:
+        raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND)
+    # record_diff writes nothing when the title did not change — a no-op
+    # rename is not an event worth a row.
+    audit.record_diff(
+        AUDIT_SESSION_RENAME,
+        target=f"ai_session:{session_id}",
+        old={"title": old},
+        new={"title": title},
+    )
+    return OkResponse()
