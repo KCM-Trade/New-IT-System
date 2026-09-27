@@ -185,7 +185,46 @@ def build_tools(ctx: CallerCtx, emit: Emit) -> list:
     async def get_risk_signals(subject: Subject, date_range: DateRange) -> dict:
         return await _run("get_risk_signals", TOOL_IMPLS["get_risk_signals"], subject=dict(subject), date_range=dict(date_range))
 
-    tools = [get_client_overview, get_trade_activity, get_risk_signals]
+    # Tier 2 — group-level certified tools (02 §11–§12). `rank_accounts` is the
+    # first tool whose OUTPUT fans out to arbitrary clients, so the impl filters
+    # rows by `ctx.scope` before taking top_n and reports rows_masked_by_scope.
+    @tool(name="rank_accounts", description=TOOL_DOCSTRINGS["rank_accounts"])
+    async def rank_accounts(
+        metric: Annotated[Literal["win_rate", "net_profit", "lots", "orders", "return_pct"], "ranking metric ('return_pct' is refused: no certified opening equity)"],
+        date_range: DateRange,
+        top_n: Annotated[int, "1..50 accounts to return"] = 10,
+        min_orders: Annotated[int, "minimum closed orders to qualify; >= 1, default 20; below 5 refused unless allow_low_min_orders"] = 20,
+        order: Annotated[Literal["desc", "asc"], "desc = best first"] = "desc",
+        sids: Annotated[Optional[list[int]], "restrict to servers, subset of [1, 5, 6]; null = all"] = None,
+        allow_low_min_orders: Annotated[bool, "set true ONLY when the user explicitly asked for a threshold below 5"] = False,
+    ) -> dict:
+        return await _run(
+            "rank_accounts",
+            TOOL_IMPLS["rank_accounts"],
+            metric=metric,
+            date_range=dict(date_range),
+            top_n=top_n,
+            min_orders=min_orders,
+            order=order,
+            sids=list(sids) if sids is not None else None,
+            allow_low_min_orders=bool(allow_low_min_orders),
+        )
+
+    @tool(name="get_economic_calendar", description=TOOL_DOCSTRINGS["get_economic_calendar"])
+    async def get_economic_calendar(
+        days_ahead: Annotated[int, "1..60 days from today"] = 30,
+        countries: Annotated[Optional[list[str]], "ISO country codes; only ['US'] is available"] = None,
+        importance: Annotated[Literal["high", "all"], "high = NFP/CPI/PPI/GDP/PCE/Retail Sales/FOMC only"] = "high",
+    ) -> dict:
+        return await _run(
+            "get_economic_calendar",
+            TOOL_IMPLS["get_economic_calendar"],
+            days_ahead=days_ahead,
+            countries=list(countries) if countries is not None else None,
+            importance=importance,
+        )
+
+    tools = [get_client_overview, get_trade_activity, get_risk_signals, rank_accounts, get_economic_calendar]
 
     # run_sql (02 §10, gate ⑥): free SQL cannot be filtered by country, so for a
     # caller with a restricted scope the tool is not "refused" — it does not

@@ -93,6 +93,31 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     at          TEXT NOT NULL,
     UNIQUE(session_id, seq)
 );
+
+-- OPT-0065 §12. Daily-refreshed US economic-release calendar (FOMC page +
+-- FRED release dates), read by the agent's get_economic_calendar tool through
+-- the read-only mount. `source` groups rows so one source can be replaced
+-- while the other keeps its last good rows; `econ_calendar_meta` records per
+-- source when it last succeeded so the tool can report staleness honestly.
+CREATE TABLE IF NOT EXISTS econ_calendar_cache (
+    event_date  TEXT NOT NULL,
+    time_utc    TEXT,
+    country     TEXT NOT NULL,
+    event       TEXT NOT NULL,
+    importance  TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    source_url  TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (event_date, country, event)
+);
+CREATE INDEX IF NOT EXISTS idx_econ_calendar_source ON econ_calendar_cache(source);
+CREATE TABLE IF NOT EXISTS econ_calendar_meta (
+    source      TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,             -- ok | failed | no_key
+    fetched_at  TEXT NOT NULL,             -- last attempt
+    ok_at       TEXT,                      -- last SUCCESSFUL fetch
+    detail      TEXT
+);
 """
 
 # Above this the blob is still stored, but a WARNING is logged: a session whose
@@ -461,3 +486,92 @@ def purge_ai_sessions(retention_days: int, *, now: Optional[datetime] = None) ->
         conn.execute(f"DELETE FROM ai_messages WHERE session_id IN ({marks})", ids)
         conn.execute(f"DELETE FROM ai_sessions WHERE session_id IN ({marks})", ids)
     return len(ids)
+
+
+# ── econ calendar cache (OPT-0065 §12) ───────────────────────────────────────
+
+
+def replace_calendar_source(source: str, rows: list[dict], *, fetched_at: Optional[str] = None) -> int:
+    """Replace every cached row of ONE source in a single transaction.
+
+    Called only after the fetch AND parse succeeded, so a failing source can
+    never leave the table half-empty. Rows are keyed (event_date, country,
+    event); a row of another source with the same key is overwritten by the
+    later writer, which is fine — both are official dates for the same event.
+    """
+    fetched_at = fetched_at or utc_now_iso()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM econ_calendar_cache WHERE source = ?", (source,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO econ_calendar_cache "
+            "(event_date, time_utc, country, event, importance, source, source_url, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    str(r["event_date"]),
+                    r.get("time_utc"),
+                    str(r.get("country") or "US"),
+                    str(r["event"]),
+                    str(r.get("importance") or "low"),
+                    source,
+                    str(r["source_url"]),
+                    fetched_at,
+                )
+                for r in rows
+            ],
+        )
+    return len(rows)
+
+
+def record_calendar_source_status(
+    source: str, status: str, *, now: Optional[str] = None, detail: Optional[str] = None
+) -> None:
+    """Per-source fetch outcome. ``ok_at`` moves only on success, so after a
+    failure the tool can still say when the rows it is serving were good."""
+    now = now or utc_now_iso()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO econ_calendar_meta (source, status, fetched_at, ok_at, detail) "
+            "VALUES (?, ?, ?, CASE WHEN ? = 'ok' THEN ? ELSE NULL END, ?) "
+            "ON CONFLICT(source) DO UPDATE SET "
+            "status = excluded.status, fetched_at = excluded.fetched_at, detail = excluded.detail, "
+            "ok_at = CASE WHEN excluded.status = 'ok' THEN excluded.fetched_at ELSE econ_calendar_meta.ok_at END",
+            (source, status, now, status, now, detail),
+        )
+
+
+def calendar_status() -> dict[str, dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT source, status, fetched_at, ok_at, detail FROM econ_calendar_meta").fetchall()
+    return {
+        r["source"]: {"status": r["status"], "fetched_at": r["fetched_at"], "ok_at": r["ok_at"], "detail": r["detail"]}
+        for r in rows
+    }
+
+
+def calendar_is_empty() -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM econ_calendar_cache").fetchone()
+    return int(row["n"] if row is not None else 0) == 0
+
+
+def read_calendar(
+    day_from: str, day_to: str, *, countries: Optional[list[str]] = None, importance: str = "high"
+) -> list[dict]:
+    """Rows in the closed date window, ordered by date then time. ``importance``
+    is ``"high"`` (high only) or ``"all"``."""
+    sql = (
+        "SELECT event_date, time_utc, country, event, importance, source, source_url, fetched_at "
+        "FROM econ_calendar_cache WHERE event_date BETWEEN ? AND ?"
+    )
+    params: list[Any] = [day_from, day_to]
+    if countries:
+        sql += " AND country IN (%s)" % ", ".join("?" * len(countries))
+        params.extend(str(c).upper() for c in countries)
+    if importance == "high":
+        sql += " AND importance = 'high'"
+    sql += " ORDER BY event_date, time_utc, event"
+    with _connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]

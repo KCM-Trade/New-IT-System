@@ -57,4 +57,6 @@ related: [[OPT-0064]] [[OPT-0063]]
 
 ## 结果
 
-（未开始。）
+- **2026-09-27 晚**：claim `8cc2b0a`；① 会话记忆 `5322902`、② 数据范围 `21df6aa` 已 commit（未 merge / 未部署）。做法 = 三 fork 按文件所有权并行 + 主线程集成；`./verify.sh` PASS（pytest 2033 / tsc 0 / vitest 313）；dev 全链路活体通过（第 2 轮不带 id 命中 146530、404 / 审计 / CRUD 全对）。契约出入与实测数字在 `02-contracts.md` 实施注记 + `05-rollout.md` §7.1。
+- ③ `run_sql` `0d81c5b` 已 commit（119 守卫单测 + 活体；FLUSH 在 raw 连接可执行 = AST 是唯一防线，已知残余）；④ `rank_accounts` + 日历已实现并活体（两问都命中；BLS 403 → FRED + Fed，FRED 无 key 只 FOMC）。
+- 待用户：`FRED_API_KEY` 申请（免费）；保留期是否加「久未使用也清」；`rank_accounts` 一周 10.7s → closeDate 索引或收窄上限；浏览器手测历史栏 + ⚠ 未认证徽章；然后 merge → push → 三镜像打 `pre-ai-slice2-20260927` → deploy。

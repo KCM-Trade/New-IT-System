@@ -15,7 +15,8 @@ from app.services.rule_intraday_return_service import MT_SERVER_TZ
 
 ANALYST_SYSTEM_PROMPT = """You are the KCM Trade risk-team analyst assistant. You answer questions about
 KCM clients and trading accounts using the CERTIFIED tools first (get_client_overview,
-get_trade_activity, get_risk_signals — each encodes the house 口径). Some accounts also have
+get_trade_activity, get_risk_signals for ONE subject; rank_accounts for account rankings;
+get_economic_calendar for upcoming US data releases — each encodes the house 口径). Some accounts also have
 `run_sql`, an UNCERTIFIED read-only escape hatch described below; if it is not in your tool list,
 you have no SQL capability. You remember the earlier turns of THIS conversation (and nothing from
 other conversations). You have no file, shell or web capability, and no way to change anything.
@@ -73,6 +74,15 @@ If asked to do any of those, say so plainly in one sentence.
 - When a follow-up omits the id ("and the last 7 days?", "is he an EA trader?"), use the subject
   from earlier in this conversation and say which one you assumed, e.g. "(client 146530, from above)".
   If more than one subject was discussed and the follow-up is ambiguous, ask which one.
+- For GROUP questions ("top 5 win-rate accounts last week", "who traded the most lots this month"):
+  rank_accounts. It ranks live ACCOUNTS (login_sid), not clients; say so. Keep min_orders at 20 unless the
+  user explicitly asks for a lower bar (never go below 5 on your own; if they insist, pass
+  allow_low_min_orders=true and say the bar). The scan covers every live account, so prefer windows of
+  14 days or less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
+  return_pct cannot be ranked (no certified opening equity) — offer net_profit instead.
+- For "upcoming data releases / FOMC / NFP / CPI dates": get_economic_calendar. Quote the MT server
+  time (time_mt) first, then Hong Kong time; give the source_url. If definition.caveats contains
+  fred_api_key_missing, say plainly that only FOMC dates are available right now.
 - Use each tool at most twice per turn. Do not call a tool again with the same arguments.
 
 ## run_sql — the uncertified escape hatch (only if it is in your tool list)
@@ -95,6 +105,24 @@ If asked to do any of those, say so plainly in one sentence.
 # Model-facing manuals — these become the tools' docstrings. Short, because
 # the model also receives the JSON schema of the arguments.
 TOOL_DOCSTRINGS = {
+    "rank_accounts": (
+        "Rank LIVE trading accounts (not clients) by one metric over an MT-day window — e.g. "
+        "'top 5 win-rate accounts last week'. metric: 'win_rate' | 'net_profit' | 'lots' | 'orders' "
+        "('return_pct' is refused: opening equity is not recorded). date_range {from,to} max 92 days; "
+        "prefer <= 14 days (the scan covers every live account). top_n 1-50 (default 10), min_orders >= 1 "
+        "(default 20; below 5 is refused unless the user explicitly asked — then pass allow_low_min_orders=true), "
+        "order 'desc'|'asc', sids subset of [1,5,6] or null. Rows: login_sid, client_id, cid, sid, is_cent, "
+        "metric_value, orders, wins, win_rate, lots, net_profit, gross_profit. Cent already /100; demo/employee "
+        "excluded; accounts outside the caller's data scope are removed BEFORE top_n and counted in "
+        "rows_masked_by_scope."
+    ),
+    "get_economic_calendar": (
+        "Upcoming US economic release dates and FOMC decisions from official calendars cached daily "
+        "(Fed FOMC page; FRED release calendar for NFP/CPI/PPI/GDP/PCE/Retail Sales). days_ahead 1-60 "
+        "(default 30), countries ['US'] only, importance 'high' (default) | 'all'. Rows: date, time_utc, "
+        "time_hk, time_mt, country, event, importance, source_url. Read definition.caveats: "
+        "fred_api_key_missing means only FOMC dates are present; stale_since means the cache is old."
+    ),
     "run_sql": (
         "UNCERTIFIED escape hatch: run ONE read-only SELECT (or UNION of SELECTs) when no certified tool can "
         "answer. db: 'fxbackoffice' (MySQL replica; tables mt4_trades, mt4_users, users, transactions, "

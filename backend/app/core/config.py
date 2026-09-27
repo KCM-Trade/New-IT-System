@@ -177,6 +177,7 @@ class Settings:
     AI_DAILY_COST_LIMIT_USD: float
     AI_MODEL_PRICES: dict[str, tuple[float, float]]
     AI_SESSION_RETENTION_DAYS: int
+    FRED_API_KEY: str
 
     # Interactive API docs surface (Swagger /docs, ReDoc /redoc, /openapi.json)
     API_DOCS_ENABLED: bool
@@ -681,6 +682,11 @@ class Settings:
         self.AI_SESSION_RETENTION_DAYS = int(
             (os.environ.get("AI_SESSION_RETENTION_DAYS") or "90").strip()
         )
+        # OPT-0065 §12: free key for the St. Louis Fed FRED API, used by the
+        # daily economic-calendar refresh (NFP / CPI / PPI / GDP / PCE dates).
+        # Optional: unset = the calendar carries FOMC dates only and the tool
+        # says so (`fred_api_key_missing`). Never logged.
+        self.FRED_API_KEY = (os.environ.get("FRED_API_KEY") or "").strip()
 
         # ── Entra ID (Azure AD) OIDC provider (auth design P3) ───────────────
         # App registration lives in tenant 11cf6a7b-… (design doc §8.1). The

@@ -471,7 +471,11 @@ def test_harness_registers_run_sql_only_for_unrestricted_callers():
     assert "run_sql" in unrestricted
     assert "run_sql" not in restricted
     assert "run_sql" not in empty_scope
-    assert unrestricted[:3] == restricted == empty_scope
+    # Every certified tool (Tier 1 + Tier 2) is offered to everyone; run_sql is
+    # the only tool whose presence depends on the caller.
+    certified = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar"]
+    assert unrestricted == certified + ["run_sql"]
+    assert restricted == empty_scope == certified
 
 
 # ── the envelope ─────────────────────────────────────────────────────────────

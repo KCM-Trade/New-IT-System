@@ -124,7 +124,11 @@ async def lifespan(app: FastAPI):
     # them. Holding one connection here keeps them on disk — see the module.
     from app.core import login_ip_orders_db as _lio_db
     from app.core import risk_monitor_db as _rm_db
-    hold_wal_sidecars([_rm_db._DB_PATH, _lio_db._DB_PATH])
+    # OPT-0065 ④: the agent also reads ai_agent.db (econ_calendar_cache) through
+    # the same read-only mount; ai_usage_db connects per call, so without this
+    # the -wal/-shm pair would vanish between writes and the agent's open fails.
+    from app.core import ai_usage_db as _ai_db
+    hold_wal_sidecars([_rm_db._DB_PATH, _lio_db._DB_PATH, _ai_db._DB_PATH])
     # OPT-0047 risk-V2 case layer (cloud PG). Fail-open: returns False when
     # PG is down/unconfigured — the app must still serve everything else.
     init_risk_cases_pg()

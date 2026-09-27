@@ -24,6 +24,8 @@ CASE_BASELINE_JOB_ID = "risk_cases_daily_baseline"
 USER_ID_REPAIR_JOB_ID = "alert_events_user_id_repair"
 RETENTION_JOB_ID = "users_db_retention_sweep"
 AI_SESSIONS_RETENTION_JOB_ID = "ai_sessions_retention_sweep"
+ECON_CALENDAR_JOB_ID = "econ_calendar_refresh"
+ECON_CALENDAR_BOOTSTRAP_JOB_ID = "econ_calendar_bootstrap"
 HKT = ZoneInfo("Asia/Hong_Kong")
 
 # Module-level singleton; initialised by start_scheduler()
@@ -178,6 +180,23 @@ def _ai_sessions_retention_job() -> None:
     logger.info("ai_sessions retention sweep removed %d session(s)", removed)
 
 
+def _econ_calendar_refresh_job() -> None:
+    """Job function: re-fetch the US economic calendar into ai_agent.db.
+
+    OPT-0065 §12. The agent container reads the cache through a read-only
+    mount and has no network tool, so the main API is the only writer. A
+    source that fails keeps its previous rows and records the failure; the
+    tool reports `stale_since` from that, so this job never needs to alarm.
+    """
+    try:
+        from ..core.config import get_settings
+        from ..services.econ_calendar_service import refresh_calendar
+
+        refresh_calendar(get_settings())
+    except Exception:
+        logger.error("econ calendar refresh failed (non-fatal)", exc_info=True)
+
+
 def start_scheduler() -> None:
     """Start the background scheduler using report_config from SQLite.
 
@@ -275,6 +294,37 @@ def start_scheduler() -> None:
         max_instances=1,
     )
     logger.info("ai_sessions retention sweep scheduled: 04:10 HKT daily")
+    # OPT-0065 §12: US economic calendar, 06:00 HKT = after the US close and
+    # the FOMC/FRED pages have settled for the day, before HK staff arrive.
+    _scheduler.add_job(
+        _econ_calendar_refresh_job,
+        CronTrigger(hour=6, minute=0, timezone=HKT),
+        id=ECON_CALENDAR_JOB_ID,
+        replace_existing=True,
+        coalesce=True,
+        misfire_grace_time=3600,
+        max_instances=1,
+    )
+    # First boot (or a wiped cache): fetch once shortly after start instead of
+    # waiting for 06:00. A one-shot `date` job, not an inline call, so a slow
+    # or blocked upstream cannot hold the lifespan for 30s.
+    try:
+        from ..core.ai_usage_db import calendar_is_empty
+
+        if calendar_is_empty():
+            from datetime import datetime, timedelta
+
+            _scheduler.add_job(
+                _econ_calendar_refresh_job,
+                "date",
+                run_date=datetime.now(HKT) + timedelta(seconds=20),
+                id=ECON_CALENDAR_BOOTSTRAP_JOB_ID,
+                replace_existing=True,
+            )
+            logger.info("econ calendar cache is empty: bootstrap refresh scheduled in 20s")
+    except Exception:
+        logger.warning("econ calendar bootstrap check failed (non-fatal)", exc_info=True)
+    logger.info("econ calendar refresh scheduled: 06:00 HKT daily")
     _scheduler.start()
     logger.info(f"Scheduler started: daily report at {hour:02d}:{minute:02d} HKT")
 
