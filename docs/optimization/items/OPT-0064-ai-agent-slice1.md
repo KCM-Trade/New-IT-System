@@ -84,3 +84,5 @@ risk team 要一个登录后按人隔离的分析 agent：问「客户 123456 �
 ## 结果
 
 （未 close，OPT 保持 wip 直到 UI 二轮 + `ai_agent_ro` 落地。）**2026-09-27 14:24 已上 prod**：merge `ac21437`、`aaf9b21`，回滚标签 `pre-ai-slice1-20260927`；闸门 pytest 1971 / tsc 0 / vitest 304。待办见 `docs/ai-agent/05-rollout.md` §5.4–5.6。
+
+**2026-09-27 15:44 第二次部署**：UI 二轮（`9f89e2b`，ChatGPT 式居中输入框、模型下拉）+ prompt 每轮注入当前日期（`1cf088d`，修「最近 N 天」按训练截止日解析的 bug）+ PG 只读角色 `ai_agent_ro` 接上 prod/dev；回滚 `new-it-system-{api,web,ai-agent}:pre-ai-ui2-20260927`；闸门 pytest 1986 / tsc 0 / vitest 304。剩：MySQL `ai_agent_ro`（用户自建）、第二刀。
