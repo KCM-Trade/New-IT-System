@@ -5,8 +5,8 @@ What is pinned here and why each one matters:
   * no `ai` grant -> 403, never 401 (401 bounces the SPA to /login);
   * `[]` refuses, `["*"]` passes, kill switch passes (the gate's three
     invariants, re-asserted on this path because it is a NEW module key);
-  * a country-restricted colleague is refused by the coverage gate (02 §1.3 —
-    `ai` is not in SCOPED_MODULES in slice 1, so fail closed);
+  * a country-restricted colleague passes the coverage gate (02 §9 — `ai` is
+    in SCOPED_MODULES since slice 2) and their scope is forwarded WHOLE;
   * quota is enforced BEFORE the agent is contacted;
   * every turn — succeeded, quota-refused, agent-unreachable — leaves exactly
     one `ai.query.submit` audit row, because the route sets `audit_deferred`
@@ -254,19 +254,37 @@ def test_kill_switch_passes_and_charges_the_anonymous_bucket(make_client, script
     assert ai_usage_db.get_usage(0, ai_usage_db.today_hk())["turns"] == 1
 
 
-def test_a_country_restricted_caller_is_refused_by_the_coverage_gate(
+def test_a_country_restricted_caller_is_served_with_their_scope_forwarded(
     make_client, scripted_agent, monkeypatch
 ):
-    """02 §1.3: `ai` is NOT in SCOPED_MODULES in slice 1, so a restricted
-    colleague who somehow holds the grant must be refused, not served."""
+    """02 §9 (slice 2): `ai` is in SCOPED_MODULES, so the coverage gate lets a
+    restricted colleague through and `/ai/turn` is a FILTER route — the
+    filtering happens inside the agent, keyed off the scope forwarded here.
+    The scope must arrive as the LIST (never None, never collapsed)."""
     from app.core import data_scope
 
     monkeypatch.setitem(data_scope.DATA_SCOPE_OVERRIDES, STAFF, frozenset({1}))
     client = make_client()
     sid = _mint(STAFF, allowed_modules='["ai"]')
     r = _turn(client, sid)
-    assert r.status_code == 403
-    assert scripted_agent["calls"] == []
+    assert r.status_code == 200
+    assert len(scripted_agent["calls"]) == 1
+    assert scripted_agent["calls"][0]["payload"]["scope"] == [1]
+
+
+def test_a_restricted_caller_with_an_empty_scope_is_still_forwarded_as_a_list(
+    make_client, scripted_agent, monkeypatch
+):
+    """`frozenset()` (sees nothing) and `None` (sees everything) are opposite
+    and both falsy; the payload must carry `[]`, not `null`."""
+    from app.core import data_scope
+
+    monkeypatch.setitem(data_scope.DATA_SCOPE_OVERRIDES, STAFF, frozenset())
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    r = _turn(client, sid)
+    assert r.status_code == 200
+    assert scripted_agent["calls"][0]["payload"]["scope"] == []
 
 
 def test_a_model_outside_the_two_deployments_is_422(make_client, scripted_agent):
@@ -548,9 +566,13 @@ def test_ai_is_a_grantable_module_with_bilingual_labels():
     assert classify_path("/api/v1/ai/usage/today") == "ai"
 
 
-def test_ai_is_not_scoped_in_slice_one():
-    """02 §1.3 / 05 §2: restricted colleagues must not be granted `ai` yet, and
-    the code must agree — adding `ai` to SCOPED_MODULES is slice 2's job."""
-    from app.core.data_scope import SCOPED_MODULES
+def test_ai_is_scoped_since_slice_two():
+    """02 §9: every live /ai route is classified and `ai` is a covered module,
+    so restricted colleagues may now be granted it (still not backfilled)."""
+    from app.core.data_scope import FILTER, OPEN, ROUTE_SCOPE, SCOPED_MODULES
 
-    assert "ai" not in SCOPED_MODULES
+    assert "ai" in SCOPED_MODULES
+    assert ROUTE_SCOPE["/ai/turn"] == FILTER
+    assert ROUTE_SCOPE["/ai/usage/today"] == OPEN
+    assert ROUTE_SCOPE["/ai/sessions"] == OPEN
+    assert ROUTE_SCOPE["/ai/sessions/{session_id}"] == OPEN

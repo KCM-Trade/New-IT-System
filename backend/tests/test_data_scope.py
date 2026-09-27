@@ -162,6 +162,22 @@ def _cs_route_paths() -> list[str]:
     return sorted(cs_paths)
 
 
+def _scoped_route_paths() -> list[str]:
+    """Every live route of every module in SCOPED_MODULES (cs + ai since
+    OPT-0065 item 2). This is the set ROUTE_SCOPE must equal in both
+    directions; `_cs_route_paths` stays for the cs-specific assertions."""
+    from app.api.v1.routers import api_v1_router
+    from app.core.auth_deps import classify_path, module_names
+
+    paths = {r.path for r in api_v1_router.routes if getattr(r, "path", None)}
+    out = []
+    for path in paths:
+        policy = classify_path(path)
+        if policy is not None and SCOPED_MODULES.intersection(module_names(policy)):
+            out.append(path)
+    return sorted(out)
+
+
 def test_every_cs_route_has_a_scope_classification():
     """Coverage. An unclassified cs route leaks silently — see the module docstring."""
     cs_paths = _cs_route_paths()
@@ -191,10 +207,10 @@ def test_no_route_scope_entry_is_an_orphan():
     statement about a route that no longer exists — while the renamed route is
     unclassified and unfiltered.
     """
-    live = set(_cs_route_paths())
+    live = set(_scoped_route_paths())
     orphans = sorted(k for k in ROUTE_SCOPE if k not in live)
     assert not orphans, (
-        f"ROUTE_SCOPE entries that match no live cs route: {orphans}. Either the "
+        f"ROUTE_SCOPE entries that match no live scoped-module route: {orphans}. Either the "
         "route was renamed (and its replacement is now unclassified) or it was "
         "deleted and the entry should go."
     )
@@ -618,7 +634,7 @@ def test_a_none_answer_is_refused_so_the_key_actually_protects(settings_env):
 # agreeing — which takes one checkbox in /cfg/managers, ticked by somebody who
 # has never heard of data_scope.py, and produces no error and no log of its own.
 
-RESTRICTED_MODULES_TODAY = ["cs"]
+RESTRICTED_MODULES_TODAY = ["cs"]  # what the two listed colleagues hold today; `ai` may be added by a manager since OPT-0065 item 2
 
 # The concrete leak. /ib-data/region-query is the firm-wide CN/Global roll-up:
 # it is not merely "unscoped data", it is the single most direct answer to the
@@ -711,6 +727,8 @@ def test_restricted_caller_is_refused_outside_the_covered_modules(settings_env, 
         "/api/v1/cs/fund-flow/detail/136017",  # cs, concrete path param
         "/api/v1/login-ip/search",             # cs — OPEN by decision, still covered
         "/api/v1/ib-data/query",               # {cs, data} carve-out — covered
+        "/api/v1/ai/turn",                     # ai — FILTER inside the agent (OPT-0065 item 2)
+        "/api/v1/ai/sessions",                 # ai — OPEN, caller's own rows
     ],
 )
 def test_restricted_caller_still_passes_where_the_gate_has_coverage(settings_env, path):

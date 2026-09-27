@@ -880,6 +880,25 @@ ROUTE_SCOPE: dict[str, str] = {
     "/login-ip/export/tasks": OPEN,
     "/login-ip/export/tasks/{task_id}": OPEN,
     "/login-ip/export/tasks/{task_id}/download": OPEN,
+
+    # ── /ai — the analyst agent (OPT-0065 item 2, 02 §9) ──────────────────────
+    # FILTER: the response is model text plus provenance badges, and the text
+    # is built from tool output. The tools themselves are per-request closures
+    # over `scope` (02 §2.1): a subject outside the scope answers
+    # `scope_denied`, peers/rows fanning out to other clients are dropped and
+    # counted (`peers_masked_by_scope` / `rows_masked_by_scope`), and the
+    # free-SQL escape hatch is not even registered for a restricted caller.
+    # So the filtering happens INSIDE the agent container, keyed off the scope
+    # the route forwards whole (`None` vs a list — never collapsed).
+    "/ai/turn": FILTER,
+    # OPEN: the caller's own quota counters. No client data.
+    "/ai/usage/today": OPEN,
+    # OPEN: the caller's own conversation titles / transcripts, isolated by
+    # `user_id` (foreign session -> 404), not by cid. A transcript is what that
+    # person was ALREADY shown after filtering, so re-filtering it would only
+    # hide their own earlier answers from them.
+    "/ai/sessions": OPEN,
+    "/ai/sessions/{session_id}": OPEN,
 }
 
 SCOPE_VALUES: frozenset[str] = frozenset({FILTER, LOOKUP, OPEN})
@@ -893,11 +912,14 @@ assert set(ROUTE_SCOPE.values()) <= SCOPE_VALUES, (
 )
 
 
-SCOPED_MODULES: frozenset[str] = frozenset({"cs"})
+SCOPED_MODULES: frozenset[str] = frozenset({"cs", "ai"})
 """The modules ROUTE_SCOPE actually covers — i.e. where this gate is IMPLEMENTED.
 
-Today: `cs` only, because that is where the two restricted colleagues work and
-that is the module whose 24 routes have been classified one by one.
+Today: `cs` (where the two restricted colleagues work; its 24 routes were
+classified one by one on 2026-08-27) and `ai` (OPT-0065 item 2, 2026-09-27:
+four routes, `/ai/turn` filters inside the agent, the rest carry only the
+caller's own data). Adding `ai` is what lets a manager tick the module for a
+restricted colleague without the coverage gate 403-ing them.
 
 ⚠ **Adding a key here is the LAST step, not the first.** It is a claim that
 every live route of that module has a ROUTE_SCOPE entry and that every "filter"
