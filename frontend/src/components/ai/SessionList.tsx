@@ -104,6 +104,9 @@ function SessionRow({
   const [draft, setDraft] = useState("")
   const [pending, setPending] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Escape during a rename: the input unmounts and (browser-dependent) fires
+  // blur, which would commit the draft anyway. The flag makes the cancel win.
+  const renameCancelledRef = useRef(false)
   const fallback = t("ai.untitled")
   const title = sessionTitle(session, fallback)
 
@@ -124,11 +127,21 @@ function SessionRow({
 
   const startRename = (e: MouseEvent) => {
     e.stopPropagation()
+    renameCancelledRef.current = false
     setDraft(session.title ?? "")
     setMode("rename")
   }
 
+  const cancelRename = () => {
+    renameCancelledRef.current = true
+    setMode("idle")
+  }
+
   const commitRename = async () => {
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false
+      return
+    }
     const next = draft.trim().slice(0, TITLE_MAX)
     setMode("idle")
     if (!next || next === (session.title ?? "")) return
@@ -156,6 +169,14 @@ function SessionRow({
   return (
     <li
       onBlurCapture={onBlurCapture}
+      onKeyDown={(e) => {
+        // Escape backs out of the delete confirmation from either of its
+        // buttons; the rename input handles its own Escape above.
+        if (e.key === "Escape" && mode === "confirmDelete") {
+          e.preventDefault()
+          setMode("idle")
+        }
+      }}
       className={cn(
         "group relative flex items-center gap-1 rounded-md text-sm",
         active ? "bg-muted" : "hover:bg-muted/60",
@@ -176,7 +197,7 @@ function SessionRow({
               void commitRename()
             } else if (e.key === "Escape") {
               e.preventDefault()
-              setMode("idle")
+              cancelRename()
             }
           }}
           aria-label={t("ai.rename")}

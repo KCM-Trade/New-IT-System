@@ -109,6 +109,21 @@ export function sessionModel(model: string | null, known: readonly AiModel[]): A
   return model && (known as readonly string[]).includes(model) ? (model as AiModel) : null
 }
 
+/**
+ * Whether a `sessionId` change should be written to sessionStorage.
+ *
+ * Only a real id is ever written by the change effect. `null` is NOT written
+ * there, because the very first run of that effect (mount, before anything
+ * was resumed) has `sessionId === null` and would wipe the id the
+ * refresh-resume effect is about to read — the page then always started
+ * empty after a reload (cold review #8; React StrictMode re-runs effects, so
+ * a "skip the first call" flag is not enough). Clearing is an explicit act:
+ * `newConversation` / delete-active call `writeStoredSessionId(null)`.
+ */
+export function shouldPersistSessionId(next: string | null): boolean {
+  return typeof next === "string" && next.length > 0
+}
+
 export function readStoredSessionId(): string | null {
   try {
     return window.sessionStorage.getItem(AI_SESSION_STORAGE_KEY)

@@ -158,11 +158,36 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Columns added after a table first shipped. ``CREATE TABLE IF NOT EXISTS`` is
+# a no-op on the live file, so every later column needs its own guarded ALTER
+# here — same rule as users_db._migrate_add_column, same reason (backend/data
+# is a bind mount shared by dev and prod; dev restarts migrate prod's file).
+_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # (table, column, declaration)
+    # Turn claim for one-turn-at-a-time per session (cold review #6). ISO
+    # timestamp while a turn is in flight, NULL when idle; a stale claim is
+    # taken over by the next turn.
+    ("ai_sessions", "turn_started_at", "TEXT"),
+)
+
+
+def _migrate_add_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> bool:
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column in cols:
+        return False
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    return True
+
+
 def init_ai_usage_db() -> None:
-    """Create the file and table if missing. Idempotent; called from lifespan."""
+    """Create the file and tables if missing, then add later columns. Idempotent;
+    called from lifespan."""
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        for table, column, decl in _MIGRATIONS:
+            if _migrate_add_column(conn, table, column, decl):
+                logger.info("ai_agent.db: added %s.%s", table, column)
     logger.info("AI usage DB ready at %s", _DB_PATH)
 
 
@@ -313,6 +338,43 @@ def save_session_state(session_id: str, user_id: int, *, blob: Any, turns: int, 
             (text, int(turns or 0), model, utc_now_iso(), session_id, int(user_id)),
         )
         return cur.rowcount > 0
+
+
+# A claim older than this is treated as abandoned: the worker that held it
+# died (deploy, crash) before the finally that clears it. Longer than any turn
+# can legitimately run (TURN_TOTAL_SECONDS = 300 s + the disconnect drain cap).
+TURN_CLAIM_STALE_SECONDS = 6 * 60
+
+
+def claim_turn(session_id: str, user_id: int, *, now: Optional[datetime] = None) -> bool:
+    """Take the session's single turn slot; False when another turn holds it.
+
+    One UPDATE, so the check-and-set is atomic under SQLite's writer lock
+    across the four uvicorn workers. Two tabs firing on the same session
+    used to race: both turns ran against the same blob and the second
+    write-back silently dropped the first turn from the model's memory while
+    the transcript kept it (cold review #6). Now the second caller gets 409.
+    """
+    now = now or datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_iso = (now - timedelta(seconds=TURN_CLAIM_STALE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE ai_sessions SET turn_started_at = ? "
+            "WHERE session_id = ? AND user_id = ? AND deleted_at IS NULL "
+            "AND (turn_started_at IS NULL OR turn_started_at < ?)",
+            (now_iso, session_id, int(user_id), stale_iso),
+        )
+        return cur.rowcount > 0
+
+
+def release_turn(session_id: str, user_id: int) -> None:
+    """Free the turn slot. Called from the turn's finally on every path."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ai_sessions SET turn_started_at = NULL WHERE session_id = ? AND user_id = ?",
+            (session_id, int(user_id)),
+        )
 
 
 def touch_session(session_id: str, user_id: int) -> None:

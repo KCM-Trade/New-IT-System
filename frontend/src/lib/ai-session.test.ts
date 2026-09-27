@@ -4,6 +4,7 @@ import {
   mapSessionMessages,
   sessionModel,
   sessionTitle,
+  shouldPersistSessionId,
   type AiSessionMessageRow,
 } from "./ai-session"
 
@@ -110,5 +111,15 @@ describe("sessionTitle / sessionModel", () => {
     expect(sessionModel("gpt-5.6-sol", known)).toBe("gpt-5.6-sol")
     expect(sessionModel("gpt-5.6-luna", known)).toBeNull()
     expect(sessionModel(null, known)).toBeNull()
+  })
+})
+
+describe("shouldPersistSessionId", () => {
+  it("never writes null from the change effect (mount would wipe the id resume needs)", () => {
+    expect(shouldPersistSessionId(null)).toBe(false)
+    expect(shouldPersistSessionId("")).toBe(false)
+  })
+  it("writes a real id", () => {
+    expect(shouldPersistSessionId("b1348b47999f4d38beac9f92b5766bc4")).toBe(true)
   })
 })

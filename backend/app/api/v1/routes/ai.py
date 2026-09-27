@@ -41,9 +41,13 @@ purpose:
     would therefore see "a POST returned 200 and recorded nothing" and log a
     false AUDIT_MISSING on every turn, so the route marks the request
     ``audit_deferred`` before returning — see the comment on that middleware.
-    The deferral is a PROMISE: the generator's ``finally`` block must record
-    exactly one row on every path, success or failure, and
-    ``tests/test_ai_route.py`` holds it to that.
+    The deferral is a PROMISE: the worker task's ``finally`` block must record
+    exactly one row on every path — success, failure, or browser gone — and
+    ``tests/test_ai_route.py`` / ``test_ai_sessions.py`` hold it to that.
+    The turn runs in a worker task and the response generator only relays
+    its frames, so a Stop / tab close does not cut the turn short: the worker
+    keeps draining the agent stream (bounded) and still writes the session
+    blob, the usage and the audit row.
 """
 
 from __future__ import annotations
@@ -166,6 +170,23 @@ def _resolve_tool_entry(entries: list[dict[str, Any]], done: dict) -> None:
         )
 
 
+SESSION_BUSY = "session busy"
+
+# How long a turn keeps running AFTER the browser has gone (Stop pressed, tab
+# closed, network drop). The agent has usually already spent the model call;
+# what is still owed is the `session_state` write-back — without it the turn
+# vanishes from the model's memory while the transcript keeps the partial
+# answer (cold review #7). Capped so a wedged agent cannot pin a task forever;
+# also capped by what is left of TURN_TOTAL_SECONDS.
+DISCONNECT_DRAIN_SECONDS = 120.0
+
+# Strong references to detached drain tasks: asyncio keeps only weak refs to
+# running tasks, so a task nobody holds can be garbage-collected mid-flight.
+_DRAIN_TASKS: set[asyncio.Task] = set()
+
+_END = object()
+
+
 @router.post("/turn")
 async def turn(
     body: TurnRequest,
@@ -224,10 +245,35 @@ async def turn(
             logger.error("AI turn refused: ai_agent.db is not writable (trace_id=%s)", trace_id, exc_info=True)
             raise HTTPException(status_code=503, detail="conversation store unavailable")
 
+    # ── one turn at a time per session ───────────────────────────────────────
+    # Two tabs on the same conversation would both read the same blob and the
+    # later write-back would silently discard the earlier turn. The claim is
+    # a single atomic UPDATE; it is released in the worker's finally on every
+    # path, and a claim older than TURN_CLAIM_STALE_SECONDS is taken over.
+    try:
+        claimed = await anyio.to_thread.run_sync(ai_usage_db.claim_turn, session_id, owner_uid)
+    except sqlite3.Error:
+        logger.error("AI turn refused: ai_agent.db is not writable (trace_id=%s)", trace_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="conversation store unavailable")
+    if not claimed:
+        raise HTTPException(status_code=409, detail=SESSION_BUSY)
+
     # See the module docstring: the audit row is written when the stream ends.
     request.state.audit_deferred = True
 
-    async def _events() -> AsyncIterator[bytes]:
+    # The turn runs in a WORKER TASK; the response generator only relays its
+    # frames. Splitting the two is what lets the worker outlive the browser:
+    # when the client disconnects the generator stops, sets `disconnected`,
+    # and the worker keeps consuming the agent stream (bounded) so the
+    # `session_state`, usage and audit still land.
+    frames: asyncio.Queue = asyncio.Queue()
+    disconnected = asyncio.Event()
+
+    def emit(frame: bytes) -> None:
+        if not disconnected.is_set():
+            frames.put_nowait(frame)
+
+    async def _run_turn() -> None:
         # ── per-turn accounting, all of it lands in the audit row ────────────
         tools_called: list[str] = []
         subjects: list[str] = []
@@ -252,18 +298,17 @@ async def turn(
         # audit row is the only "who ran what" record for run_sql.
         sql_texts: list[str] = []
         state_saved = False
+        drain_deadline: float | None = None
 
-        def _fail(code: str, message: str) -> list[bytes]:
+        def _fail(code: str, message: str) -> None:
             nonlocal error_code, terminal_reason
             error_code = code
             terminal_reason = "error"
-            return [
-                sse("error", {"code": code, "message": message, "trace_id": trace_id}),
-                sse("done", {"terminal_reason": "error", "num_turns": num_turns}),
-            ]
+            emit(sse("error", {"code": code, "message": message, "trace_id": trace_id}))
+            emit(sse("done", {"terminal_reason": "error", "num_turns": num_turns}))
 
         try:
-            yield sse("init", {"session_id": session_id, "model": body.model})
+            emit(sse("init", {"session_id": session_id, "model": body.model}))
 
             token = settings.AI_AGENT_INTERNAL_TOKEN
             if token is None:
@@ -275,8 +320,7 @@ async def turn(
                     "(missing or shorter than the minimum) — check compose "
                     "environment for both api and ai-agent"
                 )
-                for frame in _fail("agent_unavailable", "AI agent is not configured"):
-                    yield frame
+                _fail("agent_unavailable", "AI agent is not configured")
                 return
 
             # ── quota, BEFORE the turn is forwarded (02 §6) ──────────────────
@@ -285,13 +329,12 @@ async def turn(
                 usage["turns"] >= settings.AI_DAILY_TURNS_LIMIT
                 or usage["cost_usd"] >= settings.AI_DAILY_COST_LIMIT_USD
             ):
-                for frame in _fail(
+                _fail(
                     "quota_exceeded",
                     f"Daily quota reached ({usage['turns']}/{settings.AI_DAILY_TURNS_LIMIT} "
                     f"turns, ${usage['cost_usd']:.2f}/${settings.AI_DAILY_COST_LIMIT_USD:.2f}). "
                     "Resets at midnight Hong Kong time.",
-                ):
-                    yield frame
+                )
                 return
             await anyio.to_thread.run_sync(ai_usage_db.increment_turn, quota_uid, day)
 
@@ -321,19 +364,31 @@ async def turn(
             saw_done = False
             try:
                 while True:
-                    if await request.is_disconnected():
+                    now = time.monotonic()
+                    if disconnected.is_set() and error_code is None:
+                        # The browser is gone; keep going for what the store
+                        # is still owed, but not forever.
                         error_code = "client_disconnected"
+                        drain_deadline = now + min(
+                            DISCONNECT_DRAIN_SECONDS, max(0.0, TURN_TOTAL_SECONDS - (now - started))
+                        )
+                        logger.info(
+                            "AI turn: client disconnected, draining the agent stream for up to %.0fs (trace_id=%s)",
+                            drain_deadline - now,
+                            trace_id,
+                        )
+                    if drain_deadline is not None and now > drain_deadline:
                         break
-                    if time.monotonic() - started > TURN_TOTAL_SECONDS:
-                        for frame in _fail("agent_unavailable", "turn exceeded the time limit"):
-                            yield frame
+                    if now - started > TURN_TOTAL_SECONDS:
+                        _fail("agent_unavailable", "turn exceeded the time limit")
                         break
                     try:
                         event, data = await asyncio.wait_for(
                             iterator.__anext__(), timeout=KEEPALIVE_SECONDS
                         )
                     except asyncio.TimeoutError:
-                        yield sse_keepalive()
+                        # Keepalives to the browser are the relay's job; here
+                        # the wait just loops so the deadlines above are checked.
                         continue
                     except StopAsyncIteration:
                         break
@@ -424,7 +479,7 @@ async def turn(
                         error_code = str(data.get("code") or "internal")
                         data = {**data, "trace_id": data.get("trace_id") or trace_id}
 
-                    yield sse(event, data)
+                    emit(sse(event, data))
                     if saw_done:
                         break
             finally:
@@ -434,87 +489,126 @@ async def turn(
                 # The agent closed the stream without a terminal event. That is
                 # a contract violation on its side; the browser still needs a
                 # `done` to stop spinning.
-                for frame in _fail("internal", "agent stream ended unexpectedly"):
-                    yield frame
+                _fail("internal", "agent stream ended unexpectedly")
 
         except AgentUnavailable as exc:
-            for frame in _fail("agent_unavailable", str(exc)):
-                yield frame
+            _fail("agent_unavailable", str(exc))
         except Exception:  # noqa: BLE001 — the stream must end cleanly
             logger.exception("AI turn failed (trace_id=%s)", trace_id)
-            for frame in _fail("internal", "internal error"):
-                yield frame
+            _fail("internal", "internal error")
         finally:
-            # One audit row per turn, on EVERY path (02 §5). Auditor.record
-            # never raises; the actor comes from request.state.user only.
-            new_value: dict[str, Any] = {
-                "question": body.message[:AUDIT_QUESTION_CHARS],
-                "model": body.model,
-                "tools_called": tools_called,
-                "subjects": subjects,
-                "terminal_reason": terminal_reason,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": round(cost_usd, 6),
-                "scope_denied_count": scope_denied,
-                # True when the agent was handed an earlier turn's context.
-                "resumed": resumed,
-            }
-            if error_code is not None:
-                new_value["error_code"] = error_code
-            if sql_texts:
-                new_value["sql"] = sql_texts
-            await anyio.to_thread.run_sync(
-                lambda: audit.record(
-                    AUDIT_ACTION, target=f"ai_session:{session_id}", new_value=new_value
-                )
-            )
-            # The transcript rows (02 §8.2), on every path past the ownership
-            # check — a refused or failed turn is still part of the
-            # conversation the person sees. Never raises past here: the
-            # stream is already closing and the audit row is written.
+            # The relay is released only AFTER the accounting below has been
+            # written (inner finally), so when the browser sees the body close
+            # the audit row and transcript rows already exist — the ordering
+            # tests and the health check both rely on it.
             try:
+                # One audit row per turn, on EVERY path (02 §5). Auditor.record
+                # never raises; the actor comes from request.state.user only.
+                # Written here — and only here — whether the browser is still
+                # listening or the worker is draining after a disconnect.
+                new_value: dict[str, Any] = {
+                    "question": body.message[:AUDIT_QUESTION_CHARS],
+                    "model": body.model,
+                    "tools_called": tools_called,
+                    "subjects": subjects,
+                    "terminal_reason": terminal_reason,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cost_usd": round(cost_usd, 6),
+                    "scope_denied_count": scope_denied,
+                    # True when the agent was handed an earlier turn's context.
+                    "resumed": resumed,
+                }
+                if error_code is not None:
+                    new_value["error_code"] = error_code
+                if sql_texts:
+                    new_value["sql"] = sql_texts
                 await anyio.to_thread.run_sync(
-                    lambda: ai_usage_db.append_turn_messages(
-                        session_id,
-                        question=body.message,
-                        answer="".join(answer_parts),
-                        tools=tool_entries,
-                        usage={
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "cache_read_input_tokens": cache_read_tokens,
-                            "cost_usd": round(cost_usd, 6),
-                        },
-                        error_code=error_code,
+                    lambda: audit.record(
+                        AUDIT_ACTION, target=f"ai_session:{session_id}", new_value=new_value
                     )
                 )
-                if not state_saved:
+                # The transcript rows (02 §8.2), on every path past the ownership
+                # check — a refused or failed turn is still part of the
+                # conversation the person sees. Never raises past here: the
+                # stream is already closing and the audit row is written.
+                try:
                     await anyio.to_thread.run_sync(
-                        ai_usage_db.touch_session, session_id, owner_uid
+                        lambda: ai_usage_db.append_turn_messages(
+                            session_id,
+                            question=body.message,
+                            answer="".join(answer_parts),
+                            tools=tool_entries,
+                            usage={
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "cache_read_input_tokens": cache_read_tokens,
+                                "cost_usd": round(cost_usd, 6),
+                            },
+                            error_code=error_code,
+                        )
                     )
-            except Exception:  # noqa: BLE001
-                logger.error(
-                    "AI turn: could not write ai_messages for session %s (trace_id=%s)",
-                    session_id,
-                    trace_id,
-                    exc_info=True,
+                    if not state_saved:
+                        await anyio.to_thread.run_sync(
+                            ai_usage_db.touch_session, session_id, owner_uid
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.error(
+                        "AI turn: could not write ai_messages for session %s (trace_id=%s)",
+                        session_id,
+                        trace_id,
+                        exc_info=True,
+                    )
+                # Free the one-turn-at-a-time slot (409 path above). Last, so a
+                # second tab cannot start reading the blob before it is written.
+                try:
+                    await anyio.to_thread.run_sync(ai_usage_db.release_turn, session_id, owner_uid)
+                except Exception:  # noqa: BLE001
+                    logger.error("AI turn: could not release the turn claim for session %s", session_id, exc_info=True)
+                # The one INFO line per turn (OPT-0058: never one per event).
+                logger.info(
+                    "AI turn: user=%s model=%s tools=%s subjects=%d tokens=%d/%d cost=%.4f "
+                    "reason=%s error=%s elapsed=%.1fs",
+                    user.email if user else "-",
+                    body.model,
+                    ",".join(tools_called) or "-",
+                    len(subjects),
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    terminal_reason,
+                    error_code or "-",
+                    time.monotonic() - started,
                 )
-            # The one INFO line per turn (OPT-0058: never one per event).
-            logger.info(
-                "AI turn: user=%s model=%s tools=%s subjects=%d tokens=%d/%d cost=%.4f "
-                "reason=%s error=%s elapsed=%.1fs",
-                user.email if user else "-",
-                body.model,
-                ",".join(tools_called) or "-",
-                len(subjects),
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                terminal_reason,
-                error_code or "-",
-                time.monotonic() - started,
-            )
+            finally:
+                frames.put_nowait(_END)
+
+    worker = asyncio.create_task(_run_turn())
+    _DRAIN_TASKS.add(worker)
+    worker.add_done_callback(_DRAIN_TASKS.discard)
+
+    async def _events() -> AsyncIterator[bytes]:
+        """Relay the worker's frames to the browser; keepalives while idle.
+
+        When the browser goes away this generator simply stops (Starlette
+        closes it); `disconnected` tells the worker to keep consuming the
+        agent stream without queueing frames nobody will read.
+        """
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    item = await asyncio.wait_for(frames.get(), timeout=KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield sse_keepalive()
+                    continue
+                if item is _END:
+                    break
+                yield item
+        finally:
+            if not worker.done():
+                disconnected.set()
 
     return StreamingResponse(_events(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

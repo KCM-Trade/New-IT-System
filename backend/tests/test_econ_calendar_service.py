@@ -191,3 +191,96 @@ def test_replace_is_per_source_and_replaces_rather_than_appends(db):
                                           "source_url": "u", "time_utc": None}])
     rows = db.read_calendar("2026-01-01", "2026-12-31", importance="all")
     assert [(r["event_date"], r["source"]) for r in rows] == [("2026-10-02", "fred"), ("2026-12-09", "fomc")]
+
+
+# ── cold review #10: FRED pagination / FOMC panel guard ──────────────────────
+
+
+def test_fred_url_asks_for_ascending_pages():
+    url = ecs.build_fred_url("abc", today=date(2026, 9, 27), offset=1000)
+    assert "sort_order=asc" in url and "offset=1000" in url and f"limit={ecs.FRED_PAGE_LIMIT}" in url
+
+
+def test_fetch_fred_paginates_until_count_is_exhausted():
+    """Two pages: the near-dated NFP sits on page 2 and must not be dropped."""
+    page1 = [{"release_id": 999, "release_name": f"Weekly Thing {i}", "date": "2026-10-01"} for i in range(ecs.FRED_PAGE_LIMIT)]
+    page2 = [{"release_id": 50, "release_name": "Employment Situation", "date": "2026-10-02"}]
+    seen: list[int] = []
+
+    def handler(req: httpx.Request):
+        offset = int(req.url.params.get("offset", "0"))
+        assert req.url.params.get("sort_order") == "asc"
+        seen.append(offset)
+        items = page1 if offset == 0 else page2
+        return httpx.Response(200, json={"count": len(page1) + len(page2), "release_dates": items})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    rows = ecs.fetch_fred(client, "k", today=date(2026, 9, 27))
+    assert seen == [0, ecs.FRED_PAGE_LIMIT]
+    assert [r.event for r in rows] == ["Non-farm Payrolls (NFP) / Employment Situation"]
+
+
+def test_fetch_fred_stops_on_a_short_page_and_at_the_page_cap():
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request):
+        calls["n"] += 1
+        # Always a full page and a huge count: only the cap stops it.
+        items = [{"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-10-14"}] * ecs.FRED_PAGE_LIMIT
+        return httpx.Response(200, json={"count": 10**9, "release_dates": items})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    rows = ecs.fetch_fred(client, "k", today=date(2026, 9, 27))
+    assert calls["n"] == ecs.FRED_MAX_PAGES
+    assert len(rows) == 1  # de-duplicated
+
+
+def test_fred_second_page_failure_fails_the_whole_source():
+    def handler(req: httpx.Request):
+        offset = int(req.url.params.get("offset", "0"))
+        if offset == 0:
+            items = [{"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-10-14"}] * ecs.FRED_PAGE_LIMIT
+            return httpx.Response(200, json={"count": 2000, "release_dates": items})
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        ecs.fetch_fred(client, "k", today=date(2026, 9, 27))
+
+
+def _fomc_panel(year: int, months: list[str], dates: list[str]) -> str:
+    cells = "".join(
+        f'<div class="fomc-meeting__month"><strong>{m}</strong></div>' for m in months
+    ) + "".join(f'<div class="fomc-meeting__date">{d}</div>' for d in dates)
+    return f'<a id="{year}">{year} FOMC Meetings</a>{cells}'
+
+
+def test_fomc_month_and_date_cell_mismatch_is_a_parse_failure():
+    eight = ["January", "March", "April", "June", "July", "September", "October", "December"]
+    dates = ["27-28", "17-18*", "28-29", "16-17*", "28-29", "15-16*", "27-28", "8-9*"]
+    good = _fomc_panel(2026, eight, dates)
+    assert len(ecs.parse_fomc_html(good)) == 8
+    bad = _fomc_panel(2026, eight, dates + ["30"])  # one extra date cell
+    with pytest.raises(ValueError, match="month cells vs"):
+        ecs.parse_fomc_html(bad)
+
+
+def test_fomc_implausible_meeting_count_is_a_parse_failure():
+    with pytest.raises(ValueError, match="meetings parsed"):
+        ecs.parse_fomc_html(_fomc_panel(2026, ["January", "March"], ["27-28", "17-18*"]))
+
+
+def test_a_broken_fomc_page_keeps_the_previous_rows(db):
+    """refresh_calendar: the parse guard surfaces as a failed source, and the
+    rows from the last good refresh stay in the cache."""
+    ok = ecs.refresh_calendar(SimpleNamespace(FRED_API_KEY=""), today=date(2026, 9, 27), client_factory=_client_factory())
+    assert ok["fomc"]["status"] == "ok"
+    before = ai_usage_db.read_calendar("2026-01-01", "2027-12-31", importance="all")
+    assert before
+    broken = _fomc_panel(2026, ["January", "March"], ["27-28", "17-18*", "30"])
+    bad = ecs.refresh_calendar(
+        SimpleNamespace(FRED_API_KEY=""), today=date(2026, 9, 27), client_factory=_client_factory(fomc_text=broken)
+    )
+    assert bad["fomc"]["status"] == "failed" and "month cells" in bad["fomc"]["detail"]
+    after = ai_usage_db.read_calendar("2026-01-01", "2027-12-31", importance="all")
+    assert after == before

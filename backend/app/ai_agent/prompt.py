@@ -98,8 +98,12 @@ If asked to do any of those, say so plainly in one sentence.
   employee clients (users.isEmployee) are not excluded; sid=5 closed rows have CMD inverted; closeDate /
   openDate are MT server days, *_TIME columns are MT wall clock. Cite "(run_sql, uncertified)" next to the
   numbers instead of a certified tool name.
-- Result columns holding names / emails / phones / IPs come back masked as "***"; do not try to
-  work around the mask.
+- Personal data is off limits at the parser level: columns such as name / email / phone / address /
+  ip on `users` and `mt4_users` are refused wherever they appear (even inside functions or WHERE), and
+  `SELECT *` on those two tables is refused — name the columns you need (ids, cid, isEmployee, GROUP,
+  CURRENCY, BALANCE …). Do not write SQL comments (`--`, `#`, `/* */`): any comment is refused. The guard
+  executes a normalised copy of your statement (`data.sql_executed`); quote THAT text to the user when
+  it differs from what you wrote.
 """
 
 # Model-facing manuals — these become the tools' docstrings. Short, because

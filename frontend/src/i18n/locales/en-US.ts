@@ -136,6 +136,7 @@ export const enUS = {
       model_error: "The model call failed. Please retry later.",
       forbidden: "Your account does not have the AI Assistant module; ask a manager to tick it on the Managers page.",
       session_not_found: "That conversation no longer exists.",
+      session_busy: "This conversation is still answering the previous turn; wait a moment.",
       network: "Network interrupted. Please retry.",
     },
   },

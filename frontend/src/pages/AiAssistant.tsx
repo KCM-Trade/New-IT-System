@@ -25,6 +25,7 @@ import {
 import {
   readStoredSessionId,
   sessionModel,
+  shouldPersistSessionId,
   writeStoredSessionId,
   type AiSessionListResponse,
   type AiSessionSummary,
@@ -121,9 +122,11 @@ export default function AiAssistantPage() {
     })
   const hasConversation = messages.length > 0
 
-  // Keep the tab's "current conversation" in step with the hook.
+  // Keep the tab's "current conversation" in step with the hook. Only real
+  // ids are written here; clearing is explicit (startNew / delete-active) —
+  // see shouldPersistSessionId for why the mount-time null must not write.
   useEffect(() => {
-    writeStoredSessionId(sessionId)
+    if (shouldPersistSessionId(sessionId)) writeStoredSessionId(sessionId)
   }, [sessionId])
 
   // Refresh-resume: reopen the conversation this tab had before the reload.
@@ -186,7 +189,10 @@ export default function AiAssistantPage() {
         await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, { method: "DELETE" })
       } finally {
         setSessions((prev) => prev.filter((s) => s.session_id !== id))
-        if (id === sessionId) newConversation()
+        if (id === sessionId) {
+          newConversation()
+          writeStoredSessionId(null)
+        }
         fetchSessions()
       }
     },
@@ -223,6 +229,7 @@ export default function AiAssistantPage() {
 
   const startNew = useCallback(() => {
     newConversation()
+    writeStoredSessionId(null)
     setDraft("")
     setHistoryOpen(false)
     textareaRef.current?.focus()

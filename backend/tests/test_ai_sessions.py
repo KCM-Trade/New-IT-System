@@ -471,3 +471,164 @@ def test_the_lifespan_complement_is_wired():
     import app.main as app_main
 
     assert "purge_ai_sessions(" in inspect.getsource(app_main.lifespan)
+
+
+# ── one turn at a time per session (cold review #6) ──────────────────────────
+
+
+def _set_claim(tmp_path, session_id: str, iso: str | None) -> None:
+    conn = _sessions_db(tmp_path)
+    conn.execute("UPDATE ai_sessions SET turn_started_at = ? WHERE session_id = ?", (iso, session_id))
+    conn.commit()
+    conn.close()
+
+
+def test_a_second_concurrent_turn_on_the_same_session_is_409(make_client, scripted_agent, tmp_path):
+    """Two tabs firing on one conversation used to both read the same blob and
+    the later write-back silently dropped the earlier turn. The claim is taken
+    before the stream opens, so the second caller is refused with a plain 409
+    and the agent is never reached for it."""
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    assert _turn(client, sid, session_id="s-busy").status_code == 200
+    # Simulate a turn still in flight: a fresh claim on the row.
+    _set_claim(tmp_path, "s-busy", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    calls_before = len(scripted_agent["calls"])
+    r = _turn(client, sid, session_id="s-busy")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "session busy"
+    assert len(scripted_agent["calls"]) == calls_before
+    # No audit row and no transcript rows for a refused turn: the agent was
+    # never contacted, nothing was spent.
+    assert len(_audit_rows(tmp_path)) == 1
+    conn = _sessions_db(tmp_path)
+    assert conn.execute("SELECT COUNT(*) FROM ai_messages WHERE session_id = 's-busy'").fetchone()[0] == 2
+
+
+def test_a_stale_claim_is_taken_over(make_client, scripted_agent, tmp_path):
+    """A worker that died mid-turn (deploy, crash) never reaches the finally
+    that clears the claim. After TURN_CLAIM_STALE_SECONDS the next turn takes
+    the slot instead of locking the conversation forever."""
+    from app.core.ai_usage_db import TURN_CLAIM_STALE_SECONDS
+
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    assert _turn(client, sid, session_id="s-stale").status_code == 200
+    stale = datetime.now(timezone.utc) - timedelta(seconds=TURN_CLAIM_STALE_SECONDS + 5)
+    _set_claim(tmp_path, "s-stale", stale.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert _turn(client, sid, session_id="s-stale").status_code == 200
+
+
+def test_the_claim_is_released_after_the_turn_on_success_and_failure(make_client, scripted_agent, tmp_path):
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    assert _turn(client, sid, session_id="s-rel").status_code == 200
+    conn = _sessions_db(tmp_path)
+    assert conn.execute("SELECT turn_started_at FROM ai_sessions WHERE session_id = 's-rel'").fetchone()[0] is None
+    # Agent unreachable: still released.
+    from app.services.ai_gateway_service import AgentUnavailable
+
+    scripted_agent["script"]["raise"] = AgentUnavailable("agent unreachable")
+    assert _turn(client, sid, session_id="s-rel").status_code == 200
+    conn = _sessions_db(tmp_path)
+    assert conn.execute("SELECT turn_started_at FROM ai_sessions WHERE session_id = 's-rel'").fetchone()[0] is None
+
+
+def test_claim_helpers_are_atomic_and_stale_aware(tmp_path, monkeypatch):
+    from app.core import ai_usage_db
+
+    monkeypatch.setattr(ai_usage_db, "_DB_PATH", tmp_path / "claims.db")
+    ai_usage_db.init_ai_usage_db()
+    ai_usage_db.create_session("c1", 7, title="t", model="m")
+    now = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+    assert ai_usage_db.claim_turn("c1", 7, now=now) is True
+    assert ai_usage_db.claim_turn("c1", 7, now=now + timedelta(seconds=30)) is False
+    # Wrong owner never claims, even when idle.
+    ai_usage_db.release_turn("c1", 7)
+    assert ai_usage_db.claim_turn("c1", 8, now=now) is False
+    assert ai_usage_db.claim_turn("c1", 7, now=now) is True
+    # Stale takeover.
+    later = now + timedelta(seconds=ai_usage_db.TURN_CLAIM_STALE_SECONDS + 1)
+    assert ai_usage_db.claim_turn("c1", 7, now=later) is True
+    # A deleted session cannot be claimed.
+    ai_usage_db.release_turn("c1", 7)
+    ai_usage_db.soft_delete_session("c1", 7)
+    assert ai_usage_db.claim_turn("c1", 7, now=later) is False
+
+
+def test_the_turn_started_at_column_is_added_to_an_old_file(tmp_path, monkeypatch):
+    """The live ai_agent.db predates the column; CREATE TABLE IF NOT EXISTS
+    will not add it, so init must ALTER — and be idempotent on the second boot."""
+    from app.core import ai_usage_db
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(str(path))
+    old.executescript(
+        "CREATE TABLE ai_sessions (session_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT, model TEXT, "
+        "blob TEXT, turns INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);"
+        "INSERT INTO ai_sessions VALUES ('legacy', 1, 't', 'm', NULL, 0, '2026-09-27T00:00:00Z', '2026-09-27T00:00:00Z', NULL);"
+    )
+    old.commit()
+    old.close()
+    monkeypatch.setattr(ai_usage_db, "_DB_PATH", path)
+    ai_usage_db.init_ai_usage_db()
+    ai_usage_db.init_ai_usage_db()  # idempotent
+    cols = {r[1] for r in sqlite3.connect(str(path)).execute("PRAGMA table_info(ai_sessions)")}
+    assert "turn_started_at" in cols
+    assert ai_usage_db.claim_turn("legacy", 1) is True
+
+
+# ── the browser goes away mid-turn (cold review #7) ──────────────────────────
+
+
+def test_a_disconnected_client_still_gets_its_state_saved_and_one_audit_row(
+    make_client, scripted_agent, tmp_path, monkeypatch
+):
+    """Stop / tab close used to cut the turn short: the route broke out, closed
+    the agent stream and the `session_state` was never consumed — the turn
+    vanished from the model's memory while the transcript kept it. Now the
+    worker keeps draining after the relay stops, so the blob, usage and the
+    single audit row (error_code client_disconnected) all land."""
+    import time as _time
+
+    from starlette.requests import Request
+
+    scripted_agent["script"]["events"] = WITH_STATE
+    calls = {"n": 0}
+
+    async def _gone_after_first_frame(self):  # noqa: ANN001
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    monkeypatch.setattr(Request, "is_disconnected", _gone_after_first_frame)
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    # Enter the client so its event loop outlives the request: the drain runs
+    # as a detached task on that loop after the response body has closed.
+    with client:
+        r = _turn(client, sid, session_id="s-gone")
+        assert r.status_code == 200
+        events = [e for e, _ in _parse(r.text)]
+        assert events[0] == "init" and "done" not in events  # the relay stopped early
+        # The worker finishes on its own; poll for its LAST write (the claim
+        # release, after audit + transcript) instead of sleeping blind.
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline:
+            conn = _sessions_db(tmp_path)
+            claim = conn.execute("SELECT turn_started_at FROM ai_sessions WHERE session_id = 's-gone'").fetchone()[0]
+            conn.close()
+            if claim is None:
+                break
+            _time.sleep(0.05)
+    rows = _audit_rows(tmp_path)
+    assert len(rows) == 1
+    value = json.loads(rows[0]["new_value"])
+    assert value["error_code"] == "client_disconnected"
+    assert value["terminal_reason"] == "end_turn"  # the agent finished; only the browser left
+    assert value["input_tokens"] == 1000  # usage was still billed
+    conn = _sessions_db(tmp_path)
+    row = conn.execute("SELECT blob, turns, turn_started_at FROM ai_sessions WHERE session_id = 's-gone'").fetchone()
+    assert json.loads(row["blob"]) == BLOB_V1
+    assert row["turns"] == 1
+    assert row["turn_started_at"] is None  # the claim was released
+    assert conn.execute("SELECT COUNT(*) FROM ai_messages WHERE session_id = 's-gone'").fetchone()[0] == 2

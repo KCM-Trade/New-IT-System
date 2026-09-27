@@ -69,6 +69,20 @@ _UTC = timezone.utc
 FRED_RELEASE_TIME_ET = time(8, 30)
 FOMC_STATEMENT_TIME_ET = time(14, 0)
 
+# Eight scheduled meetings a year since 1981; the bounds leave room for an
+# unscheduled meeting listed in the same panel (2020 had two) without letting
+# a half-parsed page through.
+FOMC_MEETINGS_PER_YEAR = (6, 10)
+
+# FRED pages: `sort_order=asc` so the NEAREST dates come first — the API's
+# default is descending, so with one page of 1000 across ~300 releases (many
+# weekly) the far end of the window filled the page and next week's NFP was
+# the row that fell off (cold review #10). Paginate with `offset` until
+# `count` is exhausted; the cap is a guard against a runaway loop, not a
+# budget (the 120-day window is ~3-4 pages).
+FRED_PAGE_LIMIT = 1000
+FRED_MAX_PAGES = 10
+
 # FRED release name → (event label, importance). Names are matched
 # case-insensitively on their start so a suffix like " (Advance Estimate)"
 # does not break the mapping. Anything not listed is dropped: the tool exists
@@ -172,6 +186,19 @@ def parse_fomc_html(html: str, *, years: Optional[Iterable[int]] = None) -> list
         chunk = html[start:end]
         months = [x.group(1) for x in _MONTH_RE.finditer(chunk)]
         dates = [x.group(1) for x in _DATE_RE.finditer(chunk)]
+        # `zip` would silently pair every month cell with the wrong date the
+        # moment the Fed adds a cell the other regex does not see (cold review
+        # #10). A mismatch, or a meeting count no FOMC year has ever had, is a
+        # parse failure: the caller keeps the previous rows instead.
+        if len(months) != len(dates):
+            raise ValueError(
+                f"FOMC {year} panel: {len(months)} month cells vs {len(dates)} date cells — page layout changed"
+            )
+        if not FOMC_MEETINGS_PER_YEAR[0] <= len(months) <= FOMC_MEETINGS_PER_YEAR[1]:
+            raise ValueError(
+                f"FOMC {year} panel: {len(months)} meetings parsed, expected "
+                f"{FOMC_MEETINGS_PER_YEAR[0]}-{FOMC_MEETINGS_PER_YEAR[1]} — page layout changed"
+            )
         for month_label, date_text in zip(months, dates):
             parsed = _parse_fomc_entry(year, month_label, date_text)
             if parsed is None:
@@ -213,11 +240,19 @@ def map_fred_release(name: str) -> Optional[tuple[str, str]]:
     return None
 
 
-def build_fred_url(api_key: str, *, today: date, lookahead_days: int = FRED_LOOKAHEAD_DAYS) -> str:
+def build_fred_url(
+    api_key: str,
+    *,
+    today: date,
+    lookahead_days: int = FRED_LOOKAHEAD_DAYS,
+    offset: int = 0,
+    limit: int = FRED_PAGE_LIMIT,
+) -> str:
     end = today + timedelta(days=lookahead_days)
     return (
         f"{FRED_RELEASES_DATES_URL}?api_key={api_key}&file_type=json"
-        f"&include_release_dates_with_no_data=true&limit=1000"
+        f"&include_release_dates_with_no_data=true&limit={int(limit)}&offset={int(offset)}"
+        f"&sort_order=asc"
         f"&realtime_start={today.isoformat()}&realtime_end={end.isoformat()}"
     )
 
@@ -254,13 +289,29 @@ def parse_fred_json(payload: dict) -> list[CalendarRow]:
 
 
 def fetch_fred(client: httpx.Client, api_key: str, *, today: Optional[date] = None) -> list[CalendarRow]:
+    """Every release date in the window, across as many pages as FRED needs.
+
+    Stops when the page is short, when ``offset`` reaches the reported
+    ``count``, or at FRED_MAX_PAGES. A page that fails raises — the whole
+    source is then "failed" and the previous rows stay (no half-window cache).
+    """
     today = today or date.today()
-    resp = client.get(build_fred_url(api_key, today=today))
-    # FRED answers 400 with {"error_code":400,"error_message":...} for a bad
-    # key; raise_for_status turns that into the same "source failed" path as
-    # a network error, so old rows are kept.
-    resp.raise_for_status()
-    return parse_fred_json(resp.json())
+    items: list[dict] = []
+    offset = 0
+    for _ in range(FRED_MAX_PAGES):
+        resp = client.get(build_fred_url(api_key, today=today, offset=offset))
+        # FRED answers 400 with {"error_code":400,"error_message":...} for a
+        # bad key; raise_for_status turns that into the same "source failed"
+        # path as a network error, so old rows are kept.
+        resp.raise_for_status()
+        payload = resp.json()
+        page = payload.get("release_dates") or []
+        items.extend(page)
+        offset += len(page)
+        count = payload.get("count")
+        if len(page) < FRED_PAGE_LIMIT or (isinstance(count, int) and offset >= count):
+            break
+    return parse_fred_json({"release_dates": items})
 
 
 # ── refresh ──────────────────────────────────────────────────────────────────

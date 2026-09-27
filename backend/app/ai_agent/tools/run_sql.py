@@ -14,17 +14,32 @@ Seven gates (02 §10.1), every one hard:
      (SELECT-only, ``default_transaction_read_only``) plus ``statement_timeout``.
   ② ONE statement whose root is SELECT / UNION (sqlglot AST, dialect-aware);
      any DML / DDL / admin node ANYWHERE in the tree (``WITH d AS (DELETE …)``)
-     is refused — see ``_FORBIDDEN_NODES``.
+     is refused — see ``_FORBIDDEN_NODES``. COMMENTS are refused before parsing
+     (``/* */``, ``--``, ``#`` outside string literals): MySQL executes the body
+     of ``/*!50000 … */`` while every parser treats it as a comment, so a comment
+     is the one place where "what the AST saw" and "what the server runs" can
+     differ. What is executed is the AST REGENERATED without comments
+     (``tree.sql(comments=False)``), never the model's raw text.
   ③ node BLACKLIST — ``exp.Command`` (FLUSH / LOCK TABLES / CALL parse to it),
      ``INTO OUTFILE`` / ``SELECT … INTO @v`` (``exp.Into``), ``FOR UPDATE`` /
      ``LOCK IN SHARE MODE`` (``exp.Lock``), and the functions in
      ``_FORBIDDEN_FUNCTIONS`` (SLEEP / BENCHMARK / LOAD_FILE / GET_LOCK / pg_sleep…).
-  ④ ROWS capped: ``limit`` clamped to ``MAX_LIMIT`` and the statement is run as
-     ``SELECT * FROM (<sql>) AS _q LIMIT n+1`` so truncation is detected, not
-     guessed; cells cut at ``CELL_MAX_CHARS``.
+  ④ ROWS capped: ``limit`` clamped to ``MAX_LIMIT``; a SELECT gets ``LIMIT n+1``
+     pushed into its own AST (``min(existing, n+1)`` when it already has one) so
+     truncation is detected, not guessed, AND its ORDER BY keeps meaning — MySQL
+     merges a derived table and is documented to drop the inner ORDER BY, so
+     wrapping ``SELECT … ORDER BY`` in ``SELECT * FROM (…) LIMIT`` would hand
+     back 200 arbitrary rows labelled "top 200". Only a UNION root (which
+     cannot take a trailing LIMIT unambiguously) is wrapped. Cells cut at
+     ``CELL_MAX_CHARS``.
   ⑤ TABLE whitelist per database, checked on every ``exp.Table`` node
      (CTE names excepted); system schemas are refused by construction because
-     they are simply not in the list.
+     they are simply not in the list — plus, on PG, any relation named ``pg_*``
+     (``pg_stat_activity``, ``pg_roles``, ``pg_settings`` … are reachable
+     UNQUALIFIED because ``pg_catalog`` is implicitly on the search_path, so a
+     schema whitelist alone would let them through). Server-identity /
+     server-info functions (``USER()``, ``VERSION()``, ``@@datadir``,
+     ``inet_server_addr()`` …) are refused on both engines.
   ⑥ a RESTRICTED caller (``ctx.scope is not None``) never gets this tool: the
      harness does not register it, and this impl still answers ``scope_denied``
      if it is ever reached (belt and braces — free SQL cannot be cid-filtered).
@@ -40,11 +55,14 @@ never given ``CLIENT.MULTI_STATEMENTS`` (``connect_readonly`` does not pass
 ``client_flag``), so ``SELECT 1; FLUSH TABLES`` cannot ride through as one
 string either — ``tests/test_ai_run_sql_guard.py`` pins both.
 
-Sensitive columns (02 §13 last bullet) are masked at the OUTPUT layer: a result
-column whose name is in ``SENSITIVE_COLUMNS`` comes back as ``"***"`` in every
-row. Output-layer rather than AST-layer because the model may alias
-(``SELECT email AS e``) — the alias is what we see, so the list is matched
-against the RESULT column names and the caveat tells the model what was hidden.
+Personal data (02 §13 last bullet) is refused at the AST layer: any column
+named in ``PII_COLUMNS`` that belongs to (or may belong to) a ``PII_TABLES``
+table is refused wherever it appears — select list, WHERE, function arguments,
+CTEs — so ``CONCAT(email, '')``, ``SUBSTRING(phone, 1, 20)`` and ``WHERE email
+LIKE …`` all stop before a connection is opened; and ``SELECT *`` / ``t.*`` over
+``users`` / ``mt4_users`` is refused so the model must name columns. The same
+names are ALSO masked at the output layer (``SENSITIVE_COLUMNS`` on the RESULT
+column names) as belt and braces for anything the AST rule did not see.
 
 Framework-free like the other tools: ``harness.build_tools`` wraps this into
 the framework tool; ``validate_sql`` is pure and unit-tested without a DB.
@@ -96,6 +114,15 @@ MYSQL_TABLES = frozenset(
 )
 PG_SCHEMAS = frozenset({"public", "kcm"})
 PG_DEFAULT_SCHEMA = "public"
+# PG catalog objects are visible unqualified (pg_catalog is implicitly first on
+# search_path), so the schema whitelist is not enough: refuse the name prefix.
+PG_FORBIDDEN_TABLE_PREFIX = "pg_"
+PG_FORBIDDEN_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
+
+# 02 §13: tables that hold personal data. A PII column reached through one of
+# these — or unqualified in a query that touches one — is refused (see
+# ``_check_pii``); ``SELECT *`` over them is refused too.
+PII_TABLES = frozenset({"users", "mt4_users"})
 
 # ② + ③: anything of these types anywhere in the tree is refused. Statement
 # kinds sqlglot cannot parse at all (FLUSH … WITH READ LOCK, INTO OUTFILE,
@@ -132,6 +159,10 @@ _FORBIDDEN_NODES: tuple[type, ...] = (
     exp.Attach,
     exp.Detach,
     exp.Install,
+    # @@datadir / @@hostname / @@version_comment … and @user variables: server
+    # and session state, never client data.
+    exp.SessionParameter,
+    exp.Parameter,
 )
 
 # ③ functions that stall, lock or read files. Matched on the lower-cased
@@ -173,7 +204,45 @@ _FORBIDDEN_FUNCTIONS = frozenset(
         "set_config",
         "current_setting",
         "pg_notify",
+        # server / connection identity — leaks the account, host, version
+        "user",
+        "current_user",
+        "currentuser",
+        "session_user",
+        "sessionuser",
+        "system_user",
+        "version",
+        "current_version",
+        "currentversion",
+        "database",
+        "schema",
+        "current_schema",
+        "currentschema",
+        "current_database",
+        "currentdatabase",
+        "connection_id",
+        "inet_server_addr",
+        "inet_server_port",
+        "inet_client_addr",
+        "inet_client_port",
+        "pg_backend_pid",
+        "pg_postmaster_start_time",
+        "pg_conf_load_time",
     }
+)
+# Function-name PREFIXES refused as a family (file system, large objects,
+# foreign connections, sleeping, backend control, advisory locks).
+_FORBIDDEN_FUNCTION_PREFIXES = (
+    "pg_ls_",
+    "pg_read_",
+    "pg_stat_file",
+    "pg_sleep",
+    "pg_terminate",
+    "pg_cancel",
+    "pg_advisory",
+    "pg_try_advisory",
+    "lo_",
+    "dblink",
 )
 
 # 02 §13: no names / emails / phones / full IPs in tool output. Matched on the
@@ -194,8 +263,16 @@ SENSITIVE_COLUMNS = frozenset(
         "ip",
         "last_ip",
         "ipaddress",
+        "telephone",
+        "passport",
+        "id_number",
+        "birthday",
+        "dob",
     }
 )
+# AST-layer list (same names; kept as its own constant so the two layers can
+# diverge deliberately later without one silently widening the other).
+PII_COLUMNS = SENSITIVE_COLUMNS
 MASK = "***"
 
 UNCERTIFIED_SUMMARY = "Ad-hoc SQL written by the model; NOT a certified 口径"
@@ -204,7 +281,8 @@ FIXED_CAVEATS = [
     "demo/员工未排除 — demo/test groups and employee clients (users.isEmployee) are in the rows unless the SQL excluded them.",
     "sid=5 CMD 未归一化 — MT5 (sid 5) closed rows store the EXIT side in CMD; direction is inverted for those rows.",
     "日界按 SQL 原样 — closeDate/openDate are MT server days (UTC+3 summer / UTC+2 winter); *_TIME columns are MT wall clock, not UTC.",
-    f"Sensitive result columns ({', '.join(sorted(SENSITIVE_COLUMNS))}) are masked as '{MASK}'.",
+    f"Personal-data columns ({', '.join(sorted(PII_COLUMNS))}) of {'/'.join(sorted(PII_TABLES))} cannot be queried, and "
+    f"SELECT * over those tables is refused; any such result column is additionally masked as '{MASK}'.",
 ]
 
 _DIALECT = {DB_MYSQL: "mysql", DB_PG: "postgres"}
@@ -217,13 +295,127 @@ def _invalid(reason: str, sql: str) -> dict:
     return error_envelope("invalid_argument", f"SQL refused: {reason}", {"sql": sql[:MAX_SQL_CHARS]})
 
 
-def _function_name(node: exp.Func) -> str:
+def _function_names(node: exp.Func) -> set[str]:
+    """Every spelling sqlglot may give a function: the raw name for
+    ``Anonymous``, ``sql_name()`` and the class name for typed nodes
+    (``version()`` is ``CurrentVersion`` / ``CURRENT_VERSION``)."""
+    names = {type(node).__name__.lower()}
     if isinstance(node, exp.Anonymous):
-        return str(node.name or "").lower()
+        names.add(str(node.name or "").lower())
+    else:
+        try:
+            names.add(str(node.sql_name() or "").lower())
+        except Exception:  # noqa: BLE001 — a name we cannot read is not one we allow
+            pass
+    return {n for n in names if n}
+
+
+def _forbidden_function(node: exp.Func) -> Optional[str]:
+    for name in _function_names(node):
+        if name in _FORBIDDEN_FUNCTIONS or name.startswith(_FORBIDDEN_FUNCTION_PREFIXES):
+            return name
+    return None
+
+
+_QUOTES = {"'", '"', "`"}
+
+
+def find_comment(text: str) -> Optional[str]:
+    """Return a description of the first SQL comment in ``text``, or None.
+
+    ``/*`` and ``*/`` are refused ANYWHERE (even inside a literal — the model
+    has no honest use for them and MySQL's ``/*!…*/`` is the attack); ``--``
+    and ``#`` only outside single-, double- and back-quoted literals so that
+    ``WHERE name = '#1'`` stays legal. Escapes: backslash and doubled quotes.
+    """
+    if "/*" in text or "*/" in text:
+        return "block comment (/* */)"
+    quote: Optional[str] = None
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote is not None:
+            if ch == "\\" and quote != "`":
+                i += 2
+                continue
+            if ch == quote:
+                if i + 1 < n and text[i + 1] == quote:  # doubled quote inside literal
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if ch in _QUOTES:
+            quote = ch
+        elif ch == "#":
+            return "line comment (#)"
+        elif ch == "-" and i + 1 < n and text[i + 1] == "-":
+            return "line comment (--)"
+        i += 1
+    return None
+
+
+def _parse_single(text: str, db: str) -> exp.Expression | dict:
+    """②: one statement, root SELECT / UNION. Returns the tree or a refusal."""
     try:
-        return str(node.sql_name() or "").lower()
-    except Exception:  # noqa: BLE001 — a name we cannot read is not one we allow
-        return type(node).__name__.lower()
+        statements = [st for st in sqlglot.parse(text, read=_DIALECT[db]) if st is not None]
+    except (ParseError, TokenError) as exc:
+        # FLUSH … WITH READ LOCK, INTO OUTFILE, HANDLER, DO … all land here.
+        return _invalid(f"could not parse as a single SELECT ({type(exc).__name__})", text)
+    except Exception as exc:  # noqa: BLE001 — sqlglot internals; refuse, never raise
+        return _invalid(f"could not parse ({type(exc).__name__})", text)
+    if len(statements) != 1:
+        return _invalid(f"exactly one statement is allowed, got {len(statements)}", text)
+    tree = statements[0]
+    if not isinstance(tree, (exp.Select, exp.Union)):
+        return _invalid(f"only SELECT / UNION statements are allowed, got {type(tree).__name__}", text)
+    return tree
+
+
+def _is_star_projection(expression: exp.Expression) -> bool:
+    """``SELECT *`` or ``SELECT t.*`` (a Column whose name part is a Star).
+    ``COUNT(*)`` is a Func and does not count."""
+    if isinstance(expression, exp.Star):
+        return True
+    return isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star)
+
+
+def _check_pii(tree: exp.Expression, text: str) -> Optional[dict]:
+    """02 §13 at the AST layer. Only tables in PII_TABLES carry personal data,
+    so ``tags.name`` stays legal while ``users.name`` (qualified, aliased or
+    unqualified in a query that touches users) is refused."""
+    alias_to_table: dict[str, str] = {}
+    referenced: set[str] = set()
+    for table in tree.find_all(exp.Table):
+        name = str(table.name or "").lower()
+        if not name:
+            continue
+        referenced.add(name)
+        alias_to_table[name] = name
+        if table.alias:
+            alias_to_table[str(table.alias).lower()] = name
+    touches_pii = bool(referenced & PII_TABLES)
+    if not touches_pii:
+        return None
+
+    for select in tree.find_all(exp.Select):
+        if any(_is_star_projection(e) for e in select.expressions):
+            return _invalid(
+                f"SELECT * is not allowed when {'/'.join(sorted(PII_TABLES))} is in the query — name the columns you need",
+                text,
+            )
+
+    for column in tree.find_all(exp.Column):
+        name = str(column.name or "").lower()
+        if name not in PII_COLUMNS:
+            continue
+        qualifier = str(column.table or "").lower()
+        if qualifier:
+            resolved = alias_to_table.get(qualifier, qualifier)
+            if resolved not in PII_TABLES:
+                continue  # e.g. t.name where t is tags
+        return _invalid(f"column {name} is personal data and cannot be queried", text)
+    return None
 
 
 def validate_sql(sql: Any, db: Any) -> Optional[dict]:
@@ -241,27 +433,20 @@ def validate_sql(sql: Any, db: Any) -> Optional[dict]:
     text = sql.strip()
     if len(text) > MAX_SQL_CHARS:
         return _invalid(f"sql longer than {MAX_SQL_CHARS} characters", text)
+    comment = find_comment(text)
+    if comment is not None:
+        return _invalid(f"comments are not allowed ({comment}); write the query without comments", text)
 
-    try:
-        statements = [s for s in sqlglot.parse(text, read=_DIALECT[db]) if s is not None]
-    except (ParseError, TokenError) as exc:
-        # FLUSH … WITH READ LOCK, INTO OUTFILE, HANDLER, DO … all land here.
-        return _invalid(f"could not parse as a single SELECT ({type(exc).__name__})", text)
-    except Exception as exc:  # noqa: BLE001 — sqlglot internals; refuse, never raise
-        return _invalid(f"could not parse ({type(exc).__name__})", text)
-
-    if len(statements) != 1:
-        return _invalid(f"exactly one statement is allowed, got {len(statements)}", text)
-    tree = statements[0]
-    if not isinstance(tree, (exp.Select, exp.Union)):
-        return _invalid(f"only SELECT / UNION statements are allowed, got {type(tree).__name__}", text)
+    tree = _parse_single(text, db)
+    if isinstance(tree, dict):
+        return tree
 
     for node in tree.walk():
         if isinstance(node, _FORBIDDEN_NODES):
             return _invalid(f"{type(node).__name__} is not allowed inside a read-only query", text)
         if isinstance(node, exp.Func):
-            fname = _function_name(node)
-            if fname in _FORBIDDEN_FUNCTIONS:
+            fname = _forbidden_function(node)
+            if fname is not None:
                 return _invalid(f"function {fname.upper()}() is not allowed", text)
 
     cte_names = {str(cte.alias or "").lower() for cte in tree.find_all(exp.CTE)}
@@ -284,10 +469,13 @@ def validate_sql(sql: Any, db: Any) -> Optional[dict]:
                     text,
                 )
         else:
+            if schema in PG_FORBIDDEN_SCHEMAS or name.startswith(PG_FORBIDDEN_TABLE_PREFIX):
+                return _invalid(f"{schema + '.' if schema else ''}{name} is a system catalog object and is not allowed", text)
             schema = schema or PG_DEFAULT_SCHEMA
             if schema not in PG_SCHEMAS:
                 return _invalid(f"schema {schema} is not in the whitelist ({', '.join(sorted(PG_SCHEMAS))}.*)", text)
-    return None
+
+    return _check_pii(tree, text)
 
 
 # ── execution (① ③-timeouts ④) ───────────────────────────────────────────────
@@ -302,10 +490,41 @@ def clamp_limit(limit: Any) -> int:
 
 
 def wrap_with_limit(sql: str, limit: int) -> str:
-    """``SELECT * FROM (<sql>) AS _q LIMIT n+1`` — one more than asked so a
-    full page proves truncation instead of leaving it to guesswork."""
+    """``SELECT * FROM (<sql>) AS _q LIMIT n+1`` — used for UNION roots only
+    (see ``prepare_sql``): one more than asked so a full page proves truncation
+    instead of leaving it to guesswork."""
     inner = sql.strip().rstrip(";").strip()
     return f"SELECT * FROM ({inner}) AS _q LIMIT {int(limit) + 1}"
+
+
+def prepare_sql(sql: str, db: str, limit: int) -> str:
+    """The text that is actually EXECUTED for an already-validated statement.
+
+    * Regenerated from the AST with ``comments=False`` — never the raw text, so
+      nothing a parser skipped can reach the server.
+    * ``exp.Select`` root: ``LIMIT n+1`` pushed into the statement itself
+      (``min(existing, n+1)`` if it already had one). ORDER BY stays at the top
+      level, where MySQL honours it; wrapping would let MySQL merge the derived
+      table and drop the ordering (documented behaviour), and ``SELECT u.*, mu.*``
+      would die with 1060 duplicate column inside a derived table.
+    * ``exp.Union`` root: wrapped, because a trailing LIMIT on a UNION is
+      ambiguous across dialects and the wrap is unambiguous.
+    """
+    dialect = _DIALECT[db]
+    tree = _parse_single(sql.strip(), db)
+    if isinstance(tree, dict):  # validate_sql already ran; this is a programming error
+        raise ValueError(tree["error"]["message"])
+    page = int(limit) + 1
+    if isinstance(tree, exp.Select):
+        existing = tree.args.get("limit")
+        if existing is not None:
+            try:
+                current = int(existing.expression.name)
+            except (TypeError, ValueError, AttributeError):
+                current = page
+            page = min(current, page)
+        return tree.limit(page).sql(dialect=dialect, comments=False)
+    return wrap_with_limit(tree.sql(dialect=dialect, comments=False), int(limit))
 
 
 def _cell(value: Any) -> Any:
@@ -356,8 +575,9 @@ _MYSQL_TIMEOUT_CODES = frozenset({3024, 1317, 2013})
 
 
 def execute_mysql(settings: Settings, sql: str, limit: int) -> dict:
-    """① + ④ on the fxbackoffice replica. Returns a page dict or an error envelope."""
-    wrapped = wrap_with_limit(sql, limit)
+    """① + ④ on the fxbackoffice replica. ``sql`` is the PREPARED text from
+    ``prepare_sql`` (limit already inside). Returns a page dict or an error envelope."""
+    wrapped = sql
     try:
         conn = connect_readonly(settings, max_execution_ms=STATEMENT_TIMEOUT_MS)
     except pymysql.MySQLError as exc:
@@ -387,11 +607,12 @@ def execute_mysql(settings: Settings, sql: str, limit: int) -> dict:
 
 
 def execute_pg(settings: Settings, sql: str, limit: int) -> dict:
-    """① + ④ on risk_cases (role ai_agent_ro). Returns a page dict or an error envelope."""
+    """① + ④ on risk_cases (role ai_agent_ro). ``sql`` is the PREPARED text from
+    ``prepare_sql``. Returns a page dict or an error envelope."""
     import psycopg2
     import psycopg2.errors
 
-    wrapped = wrap_with_limit(sql, limit)
+    wrapped = sql
     try:
         with pg_session(settings.risk_cases_pg_dsn()) as conn:
             with conn.cursor() as cur:
@@ -429,15 +650,17 @@ async def run_sql(ctx: CallerCtx, db: Any, sql: Any, limit: Any = DEFAULT_LIMIT)
         return refused
     text = str(sql).strip()
     page_size = clamp_limit(limit)
+    executed = prepare_sql(text, db, page_size)
 
     executor = execute_mysql if db == DB_MYSQL else execute_pg
-    result = await run_sync_with_timeout(executor, ctx.settings, text, page_size, ctx=ctx)
+    result = await run_sync_with_timeout(executor, ctx.settings, executed, page_size, ctx=ctx)
     if is_error(result):
         return result
 
     data = {
         "db": db,
         "sql": text,
+        "sql_executed": executed,
         "columns": result["columns"],
         "rows": result["rows"],
         "row_count": result["row_count"],

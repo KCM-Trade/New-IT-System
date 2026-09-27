@@ -55,7 +55,10 @@ def _code(env: dict | None) -> str | None:
         "SELECT * FROM `fxbackoffice`.`mt4_trades` WHERE closeDate = '2026-09-01'",
         "SELECT LOGIN FROM mt4_users UNION SELECT id FROM users",
         "WITH c AS (SELECT userId AS u FROM mt4_users) SELECT u FROM c",
-        "SELECT * FROM users u JOIN mt4_users m ON m.userId = u.id",
+        "SELECT u.id, m.LOGIN FROM users u JOIN mt4_users m ON m.userId = u.id",
+        "SELECT * FROM tags WHERE name = '#1'",          # '#' inside a literal is not a comment
+        "SELECT * FROM tags WHERE name = 'it''s -- x'",   # doubled quote + '--' inside a literal
+        "SELECT t.name FROM tags t JOIN user_tags ut ON ut.tagId = t.id",  # tags.name is not PII
         "SELECT * FROM (SELECT 1 AS x) AS t",
         "SELECT t.SYMBOL, SUM(t.lots) FROM mt4_trades t GROUP BY t.SYMBOL ORDER BY 2 DESC LIMIT 5",
     ],
@@ -286,10 +289,11 @@ def test_execute_mysql_passes_the_15s_statement_budget(monkeypatch):
         return _Conn()
 
     monkeypatch.setattr(rs, "connect_readonly", _fake_connect)
-    out = rs.execute_mysql(object(), "SELECT 1", 200)
+    out = rs.execute_mysql(object(), "SELECT 1 LIMIT 201", 200)
     assert seen["max_execution_ms"] == 15_000
     assert seen["closed"] is True
-    assert seen["sql"].startswith("SELECT * FROM (SELECT 1) AS _q LIMIT 201")
+    # The executor runs EXACTLY the prepared text (prepare_sql owns the limit).
+    assert seen["sql"] == "SELECT 1 LIMIT 201"
     assert out["rows"] == [[1]]
 
 
@@ -526,3 +530,210 @@ async def test_truncated_result_sets_the_envelope_flag_and_a_caveat(monkeypatch)
     out = await rs.run_sql(_ctx(None), MYSQL, "SELECT LOGIN AS x FROM mt4_users", limit=3)
     assert out["truncated"] is True and out["data"]["row_count"] == 3
     assert any("More than 3 rows" in c for c in out["definition"]["caveats"])
+
+
+# ── cold-review hardening (2026-09-28): comments, catalog objects, LIMIT push-down, PII at the AST ──
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # MySQL executes the body of a version comment; every parser skips it.
+        "SELECT 1 /*!50000 UNION SELECT user FROM mysql.user */",
+        "SELECT /*! * FROM mysql.user */ FROM users",
+        "SELECT 1 /* harmless */",
+        "SELECT 1 -- x",
+        "SELECT 1 # x",
+        "SELECT * FROM tags -- WHERE 1=1",
+        "SELECT 'a' # ' FROM mysql.user",
+    ],
+)
+def test_comments_are_refused_before_parsing(sql):
+    env = rs.validate_sql(sql, MYSQL)
+    assert _code(env) == "invalid_argument"
+    assert "comments are not allowed" in env["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("SELECT * FROM tags WHERE name = '#1'", None),
+        ("SELECT * FROM tags WHERE name = 'a--b'", None),
+        ("SELECT * FROM tags WHERE name = 'it''s -- #'", None),
+        ('SELECT "x--y" FROM tags', None),
+        ("SELECT `a#b` FROM tags", None),
+        ("SELECT 1 -- x", "line comment (--)"),
+        ("SELECT 1 # x", "line comment (#)"),
+        ("SELECT 'a' # ' b", "line comment (#)"),
+        ("SELECT 1 /* x */", "block comment (/* */)"),
+        ("SELECT '/*' FROM tags", "block comment (/* */)"),  # refused even inside a literal, on purpose
+    ],
+)
+def test_find_comment_respects_string_literals(text, expected):
+    assert rs.find_comment(text) == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT @@datadir",
+        "SELECT @@hostname, 1",
+        "SELECT @@version_comment",
+        "SELECT @@datadir, USER()",
+        "SELECT USER()",
+        "SELECT CURRENT_USER()",
+        "SELECT SESSION_USER()",
+        "SELECT SYSTEM_USER()",
+        "SELECT version()",
+        "SELECT DATABASE()",
+        "SELECT SCHEMA()",
+        "SELECT CONNECTION_ID()",
+        "SELECT id FROM tags WHERE id = @x",
+    ],
+)
+def test_mysql_server_identity_is_refused(sql):
+    assert _code(rs.validate_sql(sql, MYSQL)) == "invalid_argument"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # pg_catalog is implicitly on search_path: unqualified names reach it.
+        "SELECT * FROM pg_stat_activity",
+        "SELECT rolname FROM pg_roles",
+        "SELECT usename FROM pg_user",
+        "SELECT name, setting FROM pg_settings",
+        "SELECT * FROM pg_catalog.pg_tables",
+        "SELECT * FROM public.pg_anything",
+        "SELECT * FROM information_schema.tables",
+        "SELECT pg_ls_waldir()",
+        "SELECT pg_ls_dir('.')",
+        "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_stat_file('x')",
+        "SELECT pg_sleep_for('1 second')",
+        "SELECT current_setting('data_directory')",
+        "SELECT set_config('x', 'y', false)",
+        "SELECT lo_get(1)",
+        "SELECT * FROM dblink('dbname=x', 'select 1') AS t(a int)",
+        "SELECT pg_terminate_backend(1)",
+        "SELECT pg_cancel_backend(1)",
+        "SELECT inet_server_addr()",
+        "SELECT inet_client_addr()",
+        "SELECT version()",
+        "SELECT current_user",
+        "SELECT session_user",
+        "SELECT current_database()",
+        "SELECT pg_backend_pid()",
+    ],
+)
+def test_pg_catalog_objects_and_server_functions_are_refused(sql):
+    assert _code(rs.validate_sql(sql, PG)) == "invalid_argument"
+
+
+def test_pg_whitelisted_relations_still_pass():
+    assert rs.validate_sql("SELECT id FROM kcm.crm_user_tags LIMIT 3", PG) is None
+    assert rs.validate_sql("SELECT id FROM public.risk_cases", PG) is None
+    assert rs.validate_sql("SELECT generate_series(1, 10)", PG) is None  # bounded; the 15s budget covers abuse
+
+
+# ── LIMIT is pushed into the statement, not wrapped around it ────────────────
+
+
+def test_prepare_sql_pushes_limit_and_keeps_order_by_at_top_level():
+    out = rs.prepare_sql("SELECT id FROM users ORDER BY id DESC", MYSQL, 200)
+    assert out == "SELECT id FROM users ORDER BY id DESC LIMIT 201"
+    assert "_q" not in out
+
+
+def test_prepare_sql_keeps_a_smaller_existing_limit():
+    assert rs.prepare_sql("SELECT id FROM users ORDER BY id DESC LIMIT 5", MYSQL, 200).endswith("LIMIT 5")
+    assert rs.prepare_sql("SELECT id FROM users LIMIT 500", MYSQL, 200).endswith("LIMIT 201")
+
+
+def test_prepare_sql_wraps_only_a_union():
+    out = rs.prepare_sql("SELECT LOGIN FROM mt4_users UNION SELECT id FROM users", MYSQL, 200)
+    assert out.startswith("SELECT * FROM (") and out.endswith(") AS _q LIMIT 201")
+
+
+def test_prepare_sql_does_not_wrap_a_two_table_join():
+    # `SELECT u.*, mu.*` inside a derived table dies with MySQL 1060 (duplicate
+    # column); with the limit pushed down the join runs as written.
+    out = rs.prepare_sql("SELECT u.id, mu.LOGIN FROM users u JOIN mt4_users mu ON mu.userId = u.id", MYSQL, 3)
+    assert out == "SELECT u.id, mu.LOGIN FROM users AS u JOIN mt4_users AS mu ON mu.userId = u.id LIMIT 4"
+
+
+def test_prepare_sql_regenerates_from_the_ast_and_uses_the_dialect():
+    assert rs.prepare_sql("SELECT id FROM kcm.x ORDER BY id;", PG, 10) == "SELECT id FROM kcm.x ORDER BY id LIMIT 11"
+
+
+def test_prepare_sql_refuses_to_prepare_an_unvalidated_statement():
+    with pytest.raises(ValueError):
+        rs.prepare_sql("DELETE FROM users", MYSQL, 10)
+
+
+@pytest.mark.anyio
+async def test_run_sql_executes_the_prepared_text_and_reports_it(monkeypatch):
+    seen: dict[str, Any] = {}
+
+    def _fake(settings, sql, limit):
+        seen["sql"] = sql
+        return {"columns": ["id"], "rows": [[1]], "row_count": 1, "truncated": False, "masked_columns": []}
+
+    monkeypatch.setattr(rs, "execute_mysql", _fake)
+    out = await rs.run_sql(_ctx(None), MYSQL, "SELECT id FROM tags ORDER BY id DESC", limit=3)
+    assert out["ok"] is True
+    assert seen["sql"] == "SELECT id FROM tags ORDER BY id DESC LIMIT 4"
+    assert out["data"]["sql"] == "SELECT id FROM tags ORDER BY id DESC"
+    assert out["data"]["sql_executed"] == seen["sql"]
+
+
+# ── PII refused at the AST layer (output mask stays as belt and braces) ─────
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CONCAT(email, '') AS e FROM users LIMIT 1",
+        "SELECT SUBSTRING(phone, 1, 20) AS p FROM users",
+        "SELECT id FROM users WHERE email LIKE '%@%'",
+        "SELECT u.name FROM users u",
+        "SELECT mu.NAME FROM mt4_users mu",
+        "SELECT LOGIN FROM mt4_users WHERE last_ip IS NOT NULL",
+        "WITH c AS (SELECT email AS e FROM users) SELECT e FROM c",
+        "SELECT * FROM users",
+        "SELECT u.* FROM users u",
+        "SELECT u.*, mu.* FROM users u JOIN mt4_users mu ON mu.userId = u.id",
+        "SELECT * FROM tags t JOIN users u ON u.id = 1",
+        # unqualified `name` in a query that touches users could be users.name
+        "SELECT name FROM tags t JOIN users u ON u.id = 1",
+    ],
+)
+def test_pii_columns_and_star_over_pii_tables_are_refused(sql):
+    env = rs.validate_sql(sql, MYSQL)
+    assert _code(env) == "invalid_argument"
+    assert "personal data" in env["error"]["message"] or "SELECT *" in env["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id, cid, isEmployee FROM users LIMIT 5",
+        "SELECT COUNT(*) FROM users",
+        "SELECT COUNT(*) FROM mt4_users",
+        "SELECT * FROM tags",
+        "SELECT t.name FROM tags t",
+        "SELECT name FROM tags",
+        "SELECT t.name, ut.userId FROM tags t JOIN user_tags ut ON ut.tagId = t.id",
+        "SELECT LOGIN, BALANCE FROM mt4_users WHERE `GROUP` NOT LIKE '%demo%'",
+    ],
+)
+def test_non_pii_columns_pass_the_ast_check(sql):
+    assert rs.validate_sql(sql, MYSQL) is None
+
+
+def test_the_ast_check_runs_before_any_connection(monkeypatch):
+    def _boom(*_a, **_k):
+        raise AssertionError("connection opened for a PII query")
+
+    monkeypatch.setattr(rs, "connect_readonly", _boom)
+    assert _code(rs.validate_sql("SELECT email FROM users", MYSQL)) == "invalid_argument"

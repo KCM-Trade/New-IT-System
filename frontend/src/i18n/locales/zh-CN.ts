@@ -145,6 +145,7 @@ export const zhCN = {
       model_error: "模型调用失败，请稍后再试。",
       forbidden: "你的账号未开通 AI 助手模块，请联系管理员在「管理员」页勾选。",
       session_not_found: "该对话不存在或已删除。",
+      session_busy: "这个对话正在处理上一轮，请稍候。",
       network: "网络中断，请重试。",
     },
   },

@@ -135,6 +135,10 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
   const [loadingSession, setLoadingSession] = useState(false);
 
   const controllerRef = useRef<AbortController | null>(null);
+  // Mirror of `loadingSession` readable from inside `send` without making it a
+  // dependency (a resume in flight must block a new question, or the resumed
+  // transcript would replace the one the question was just appended to).
+  const loadingRef = useRef(false);
   const onTurnEndRef = useRef(options.onTurnEnd);
   onTurnEndRef.current = options.onTurnEnd;
 
@@ -163,17 +167,22 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
 
   const resumeSession = useCallback(
     async (id: string, signal?: AbortSignal): Promise<AiSessionDetail | null> => {
-      if (controllerRef.current) return null;
+      if (controllerRef.current || loadingRef.current) return null;
+      loadingRef.current = true;
       setLoadingSession(true);
       try {
         const res = await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, { signal });
+        // A turn may have started while the fetch was in flight (the send
+        // gate reads loadingRef, but a mount-time resume races the first
+        // keystroke); never replace a live transcript.
+        if (controllerRef.current) return null;
         if (res.status === 404) return null;
         if (!res.ok) {
           setError({ code: res.status === 403 ? "forbidden" : `http_${res.status}`, message: res.statusText });
           return null;
         }
         const detail = (await res.json()) as AiSessionDetail;
-        if (signal?.aborted) return null;
+        if (signal?.aborted || controllerRef.current) return null;
         setMessages(mapSessionMessages(detail.messages));
         setError(null);
         setUsage(null);
@@ -184,6 +193,7 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
         setError({ code: "network", message: err instanceof Error ? err.message : String(err) });
         return null;
       } finally {
+        loadingRef.current = false;
         setLoadingSession(false);
       }
     },
@@ -193,7 +203,7 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
   const send = useCallback(
     async (message: string, model: AiModel) => {
       const question = message.trim();
-      if (!question || controllerRef.current) return;
+      if (!question || controllerRef.current || loadingRef.current) return;
 
       const controller = new AbortController();
       controllerRef.current = controller;
@@ -248,7 +258,13 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
           }
           fail({
             code:
-              res.status === 403 ? "forbidden" : res.status === 404 ? "session_not_found" : `http_${res.status}`,
+              res.status === 403
+                ? "forbidden"
+                : res.status === 404
+                  ? "session_not_found"
+                  : res.status === 409
+                    ? "session_busy"
+                    : `http_${res.status}`,
             message: detail || res.statusText,
             traceId: res.headers.get("X-Trace-ID") ?? undefined,
           });
