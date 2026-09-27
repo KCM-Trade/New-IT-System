@@ -60,4 +60,5 @@ related: [[OPT-0064]] [[OPT-0063]]
 - **2026-09-27 晚**：claim `8cc2b0a`；① 会话记忆 `5322902`、② 数据范围 `21df6aa` 已 commit（未 merge / 未部署）。做法 = 三 fork 按文件所有权并行 + 主线程集成；`./verify.sh` PASS（pytest 2033 / tsc 0 / vitest 313）；dev 全链路活体通过（第 2 轮不带 id 命中 146530、404 / 审计 / CRUD 全对）。契约出入与实测数字在 `02-contracts.md` 实施注记 + `05-rollout.md` §7.1。
 - ③ `run_sql` `0d81c5b` 已 commit（119 守卫单测 + 活体；FLUSH 在 raw 连接可执行 = AST 是唯一防线，已知残余）；④ `rank_accounts` + 日历已实现并活体（两问都命中；BLS 403 → FRED + Fed，FRED 无 key 只 FOMC）。
 - **2026-09-28 凌晨冷审**：10 条「必须处理」全部复现，其中 4 条是 run_sql 守卫的真实绕过（版本注释 / PG `pg_*` / LIMIT 丢排序 / PII 函数包裹）+ Stop 丢记忆 + 刷新 resume 失效；8 条当场修（两 fork 并行，第 5 个 commit），blob 增长 + PII 列级 allow-list 立 hardening OPT，rank 计数泄漏 vs 契约留用户拍板。对照表 05 §7.4。
+- **✅ 2026-09-28 00:27 上 prod**：`main` ff 到 `d499ec8`，push，三镜像 `pre-ai-slice2-20260928`，`./deploy.sh`；启动 0 ERROR、WAL 保活含 ai_agent.db、两 job 已注册、ai-agent 无宿主端口、未认证 403。上线记录 05 §7.5。
 - 待用户：`FRED_API_KEY` 申请（免费）；保留期是否加「久未使用也清」；`rank_accounts` 一周 10.7s → closeDate 索引或收窄上限；浏览器手测历史栏 + ⚠ 未认证徽章；然后 merge → push → 三镜像打 `pre-ai-slice2-20260927` → deploy。
