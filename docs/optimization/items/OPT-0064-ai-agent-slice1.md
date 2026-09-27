@@ -83,4 +83,4 @@ risk team 要一个登录后按人隔离的分析 agent：问「客户 123456 �
 
 ## 结果
 
-（done 时填。）
+（未 close，OPT 保持 wip 直到 UI 二轮 + `ai_agent_ro` 落地。）**2026-09-27 14:24 已上 prod**：merge `ac21437`、`aaf9b21`，回滚标签 `pre-ai-slice1-20260927`；闸门 pytest 1971 / tsc 0 / vitest 304。待办见 `docs/ai-agent/05-rollout.md` §5.4–5.6。
