@@ -23,7 +23,7 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
-| [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | P1 | mixed | XL | AI 分析 agent 第二刀：会话记忆（session blob 落库）→ `ai` 进数据范围 → `run_sql` 未认证逃生口（🔴 待拍板 MySQL SELECT-only 账号）→ `rank_accounts` + `get_economic_calendar`；SSOT `docs/ai-agent/`（03 给人看 / 02 §8–§13 / 05 §6），分支 `feat/ai-agent-slice2` |
+| [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | P1 | mixed | XL | AI 分析 agent 第二刀：会话记忆（session blob 落库）→ `ai` 进数据范围 → `run_sql` 未认证逃生口（共享 `readonly` + AST 加固，账号前置已取消）→ `rank_accounts` + `get_economic_calendar`；SSOT `docs/ai-agent/`（03 给人看 / 02 §8–§13 / 05 §6），分支 `feat/ai-agent-slice2` |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
 | [OPT-0044](./items/OPT-0044-alert-mail-hardening.md) | P2 | backend | M | 告警邮件中心 hardening：发送移出扫描锁 / digest 渲染上限 / digest UNIQUE 认领 / 注册表 dataclass 化 |
