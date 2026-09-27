@@ -120,10 +120,11 @@ services:
   # What it does get: the Azure OpenAI credentials via env_file
   # (backend/.env.ai-agent, 0600, gitignored) and the shared token.
   #
-  # TODO(ai_agent_ro): the container should log in with the dedicated read-only
-  # accounts (MySQL `ai_agent_ro`, PG `pg_read_all_data` role). Until
-  # AI_AGENT_DB_USER/PASSWORD and AI_AGENT_PG_USER/PASSWORD are set in
-  # backend/.env the `:-` fallbacks below reuse the api's shared account.
+  # Dedicated read-only accounts: PG pair (AI_AGENT_PG_USER/PASSWORD = role
+  # `ai_agent_ro`, SELECT-only on risk_cases) is set in backend/.env since
+  # 2026-09-27. TODO(ai_agent_ro): the MySQL pair (AI_AGENT_DB_USER/PASSWORD)
+  # is still unset, so the `:-` fallback below reuses the shared `readonly`
+  # account until a MySQL `ai_agent_ro` exists.
   ai-agent:
     build:
       context: .

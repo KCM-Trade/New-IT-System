@@ -148,9 +148,10 @@ services:
   # DB_PORT / DB_CHARSET / MYSQL_PORT / POSTGRES_PORT / POSTGRES_DBNAME_MT5
   # fall back to the same defaults config.py / client_pnl_service.py use.
   #
-  # TODO(ai_agent_ro): see the dev file — until AI_AGENT_DB_USER/PASSWORD and
-  # AI_AGENT_PG_USER/PASSWORD exist in the root .env, the fallbacks reuse the
-  # api's shared account.
+  # Read-only accounts: AI_AGENT_PG_USER/PASSWORD (= role `ai_agent_ro`) are set
+  # in the ROOT .env since 2026-09-27 (this compose interpolates from the root
+  # .env, dev from backend/.env — keep both in sync). TODO(ai_agent_ro): the
+  # MySQL pair is still unset, so DB_USER falls back to the shared `readonly`.
   ai-agent:
     build:
       context: ./backend
