@@ -12,8 +12,9 @@ related: [[OPT-0062]] [[OPT-0020]]
 
 > **v2（2026-09-22）**：独立冷审 15 条 finding（实测 9-18 工作日 journal + 从库）已全部吸收：MT5 开仓判定改为「全收 + 夜间按 `Order == PositionID` 判开/平」、补 MT5 挂单 `order placed`、量级修正 4 倍、P&L 改 08:30 预计算、结果表按 deal 建键、私有 IP 定义统一、回填改走 `backfill_login_ip.py`。冷审原文浓缩在 §冷审对照表。
 > **✅ Phase 1 已上线（2026-09-22）**：commit `fa3932b`（merge `c3f0168`），已部署 prod 并回填 09-15 → 09-21 共 **619,998 行**（MT4 53,450 / Live2 10,400 / MT5 556,148 = performed 500,152 + placed 55,996）；`order_ip_parse_runs` 21 行齐全；回填未推 CRM（`crm_last_close_ip_push_log` 当日 0 新增）。实施偏差见 §笔记「Phase 1 实施记录」。**Phase 2 worker 注意：`order_ip` 表已有真实数据可读。**
-> **✅ Phase 2 已上线（2026-09-22）**：commit `28a5f39`，已部署 prod 并回填 09-15 → 09-21 对账共 **306,231 行**（with-IP 95.5%）；4 个端点 `/login-ip/trade-profit/{groups,groups/{id},ips,coverage}` 挂 risk 模块；**Cheng Qian 5 客户组在真实下单 IP 数据上精确复现**（group `e4c578ff2792`，7 账户 5 IP，周盈利 $3,385）。实施偏差见 §笔记「Phase 2 实施记录」。
-> **✅ Phase 3 已上线（2026-09-23）**：`70f5ca5`（tab + 深链）、`fb2a136`（文档）、`e9625a9` / `22dd390`（UI 改版），branch `opt/trade-ip-profit-attribution`。生产是用该分支工作区 `./deploy.sh` 打的包（`origin/main` 当时已包含在分支里，**这 4 个 commit 还没合进 `main`**——下次若在 `main` 上部署会把这版 UI 盖掉）。回滚标签 `new-it-system-{web,api}:pre-opt0063-phase3-20260923`。界面以 §笔记「Phase 3 UI 改版」为准。
+> **✅ Phase 2 已上线（2026-09-22）**：commit `28a5f39`，已部署 prod 并回填 09-15 → 09-21 对账共 **306,231 行**（with-IP 95.5%）；初版 4 端点 `/login-ip/trade-profit/{groups,groups/{id},ips,coverage}` 挂 risk 模块；**Cheng Qian 5 客户组在真实下单 IP 数据上精确复现**（group `e4c578ff2792`，7 账户 5 IP，周盈利 $3,385）。实施偏差见 §笔记「Phase 2 实施记录」。
+> **✅ Phase 3 已上线（2026-09-23）**：`70f5ca5`（tab + 深链）、`fb2a136`（文档）、`e9625a9` / `22dd390`（UI 改版）已合进 **`main`** 并上 prod。回滚标签 `new-it-system-{web,api}:pre-opt0063-phase3-20260923`。界面以 §笔记「Phase 3 UI 改版」为准。
+> **✅ 定点查找（2026-09-24）**：`78882c0`（`GET /lookup` + UI）、`aae46e5` / `16cc5d3`（peer 表只留账户行 + 琥珀色共用 IP）。方案 A = **开仓/下单 IP**（不是登录 IP）；线索 = Client ID / 账户 ID / 开仓 IPv4。列表成组固定「同一开仓 IP ≥5 不同客户」。Profit = 窗口内（**平仓日**）有 `open_ip` 的 `SUM(profit_usd)`，**不是**「只算琥珀色共用 IP」。现共 **5** 个 risk GET。细节见 §笔记「定点查找」+ `docs/features/login-ip.md` §3.7 / §8.3。
 > **本文件自洽，实施 worker 只读这一份即可。** 分析、口径验证与一个月回测都已做完（§背景），不要重做。
 > ⚠ 按 tracker 规则这是 net-new feature，本应走 `feat/` 分支；用户 2026-09-21 明确要求按 OPT 管理（同 OPT-0062 先例），照办。
 > ⚠ **Phase 1（落库）越早上线越好**：逐单 IP 只在 MT journal 里，本机 `backend/data/login_ip/tmp/` 只留 7 天、MT5 FTP 只留 5 天，**功能上线日 = 数据起点，历史补不回来**。Phase 1 可以先于 Phase 2/3 单独部署。
@@ -252,10 +253,19 @@ JO	0	6	00:08:50.786		'60002140': market sell 0.01 BTCUSD (81100.80 / 81115.80)  
 5. 点行改为 **shadcn Sheet** 从右侧滑出（手机从底部），宽 640px。账户明细在上，使用过的 IP 在下。选中行保持蓝色高亮。
 6. 查询路径不变：只读本地 SQLite 预计算表 + Redis，不碰从库，无轮询。
 
+### 定点查找（2026-09-24，合进 main 并上 prod）
+
+PM 拍板 **方案 A**：线索走**开仓/下单 IP**（`trade_ip_pnl.open_ip`），不是登录 IP 快照。
+
+1. **API**：`GET /login-ip/trade-profit/lookup?from&to&q=&kind=auto|id|ip`（第 5 个 risk GET）。`q` = Client ID / 账户 LOGIN / 开仓 IPv4。先解种子账户 → 收集其窗口内开仓 IP → 拉同 IP 上其他账户为 peers。若种子已落在列表 ranked group 里，响应带 `group_id` 供 UI 直接开组详情。
+2. **Profit 口径**：与组列表一致——`close_date ∈ [from,to]` 且有 `open_ip` 的 `SUM(profit_usd)`。⚠ 琥珀色高亮 ≠ Profit 过滤：高亮 = 结果集内被 ≥2 个不同 Client 用过的 IP；Profit 仍是整段有 IP 可归的已实现盈亏。
+3. **UI**：工具栏定点查找框；命中组 → Sheet 组详情；否则 Sheet 只渲染 **peer 账户表**（已去掉「关联 IP」长列表）；共用 IP 琥珀色高亮。commits：`78882c0` → `aae46e5` → `16cc5d3`。
+4. **文档同步**：`docs/features/login-ip.md` §3.7 / §4 / §8.3；`PROJECT_CONTEXT` §4.9；`docs-context` SKILL（API 16+5=21）。
+
 - 为什么不用 `mt4_trades` sid=5 而绕去 `mt5_deals`：镜像表 TICKET ≠ PositionID（`docs/features/login-ip.md` §3.4.1 实测），且已平仓行 CMD 反转；本 OPT 只需盈亏与手数，不需要方向，所以反转不影响，但 join 键必须走 `mt5_deals`。
 - 为什么组而不是 IP：§背景 3。为什么按客户数判共享出口：§背景 4.2。
 - 近似回测脚本与正式表口径不同（登录 IP vs 下单 IP），正式上线后回测脚本退役为「历史问题专用」，脚本头注释已写明。
-- 工期估计（v2）：Phase 1 1.5 天（两种 MT5 形态 + 解析审计表 + 回填脚本改造 + 对账脚本）、Phase 2 2 天（预计算 + `from #` 链 + 分组 + 4 个端点）、Phase 3 2 天（含 tab 受控化 / 深链 0.5 天）、文档与冷审 0.5 天，≈ 6 天。Phase 1 单独先上线，回滚镜像标签 `pre-order-ip-<日期>`。
+- 工期估计（v2）：Phase 1 1.5 天（两种 MT5 形态 + 解析审计表 + 回填脚本改造 + 对账脚本）、Phase 2 2 天（预计算 + `from #` 链 + 分组 + 4 个端点）、Phase 3 2 天（含 tab 受控化 / 深链 0.5 天）、定点查找 ~0.5 天、文档与冷审 0.5 天，≈ 6.5 天。Phase 1 单独先上线，回滚镜像标签 `pre-order-ip-<日期>`。
 
 ## 冷审对照表（2026-09-22，独立 agent，实测 9-18 journal + 从库）
 
