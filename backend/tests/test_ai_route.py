@@ -298,6 +298,40 @@ def test_a_model_outside_the_two_deployments_is_422(make_client, scripted_agent)
 # ── the internal hop ─────────────────────────────────────────────────────────
 
 
+def test_run_sql_text_lands_in_the_audit_row(make_client, scripted_agent):
+    """02 §10.1 ⑦: the shared MySQL account cannot be attributed DB-side, so the
+    audit row must carry every ad-hoc SQL verbatim. Other tools' inputs do not
+    produce the field at all (a row without run_sql has no `sql` key)."""
+    from app.core.users_db import get_users_db
+
+    scripted_agent["script"]["events"] = [
+        ("tool_use", {"name": "run_sql", "input": {"db": "fxbackoffice", "sql": "SELECT 1", "limit": 200}}),
+        ("tool_done", {"name": "run_sql", "ok": True, "source": {"function": "run_sql", "certified": False}, "certified": False}),
+        ("tool_use", {"name": "run_sql", "input": {"db": "fxbackoffice", "sql": "SELECT COUNT(*) FROM tags"}}),
+        ("tool_done", {"name": "run_sql", "ok": False, "error_code": "invalid_argument"}),
+        ("text", {"delta": "uncertified answer"}),
+        ("usage", {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0, "cost_usd": None}),
+        ("done", {"terminal_reason": "end_turn", "num_turns": 2}),
+    ]
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    r = _turn(client, sid)
+    assert r.status_code == 200
+    with get_users_db() as conn:
+        row = conn.execute("SELECT new_value FROM audit_log WHERE action = 'ai.query.submit' ORDER BY id DESC LIMIT 1").fetchone()
+    new_value = json.loads(row["new_value"])
+    assert new_value["sql"] == ["SELECT 1", "SELECT COUNT(*) FROM tags"]
+    assert new_value["tools_called"] == ["run_sql", "run_sql"]
+
+    # A certified-only turn leaves no `sql` key.
+    scripted_agent["script"]["events"] = list(SCRIPTED_OK)
+    r = _turn(client, sid)
+    assert r.status_code == 200
+    with get_users_db() as conn:
+        row = conn.execute("SELECT new_value FROM audit_log WHERE action = 'ai.query.submit' ORDER BY id DESC LIMIT 1").fetchone()
+    assert "sql" not in json.loads(row["new_value"])
+
+
 def test_identity_and_scope_are_forwarded_whole(make_client, scripted_agent):
     client = make_client()
     sid = _mint(STAFF, allowed_modules='["ai"]')

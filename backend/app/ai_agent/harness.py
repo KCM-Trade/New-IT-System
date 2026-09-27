@@ -64,6 +64,8 @@ from app.core.logging_config import get_logger
 
 from .prompt import TOOL_DOCSTRINGS, system_prompt
 from .tools import TOOL_IMPLS, CallerCtx
+from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
+from .tools.run_sql import run_sql as run_sql_impl
 
 logger = get_logger(__name__)
 
@@ -183,7 +185,32 @@ def build_tools(ctx: CallerCtx, emit: Emit) -> list:
     async def get_risk_signals(subject: Subject, date_range: DateRange) -> dict:
         return await _run("get_risk_signals", TOOL_IMPLS["get_risk_signals"], subject=dict(subject), date_range=dict(date_range))
 
-    return [get_client_overview, get_trade_activity, get_risk_signals]
+    tools = [get_client_overview, get_trade_activity, get_risk_signals]
+
+    # run_sql (02 §10, gate ⑥): free SQL cannot be filtered by country, so for a
+    # caller with a restricted scope the tool is not "refused" — it does not
+    # exist in the model's context at all (05 §6.4). The impl repeats the check
+    # so a future edit here cannot open it by accident.
+    if ctx.scope is None:
+
+        @tool(name="run_sql", description=TOOL_DOCSTRINGS["run_sql"])
+        async def run_sql(
+            db: Annotated[Literal["fxbackoffice", "risk_cases"], "which database: fxbackoffice (MySQL replica) or risk_cases (PostgreSQL)"],
+            sql: Annotated[str, "ONE read-only SELECT (or UNION of SELECTs). Whitelisted tables only. Shown to the user verbatim."],
+            limit: Annotated[int, f"max rows to return, 1..{RUN_SQL_MAX_LIMIT} (clamped)"] = RUN_SQL_MAX_LIMIT,
+        ) -> dict:
+            return await _run("run_sql", run_sql_impl, db=db, sql=sql, limit=limit)
+
+        assert db_choices_match_impl(), "run_sql db choices drifted from tools.run_sql.DATABASES"
+        tools.append(run_sql)
+
+    return tools
+
+
+def db_choices_match_impl() -> bool:
+    """The Literal on the framework tool and the impl's DATABASES must agree,
+    or the model could name a database the guard refuses (or vice versa)."""
+    return set(RUN_SQL_DATABASES) == {"fxbackoffice", "risk_cases"}
 
 
 

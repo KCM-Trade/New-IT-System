@@ -101,6 +101,10 @@ export const enUS = {
     stopped: "Stopped.",
     badgeCertified: "Certified",
     badgeTooltip: "Certified definition · click for the source",
+    badgeUncertified: "Ad-hoc SQL · uncertified",
+    badgeUncertifiedTooltip: "Query written by the model, NOT a certified definition · click to see the SQL",
+    sqlShown: "SQL the model ran",
+    uncertifiedNote: "Not a certified definition: cent accounts are not ÷100, demo/employee accounts are not excluded, MT5 closed-order direction is not normalised, day boundaries are as written.",
     sourceTitle: "Source",
     sourceService: "Service",
     sourceFunction: "Function",
@@ -116,6 +120,7 @@ export const enUS = {
       tooltip: "This turn = tokens and cost of the last answer; Today = your turns / daily limit and spend / daily limit (resets at midnight Hong Kong time)",
     },
     toolErrors: {
+      invalid_argument: "The query was refused by the read-only guard (or by the database); see the SQL.",
       subject_not_found: "That ID does not exist.",
       subject_excluded: "That subject is a demo or employee account and is outside the client universe.",
       scope_denied: "That subject is outside your data scope.",

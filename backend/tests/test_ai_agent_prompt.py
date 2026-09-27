@@ -3,7 +3,7 @@ model resolves "last 90 days" from its training cut-off."""
 
 from datetime import datetime, timezone
 
-from app.ai_agent.prompt import ANALYST_SYSTEM_PROMPT, system_prompt, today_block
+from app.ai_agent.prompt import TOOL_DOCSTRINGS, ANALYST_SYSTEM_PROMPT, system_prompt, today_block
 
 
 def test_today_block_uses_mt_server_day_not_utc():
@@ -41,7 +41,24 @@ def test_prompt_no_longer_claims_amnesia_but_still_denies_other_capabilities():
     assert "no memory" not in ANALYST_SYSTEM_PROMPT
     assert "Preview" not in ANALYST_SYSTEM_PROMPT
     assert "remember the earlier turns of THIS conversation" in ANALYST_SYSTEM_PROMPT
-    assert "no file, shell, web or SQL capability" in ANALYST_SYSTEM_PROMPT
+    assert "no file, shell or web capability" in ANALYST_SYSTEM_PROMPT
+    # SQL is conditional since slice 2 item 3: run_sql exists only for
+    # unrestricted callers, and the prompt must say what its absence means.
+    assert "if it is not in your tool list" in ANALYST_SYSTEM_PROMPT
+
+
+def test_prompt_carries_the_run_sql_rules():
+    """02 §10.3: only when no certified tool can answer, <= 2 calls per turn,
+    the answer says uncertified, shows the SQL, and lists the 口径 pitfalls."""
+    flat = " ".join(ANALYST_SYSTEM_PROMPT.split())
+    assert "## run_sql" in ANALYST_SYSTEM_PROMPT
+    assert "ONLY when no certified tool can answer" in flat
+    assert "at most 2 calls per turn" in flat
+    assert "未认证 / uncertified" in flat
+    assert "show the exact SQL you ran" in flat
+    for pitfall in ("divide by 100", "isEmployee", "sid=5 closed rows have CMD inverted", "MT server days"):
+        assert pitfall in flat, pitfall
+    assert "run_sql" in TOOL_DOCSTRINGS and "UNCERTIFIED" in TOOL_DOCSTRINGS["run_sql"]
 
 
 def test_rule_one_allows_restated_figures_only_when_marked():

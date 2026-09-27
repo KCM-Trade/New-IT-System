@@ -110,6 +110,10 @@ export const zhCN = {
     stopped: "已停止。",
     badgeCertified: "认证口径",
     badgeTooltip: "认证口径 · 点击查看来源",
+    badgeUncertified: "即时 SQL · 未认证",
+    badgeUncertifiedTooltip: "模型自行编写的查询，不是认证口径 · 点击查看 SQL",
+    sqlShown: "模型执行的 SQL",
+    uncertifiedNote: "非认证口径：CEN 账户未 ÷100、demo/员工未排除、MT5 已平仓方向未归一化、日界按 SQL 原样。",
     sourceTitle: "来源",
     sourceService: "服务",
     sourceFunction: "函数",
@@ -125,6 +129,7 @@ export const zhCN = {
       tooltip: "本轮 = 上一次回答消耗的 tokens 与费用；今日已用 = 你今天的提问轮数 / 每日上限，以及费用 / 每日上限（香港时间零点重置）",
     },
     toolErrors: {
+      invalid_argument: "查询被只读守卫（或数据库）拒绝，见 SQL。",
       subject_not_found: "该 ID 不存在。",
       subject_excluded: "该主体是 demo / 员工账户，不在客户口径内。",
       scope_denied: "该主体不在你的数据范围内。",

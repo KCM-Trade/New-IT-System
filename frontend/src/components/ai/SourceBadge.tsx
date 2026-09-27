@@ -1,4 +1,4 @@
-import { IconCircleCheck, IconAlertCircle, IconLoader2 } from "@tabler/icons-react"
+import { IconCircleCheck, IconAlertCircle, IconAlertTriangle, IconLoader2 } from "@tabler/icons-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -8,13 +8,15 @@ import type { ToolCall } from "@/hooks/useAiTurn"
 import { formatHk } from "@/lib/hk-time"
 
 /**
- * The provenance badge next to a tool result: "✓ certified · <function>".
+ * The provenance badge next to a tool result.
  *
- * This is the one accent colour on the page. Every number the model quotes
- * has to be traceable to a certified definition (docs/ai-agent/02 §2.5), so
- * the certified state is the only thing that earns emphasis — pending calls
- * and failures stay neutral, and a refused call reads as a fact ("scope
- * denied"), not an alarm.
+ * Three states (docs/ai-agent/02 §2.5 / §10.3):
+ *   ✓ certified   — "✓ 认证口径 · <function>", the one accent colour on the page
+ *   ⚠ uncertified — "⚠ 即时 SQL · 未认证 · run_sql", amber: the number came from
+ *                   SQL the model wrote itself. The popover shows that SQL
+ *                   verbatim — an uncertified figure with no visible query
+ *                   behind it would not be reviewable, so the SQL is never hidden.
+ *   ✗ failed      — neutral, reads as a fact ("scope denied"), not an alarm.
  *
  * The wire `tool_done` carries `source` only (service / function / as_of); the
  * full `definition` object stays on the model side, so the popover shows what
@@ -33,32 +35,39 @@ export function SourceBadge({ tool }: { tool: ToolCall }) {
   }
 
   const certified = tool.ok && tool.certified
+  const uncertified = tool.ok && !tool.certified
+  const sql = sqlOf(tool.input)
+
+  let label: string
+  if (certified) label = `${t("ai.badgeCertified")} · ${tool.name}`
+  else if (uncertified) label = `${t("ai.badgeUncertified")} · ${tool.name}`
+  else label = `${tool.name} · ${tool.errorCode ?? "error"}`
 
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={t("ai.badgeTooltip")}
+          title={uncertified ? t("ai.badgeUncertifiedTooltip") : t("ai.badgeTooltip")}
           className="rounded-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           <Badge
             variant="outline"
             className={cn(
               "cursor-pointer gap-1 font-normal",
-              certified
-                ? "border-emerald-600/40 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-950/40 dark:text-emerald-300"
-                : "text-muted-foreground",
+              certified &&
+                "border-emerald-600/40 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-950/40 dark:text-emerald-300",
+              uncertified &&
+                "border-amber-600/40 bg-amber-50 text-amber-800 dark:border-amber-400/40 dark:bg-amber-950/40 dark:text-amber-300",
+              !certified && !uncertified && "text-muted-foreground",
             )}
           >
-            {certified ? <IconCircleCheck /> : <IconAlertCircle />}
-            {tool.ok
-              ? `${t("ai.badgeCertified")} · ${tool.name}`
-              : `${tool.name} · ${tool.errorCode ?? "error"}`}
+            {certified ? <IconCircleCheck /> : uncertified ? <IconAlertTriangle /> : <IconAlertCircle />}
+            {label}
           </Badge>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 text-sm">
+      <PopoverContent align="start" className={cn("text-sm", sql ? "w-[28rem] max-w-[90vw]" : "w-80")}>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("ai.sourceTitle")}
         </p>
@@ -83,7 +92,28 @@ export function SourceBadge({ tool }: { tool: ToolCall }) {
             {t(`ai.toolErrors.${tool.errorCode ?? "error"}`)}
           </p>
         )}
+        {uncertified && (
+          <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">{t("ai.uncertifiedNote")}</p>
+        )}
+        {sql && (
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("ai.sqlShown")}
+            </p>
+            {/* Always rendered, never collapsed: the query is the evidence. */}
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 font-mono text-xs leading-5">
+              {sql}
+            </pre>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )
+}
+
+/** `run_sql`'s `input.sql`, when the tool input has one; null otherwise. */
+function sqlOf(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null
+  const sql = (input as { sql?: unknown }).sql
+  return typeof sql === "string" && sql.trim() ? sql : null
 }

@@ -3,3 +3,5 @@
 agent-framework-openai==1.14.4
 agent-framework-core==1.19.0
 httpx>=0.28,<1
+# run_sql guard (02 §10.1a): AST parse of the model's SELECT before any connection is opened.
+sqlglot==30.19.0

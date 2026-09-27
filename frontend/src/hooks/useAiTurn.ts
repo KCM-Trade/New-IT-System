@@ -46,6 +46,12 @@ export interface ToolCall {
   certified: boolean;
   source: ToolSource | null;
   errorCode?: string;
+  /**
+   * The model's arguments as sent in `tool_use`. Kept for `run_sql`, whose
+   * `input.sql` the badge popover must show verbatim (02 §10.3) — an
+   * uncertified number with no visible query behind it is not reviewable.
+   */
+  input?: unknown;
 }
 
 export interface TurnError {
@@ -284,7 +290,7 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
               const key = `${p.name}#${toolSeq++}`;
               patchAssistant(assistantId, (m) => ({
                 ...m,
-                tools: [...m.tools, { key, name: p.name, ok: null, certified: false, source: null }],
+                tools: [...m.tools, { key, name: p.name, ok: null, certified: false, source: null, input: p.input }],
               }));
               break;
             }
@@ -302,6 +308,7 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
                   certified: Boolean(p.certified),
                   source: p.source ?? null,
                   errorCode: p.ok ? undefined : p.error_code ?? "error",
+                  input: idx === -1 ? undefined : m.tools[idx].input,
                 };
                 const tools = [...m.tools];
                 if (idx === -1) tools.push(done);

@@ -96,6 +96,11 @@ SESSION_NOT_FOUND = "session not found"
 # not so much that a pasted document lands in users.db (02 §5).
 AUDIT_QUESTION_CHARS = 500
 
+# run_sql (02 §10 ⑦): the audit row keeps each ad-hoc SQL verbatim up to this
+# many characters — the guard already refuses anything over 4000.
+RUN_SQL_TOOL = "run_sql"
+AUDIT_SQL_CHARS = 2000
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
@@ -242,6 +247,10 @@ async def turn(
         # call can show its SQL in the history view.
         answer_parts: list[str] = []
         tool_entries: list[dict[str, Any]] = []
+        # 02 §10.1 ⑦: every ad-hoc SQL the model ran, verbatim (capped). The
+        # shared MySQL account cannot be attributed DB-side, so this list on the
+        # audit row is the only "who ran what" record for run_sql.
+        sql_texts: list[str] = []
         state_saved = False
 
         def _fail(code: str, message: str) -> list[bytes]:
@@ -350,6 +359,10 @@ async def turn(
                         label = _subject_label(data.get("input"))
                         if label and label not in subjects:
                             subjects.append(label)
+                        if name == RUN_SQL_TOOL:
+                            sql_text = (data.get("input") or {}).get("sql") if isinstance(data.get("input"), dict) else None
+                            if isinstance(sql_text, str) and sql_text.strip():
+                                sql_texts.append(sql_text[:AUDIT_SQL_CHARS])
                     elif event == "session_state" and isinstance(data, dict):
                         # Consumed here, never forwarded (02 §8.3): the blob
                         # is the framework's private format and carries raw
@@ -449,6 +462,8 @@ async def turn(
             }
             if error_code is not None:
                 new_value["error_code"] = error_code
+            if sql_texts:
+                new_value["sql"] = sql_texts
             await anyio.to_thread.run_sync(
                 lambda: audit.record(
                     AUDIT_ACTION, target=f"ai_session:{session_id}", new_value=new_value

@@ -74,6 +74,7 @@ export function mapSessionMessages(rows: AiSessionMessageRow[]): AiMessage[] {
           certified: ok && Boolean(t.certified),
           source: t.source ?? null,
           errorCode: ok ? undefined : t.error_code ?? "error",
+          input: t.input,
         }
       })
       const message: AiMessage = {
