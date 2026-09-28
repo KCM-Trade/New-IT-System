@@ -83,7 +83,14 @@ _ALERT_METRIC_SORT = {
     "equity_per_lot": ("equity_per_lot", "asc"),
     "margin_level": ("margin_level", "asc"),
     "return_pct": ("return_pct", "desc"),
+    "peak_return_pct": ("peak_return_pct", "desc"),
+    "lot_ratio_mg": ("lot_ratio_mg", "desc"),
 }
+# Gap SO+AB pair-level figures: with the L leg visible they reconstruct the
+# masked C leg (c_profit = net_usd − l_profit, c_lots ≈ lot_ratio × l_lots),
+# so they go whenever the C leg is masked (cold review #2).
+_PAIR_FIELDS = frozenset({"net_usd", "lot_ratio", "open_diff_sec", "shared_ip_count"})
+
 _ALERT_SORT = {"alerts": ("scanned_at", "desc"), "lots": ("total_lots", "desc"), "profit": ("total_profit_usd", "desc")}
 
 
@@ -244,7 +251,7 @@ def shape_alert(a: dict, *, c_leg_visible: bool = True) -> dict:
     for f in fields:
         if f in ("symbol",):
             continue
-        if not c_leg_visible and f.startswith("c_"):
+        if not c_leg_visible and (f.startswith("c_") or f in _PAIR_FIELDS):
             continue
         metrics[f] = _num(a.get(f))
     if band == "gap_trade_profit" and isinstance(metrics.get("contributing_login_sids"), str):
@@ -492,6 +499,12 @@ async def get_risk_alerts(
             groups_total = 0
         truncated = groups_total > len(rows)
 
+    if ctx.scope is not None and single_band == "gap_trade_so_ab":
+        # The gap SO+AB metric is the pair's net_usd — it carries the C leg,
+        # which may belong to an out-of-scope client (cold review #2).
+        for r in rows:
+            if "top_metric" in r:
+                r["top_metric"] = None
     if ctx.scope is not None:
         rows_masked = max(int(unrestricted_units or 0) - (alerts_total if group_by in ("alert", "rule") else groups_total), 0)
     else:

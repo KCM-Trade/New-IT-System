@@ -51,6 +51,8 @@ SORTABLE_ALERT_COLS: frozenset[str] = frozenset({
     "window_start", "window_end",
     # Leverage Abuse columns (rule 101-110)
     "margin_level", "margin_used", "free_margin", "streak_count",
+    # Martingale (rule 111-120) — AI metric sort (OPT-0066)
+    "lot_ratio_mg",
     # Rebate Arbitrage columns (rule 121-130, OPT-0046)
     "rebate_30d", "total_pl_30d", "combined_30d", "ratio_5m", "ratio_10m",
     "hold_geo_mean_sec", "trading_net_deposit", "ib_withdrawal",
@@ -2557,14 +2559,23 @@ def _build_alert_filters(
     if server:
         where.append("ae.server = ?")
         params.append(server)
-    if servers:
-        placeholders = ", ".join(["?"] * len(servers))
-        where.append(f"ae.server IN ({placeholders})")
-        params.extend(str(v) for v in servers)
-    if user_ids:
-        placeholders = ", ".join(["?"] * len(user_ids))
-        where.append(f"ae.user_id IN ({placeholders})")
-        params.extend(int(v) for v in user_ids)
+    # `servers` / `user_ids`: None = no filter, an EMPTY list = match nothing.
+    # A scope-filtered list that came out empty must never widen to "all"
+    # (cold review #7; same None-vs-empty rule as data_scope.caller_cids()).
+    if servers is not None:
+        if servers:
+            placeholders = ", ".join(["?"] * len(servers))
+            where.append(f"ae.server IN ({placeholders})")
+            params.extend(str(v) for v in servers)
+        else:
+            where.append("1 = 0")
+    if user_ids is not None:
+        if user_ids:
+            placeholders = ", ".join(["?"] * len(user_ids))
+            where.append(f"ae.user_id IN ({placeholders})")
+            params.extend(int(v) for v in user_ids)
+        else:
+            where.append("1 = 0")
     if login is not None and logins:
         raise ValueError("pass either login or logins, not both")
     if login is not None:

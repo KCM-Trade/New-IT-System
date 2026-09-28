@@ -190,6 +190,12 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
         }
         if not envelope.get("ok"):
             done["error_code"] = (envelope.get("error") or {}).get("code", "internal")
+        elif name == "get_alert_orders":
+            # The clients behind the drilled alerts, for the audit row: an
+            # `alert:<id>` label stops resolving once alert_events purges it
+            # (30 d) while audit_log keeps 365 d (cold review #5).
+            ids = {a.get("client_id") for a in (envelope.get("data") or {}).get("alerts") or []}
+            done["subjects"] = [f"client:{int(i)}" for i in sorted(i for i in ids if i is not None)]
         await emit("tool_done", done)
         return envelope
 

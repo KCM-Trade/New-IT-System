@@ -189,3 +189,14 @@ def test_truncated_scan_is_said(svc):
     env = call()
     assert env["truncated"] is True and env["data"]["stats"]["truncated"] is True
     assert any("INCOMPLETE" in c or "row cap" in c for c in env["definition"]["caveats"])
+
+
+def test_restricted_callers_get_no_firm_wide_totals(svc):
+    """Cold review #3: unfiltered totals next to a filtered list leak the
+    out-of-scope population by subtraction."""
+    d = call(ctx(frozenset({1})), top_n=50)["data"]
+    st = d["stats"]
+    assert st["clients_scanned"] is None and st["trades_scanned"] is None and st["employees_excluded"] is None
+    assert st["clients_profitable"] == d["profitable_clients_total"] == len(d["rows"])
+    full = call(ctx(None), top_n=50)["data"]["stats"]
+    assert full["clients_scanned"] is not None and full["employees_excluded"] is not None

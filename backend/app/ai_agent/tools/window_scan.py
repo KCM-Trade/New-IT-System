@@ -198,11 +198,15 @@ async def get_window_scan(
         "rows_returned": len(rows),
         "profitable_clients_total": len(ordered),
         "rows_masked_by_scope": masked,
+        # A filtered list never sits next to an unfiltered total (cold review
+        # #3): for a restricted caller the firm-wide counts would give away the
+        # out-of-scope population by subtraction, so they are withheld (null)
+        # and clients_profitable is the in-scope count.
         "stats": {
-            "clients_scanned": stats.get("clients_scanned"),
-            "clients_profitable": stats.get("clients_profitable"),
-            "trades_scanned": stats.get("trades_scanned"),
-            "employees_excluded": stats.get("employees_excluded"),
+            "clients_scanned": stats.get("clients_scanned") if ctx.scope is None else None,
+            "clients_profitable": stats.get("clients_profitable") if ctx.scope is None else len(ordered),
+            "trades_scanned": stats.get("trades_scanned") if ctx.scope is None else None,
+            "employees_excluded": stats.get("employees_excluded") if ctx.scope is None else None,
             "truncated": bool(stats.get("truncated")),
             "enrichment_ok": stats.get("enrichment_ok"),
         },
@@ -217,8 +221,10 @@ async def get_window_scan(
         "total_rebate, pl_plus_rebate and net_gain are the client's LIFETIME legs; net_deposit is the TRADING net "
         "deposit and does NOT include IB commission withdrawals; net_gain = equity − trading net deposit + full-chain "
         "rebate (null when a leg is unknown).",
-        f"Employees are excluded and counted (stats.employees_excluded = {stats.get('employees_excluded')}); demo/test "
-        "accounts are excluded.",
+        (f"Employees are excluded and counted (stats.employees_excluded = {stats.get('employees_excluded')}); demo/test "
+         "accounts are excluded." if ctx.scope is None else
+         "Employees and demo/test accounts are excluded. Firm-wide scan counts are withheld for a data-scope-restricted "
+         "caller (they would reveal the out-of-scope population)."),
         "Direction is the position side (sid=5 closed CMD normalised); hold_sec of open orders runs to now.",
         f"The scan reads at most {wss.MAX_TRADE_ROWS} orders; stats.truncated=true means the answer is INCOMPLETE — "
         "narrow the window or add a symbol.",

@@ -55,6 +55,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from app.core.config import Settings
 from app.core.mysql_readonly import connect_readonly
+from app.core.sql_helpers import BROKER_TZ_OFFSET
 from app.services.login_ip_trade_profit_service import _ACCOUNT_FILTER_SQL
 from app.services.rule_intraday_return_service import _local_to_utc
 from app.services.window_scan_service import (
@@ -88,6 +89,16 @@ _UNIVERSE = """
       AND (t.isDeleted = 0 OR t.isDeleted IS NULL)
 """ + _ACCOUNT_FILTER_SQL
 
+
+
+def _fixed_tz(offset: str) -> timezone:
+    sign = -1 if offset.startswith("-") else 1
+    hh, mm = offset.lstrip("+-").split(":")
+    return timezone(sign * timedelta(hours=int(hh), minutes=int(mm)))
+
+
+# The fixed offset the alert detectors used when they stored alert times.
+_DETECTOR_TZ = _fixed_tz(BROKER_TZ_OFFSET)
 
 def _placeholders(n: int) -> str:
     return ", ".join(["%s"] * n)
@@ -273,6 +284,42 @@ def fetch_orders_by_open_window(
     return _fetch_capped(settings, where, params, limit=limit, connect=connect, as_of_utc=as_of_utc)
 
 
+def fetch_orders_at_open_seconds(
+    settings: Settings,
+    *,
+    login_sids: Sequence[str],
+    mt_seconds: Sequence[datetime],
+    symbol: Optional[str] = None,
+    limit: int = MAX_ORDERS_HARD,
+    connect: Optional[Callable[[Settings], Any]] = None,
+    as_of_utc: Optional[datetime] = None,
+) -> tuple[list[dict], int]:
+    """Orders of these accounts opened at exactly one of ``mt_seconds`` (MT
+    wall clock, ±``pad`` handled by the caller passing neighbouring seconds).
+
+    Exists because an alert's ``[first_open, last_open]`` can span weeks (a
+    martingale anchor + today's add): fetching that window capped at 200 rows
+    by OPEN_TIME ascending silently drops the NEWEST adds — the very orders
+    the alert is about (OPT-0066 cold review #4). Asking for the alert's own
+    seconds is exact and small. ``openDate IN`` keeps IDX_OPEN_DATE usable.
+    """
+    ls = _clean_login_sids(login_sids)
+    secs = sorted({s.replace(microsecond=0) for s in mt_seconds if s is not None})
+    if not ls or not secs:
+        return [], 0
+    days = sorted({s.date() for s in secs})
+    where = (
+        f"t.loginSid IN ({_placeholders(len(ls))})"
+        f" AND t.openDate IN ({_placeholders(len(days))})"
+        f" AND t.OPEN_TIME IN ({_placeholders(len(secs))})"
+    )
+    params: list[Any] = [*ls, *days, *secs]
+    if symbol:
+        where += " AND t.SYMBOL = %s"
+        params.append(symbol)
+    return _fetch_capped(settings, where, params, limit=limit, connect=connect, as_of_utc=as_of_utc)
+
+
 def fetch_orders_for_trading_day(
     settings: Settings,
     *,
@@ -302,16 +349,36 @@ def fetch_orders_for_trading_day(
     return _fetch_capped(settings, where, params, limit=limit, connect=connect, as_of_utc=as_of_utc)
 
 
+def stored_alert_time_to_mt(value: Any) -> Optional[datetime]:
+    """A time stored on an alert row → the naive MT wall clock it came from.
+
+    ⚠ NOT DST-aware on purpose. The detectors write ``first_open`` /
+    ``last_open`` / ``orders_json[].open_time`` through
+    ``sql_helpers.broker_time_to_utc_iso`` (``CONVERT_TZ(col, BROKER_TZ_OFFSET,
+    '+00:00')``, a FIXED +03:00) and gap SO+AB writes ``l_/c_open_time`` via
+    ``_iso_z`` (MT − 3h, fixed). Undoing that exact offset recovers the MT
+    wall-clock second the order really has in ``mt4_trades.OPEN_TIME``, in
+    winter too. Converting with the DST-aware ``MT_SERVER_TZ`` instead would
+    land one hour early from November to March and every window would come
+    back empty (OPT-0066 cold review #1).
+    """
+    if value in (None, ""):
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_DETECTOR_TZ).replace(tzinfo=None)
+
+
 def mt_window_around(first_open_utc: str, last_open_utc: str, *, pad_seconds: int = 1) -> tuple[datetime, datetime]:
-    """UTC ISO ``first_open`` / ``last_open`` (as stored on alert_events) →
-    naive MT wall-clock bounds widened by ``pad_seconds``, DST-aware."""
-    from app.services.rule_intraday_return_service import MT_SERVER_TZ
-
-    def _mt(v: str) -> datetime:
-        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(MT_SERVER_TZ).replace(tzinfo=None)
-
+    """Alert ``first_open`` / ``last_open`` (UTC ISO as stored) → naive MT
+    wall-clock bounds widened by ``pad_seconds`` (see stored_alert_time_to_mt)."""
+    lo = stored_alert_time_to_mt(first_open_utc)
+    hi = stored_alert_time_to_mt(last_open_utc)
+    if lo is None or hi is None:
+        raise ValueError(f"unparseable alert times {first_open_utc!r} / {last_open_utc!r}")
     pad = timedelta(seconds=pad_seconds)
-    return _mt(first_open_utc) - pad, _mt(last_open_utc) + pad
+    return lo - pad, hi + pad

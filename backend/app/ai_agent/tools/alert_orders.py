@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pymysql
@@ -87,6 +87,19 @@ def _second_key(symbol: Any, t: Any) -> tuple[str, str]:
     return str(symbol or ""), dt.strftime("%Y-%m-%dT%H:%M:%S") if dt else ""
 
 
+# Matching stored alert orders to fetched rows happens on the MT WALL-CLOCK
+# second: stored times were written with a fixed +03:00 while fetched
+# `open_time` is DST-aware UTC, so comparing the two UTC strings would miss by
+# exactly one hour all winter (cold review #1).
+def _stored_mt_key(symbol: Any, stored_utc: Any) -> tuple[str, str]:
+    mt = aos.stored_alert_time_to_mt(stored_utc)
+    return str(symbol or ""), mt.strftime("%Y-%m-%d %H:%M:%S") if mt else ""
+
+
+def _fetched_mt_key(row: dict) -> tuple[str, str]:
+    return str(row.get("symbol") or ""), str(row.get("open_time_mt") or "")[:19]
+
+
 # ── data access (monkeypatch targets) ────────────────────────────────────────
 
 
@@ -124,6 +137,19 @@ def _fetch_by_window(settings: Settings, ctx: CallerCtx, login_sids: list[str], 
     mt_from, mt_to = aos.mt_window_around(first_utc, last_utc, pad_seconds=1)
     return _mysql(lambda: aos.fetch_orders_by_open_window(
         settings, login_sids=login_sids, mt_from=mt_from, mt_to=mt_to, symbol=symbol, limit=limit,
+        connect=connect_mysql), ctx)
+
+
+def _fetch_at_seconds(settings: Settings, ctx: CallerCtx, login_sids: list[str], stored: list[dict],
+                      symbol: Optional[str]) -> Any:
+    """The alert's own stored open seconds (±1s for mirror jitter) → orders."""
+    secs: set = set()
+    for o in stored:
+        mt = aos.stored_alert_time_to_mt(o.get("open_time"))
+        if mt is not None:
+            secs.update({mt - timedelta(seconds=1), mt, mt + timedelta(seconds=1)})
+    return _mysql(lambda: aos.fetch_orders_at_open_seconds(
+        settings, login_sids=login_sids, mt_seconds=sorted(secs), symbol=symbol, limit=aos.MAX_ORDERS_HARD,
         connect=connect_mysql), ctx)
 
 
@@ -287,10 +313,10 @@ def match_stored(stored: list[dict], candidates: list[dict]) -> list[dict]:
     the caller reports stored-vs-matched counts)."""
     pool: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for c in candidates:
-        pool[_second_key(c.get("symbol"), c.get("open_time"))].append(c)
+        pool[_fetched_mt_key(c)].append(c)
     out = []
     for s in stored:
-        bucket = pool.get(_second_key(s.get("symbol"), s.get("open_time"))) or []
+        bucket = pool.get(_stored_mt_key(s.get("symbol"), s.get("open_time"))) or []
         if not bucket:
             continue
         pick = next((c for c in bucket if _lots_close(s.get("lots"), c)), bucket[0])
@@ -337,10 +363,8 @@ def _orders_for_alert(settings: Settings, ctx: CallerCtx, a: dict, band: str, li
         got = {int(o.get("ticket") or 0) for o in found}
         missing = [o for o in stored if o.get("ticket") and int(o["ticket"]) not in got]
         if missing and login_sid:
-            times = sorted(str(o.get("open_time")) for o in missing if o.get("open_time"))
-            if times:
-                r = _fetch_by_window(settings, ctx, [login_sid], times[0], times[-1], a.get("symbol") or None,
-                                     aos.MAX_ORDERS_HARD)
+            if any(o.get("open_time") for o in missing):
+                r = _fetch_at_seconds(settings, ctx, [login_sid], missing, a.get("symbol") or None)
                 if is_error(r):
                     return r
                 window_rows, _ = r
@@ -361,8 +385,14 @@ def _orders_for_alert(settings: Settings, ctx: CallerCtx, a: dict, band: str, li
         # (matched to orders_json) rather than the first N rows of the window:
         # a martingale anchor can be weeks older than the last add, so the
         # window holds many unrelated orders.
-        r = _fetch_by_window(settings, ctx, [login_sid], a["first_open"], a["last_open"], a.get("symbol") or None,
-                             aos.MAX_ORDERS_HARD)
+        # With stored orders, fetch exactly their seconds (cold review #4: a
+        # weeks-wide martingale window capped at 200 rows ascending would drop
+        # the newest adds). Only without stored orders fall back to the window.
+        if stored and any(o.get("open_time") for o in stored):
+            r = _fetch_at_seconds(settings, ctx, [login_sid], stored, a.get("symbol") or None)
+        else:
+            r = _fetch_by_window(settings, ctx, [login_sid], a["first_open"], a["last_open"],
+                                 a.get("symbol") or None, aos.MAX_ORDERS_HARD)
         if is_error(r):
             return r
         rows, window_total = r
@@ -375,8 +405,8 @@ def _orders_for_alert(settings: Settings, ctx: CallerCtx, a: dict, band: str, li
                 notes.append(f"{len(stored) - len(matched)} of the alert's {len(stored)} stored order(s) had no "
                              "order with the same symbol + open second (partial close / mirror lag).")
             if window_total > len(matched):
-                notes.append(f"The window [first_open, last_open] ±1s holds {window_total} order(s) on "
-                             f"{a.get('symbol')}; only the alert's own orders are listed.")
+                notes.append(f"{window_total} order(s) on {a.get('symbol')} opened at the alert's own seconds (±1s); "
+                             "only the ones matching the alert's stored orders are listed.")
         else:
             chosen, total = rows, window_total
             notes.append(f"No stored order could be matched; listing every order in the window ±1s on {a.get('symbol')}.")

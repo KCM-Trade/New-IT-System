@@ -280,3 +280,25 @@ def test_risk_tools_are_capped_at_two_calls_per_turn(monkeypatch):
     tools2 = {t.name: t for t in harness.build_tools(ctx(["*"]), _emit)}
     asyncio.run(tools2["get_alert_orders"].invoke(alert_ids=[4], max_orders_per_alert=10))
     assert len(hits) == 3
+
+
+def test_alert_orders_tool_done_carries_the_resolved_clients(monkeypatch):
+    pytest.importorskip("agent_framework")
+    import asyncio
+
+    from app.ai_agent import harness
+
+    async def fake_impl(_ctx, **kw):
+        return {"ok": True, "data": {"alerts": [{"client_id": 20}, {"client_id": 10}, {"client_id": None}, {"client_id": 20}]},
+                "source": {"certified": True}}
+
+    monkeypatch.setitem(harness.TOOL_IMPLS, "get_alert_orders", fake_impl)
+    events: list = []
+
+    async def _emit(e, d):
+        events.append((e, d))
+
+    tools = {t.name: t for t in harness.build_tools(ctx(["*"]), _emit)}
+    asyncio.run(tools["get_alert_orders"].invoke(alert_ids=[1], max_orders_per_alert=10))
+    done = [d for e, d in events if e == "tool_done"][0]
+    assert done["subjects"] == ["client:10", "client:20"]

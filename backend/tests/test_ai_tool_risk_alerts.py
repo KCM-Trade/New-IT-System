@@ -237,8 +237,36 @@ def test_gap_c_leg_of_another_out_of_scope_client_is_removed(db):
     so = next(r for r in env["data"]["rows"] if r["alert_id"] == 30)
     assert so["c_leg_masked_by_scope"] is True
     assert not [k for k in so["metrics"] if k.startswith("c_")]
+    # pair-level figures reconstruct the C leg (c_profit = net_usd − l_profit) — gone too
+    assert not {"net_usd", "lot_ratio", "open_diff_sec", "shared_ip_count"} & set(so["metrics"])
     assert "1-22" not in json.dumps(env)
     _no_pii(env)
+
+
+def test_gap_so_group_metric_is_withheld_from_restricted_callers(db):
+    rows = call(ctx(frozenset({1})), rule_ids=[71], group_by="account", sort="metric", date_range=WEEK)["data"]["rows"]
+    assert rows and all(r["top_metric"] is None for r in rows)
+    full = call(rule_ids=[71], group_by="account", sort="metric", date_range=WEEK)["data"]["rows"]
+    assert full[0]["top_metric"] == 50.0
+
+
+def test_trading_day_until_is_day_to_not_the_next_day():
+    """Cold review #6: the DB treats trading_day's upper bound as inclusive."""
+    from datetime import date as _d
+
+    since, until = ra.query_bounds(_d(2026, 9, 22), _d(2026, 9, 23), "trading_day")
+    assert rmdb_iso_to_mt_date(until) == "2026-09-23" and rmdb_iso_to_mt_date(since) == "2026-09-22"
+
+
+def rmdb_iso_to_mt_date(v):
+    from app.core import risk_monitor_db as _r
+    return _r._iso_to_mt_date(v)
+
+
+def test_intraday_alert_rows_sort_by_the_peak_metric(db):
+    rows = call(tab="intraday-return", group_by="alert", sort="metric")["data"]["rows"]
+    peaks = [r["metrics"]["peak_return_pct"] for r in rows]
+    assert peaks == sorted(peaks, reverse=True) and peaks[0] == 210.0
 
 
 # ── arguments ────────────────────────────────────────────────────────────────

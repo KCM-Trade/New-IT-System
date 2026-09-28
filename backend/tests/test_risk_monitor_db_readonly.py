@@ -158,6 +158,17 @@ def test_r2_user_ids_filter(rm2):
     assert counts == {101: 2, 102: 1}
 
 
+def test_r2_empty_lists_match_nothing_not_everything(rm2):
+    """Cold review #7: a scope-filtered list that came out EMPTY must never
+    widen to "no filter". None = no filter; [] = no rows."""
+    assert rm2.query_alert_events(SINCE, UNTIL, user_ids=[])[1] == 0
+    assert rm2.query_alert_events(SINCE, UNTIL, servers=[])[1] == 0
+    assert rm2.count_alert_events_by_rule(SINCE, UNTIL, user_ids=[]) == {}
+    agg = rm2.aggregate_alert_events(SINCE, UNTIL, group_by="account", user_ids=[])
+    assert agg["groups"] == [] and agg["groups_total"] == 0
+    assert rm2.query_alert_events(SINCE, UNTIL, user_ids=None)[1] > 0
+
+
 def test_r2_servers_filter_and_server_plus_servers_is_an_error(rm2):
     rows, total = rm2.query_alert_events(SINCE, UNTIL, servers=["MT5"])
     assert total == 2 and {r["id"] for r in rows} == {4, 7}

@@ -242,8 +242,35 @@ def test_connection_is_closed_even_when_the_query_fails():
 # ── mt_window_around ─────────────────────────────────────────────────────────
 
 
-def test_mt_window_around_is_dst_aware_and_padded():
+def test_mt_window_around_undoes_the_detectors_fixed_offset_and_pads():
+    # Alert times were stored with a FIXED +03:00 (sql_helpers.BROKER_TZ_OFFSET),
+    # so the MT wall clock is always stored + 3h — summer AND winter.
     lo, hi = aos.mt_window_around("2026-09-10T07:00:00Z", "2026-09-10T07:00:05Z")
     assert lo == datetime(2026, 9, 10, 9, 59, 59) and hi == datetime(2026, 9, 10, 10, 0, 6)
-    lo, hi = aos.mt_window_around("2026-11-10T04:00:00Z", "2026-11-10T04:00:00Z", pad_seconds=0)
-    assert lo == hi == datetime(2026, 11, 10, 6, 0)
+    lo, hi = aos.mt_window_around("2026-11-10T07:00:00Z", "2026-11-10T07:00:00Z", pad_seconds=0)
+    assert lo == hi == datetime(2026, 11, 10, 10, 0)  # not 09:00 (the DST-aware reading)
+
+
+def test_stored_alert_time_to_mt_is_fixed_plus_three():
+    assert aos.stored_alert_time_to_mt("2026-01-15T07:00:00Z") == datetime(2026, 1, 15, 10, 0)
+    assert aos.stored_alert_time_to_mt("2026-07-15T07:00:00Z") == datetime(2026, 7, 15, 10, 0)
+    assert aos.stored_alert_time_to_mt(None) is None and aos.stored_alert_time_to_mt("junk") is None
+
+
+def test_open_seconds_asks_for_exact_seconds_and_their_days():
+    conn = FakeConn([{"n": 2}], [raw()])
+    secs = [datetime(2026, 9, 3, 10, 0, 0), datetime(2026, 9, 23, 10, 0, 0, 500000), datetime(2026, 9, 23, 10, 0, 0)]
+    orders, total = aos.fetch_orders_at_open_seconds(
+        "S", login_sids=["1-8522845"], mt_seconds=secs, symbol="XAUUSD", connect=connector(conn))
+    assert total == 2 and len(orders) == 1 and conn.closed
+    sql, params = conn.calls[0]
+    assert "t.OPEN_TIME IN (%s, %s)" in sql and "t.openDate IN (%s, %s)" in sql and "BETWEEN" not in sql
+    # microseconds dropped + de-duplicated → two distinct seconds on two days
+    assert params == ["1-8522845", date(2026, 9, 3), date(2026, 9, 23),
+                      datetime(2026, 9, 3, 10, 0), datetime(2026, 9, 23, 10, 0), "XAUUSD"]
+
+
+def test_open_seconds_with_nothing_to_ask_skips_the_db():
+    conn = FakeConn()
+    assert aos.fetch_orders_at_open_seconds("S", login_sids=["1-1"], mt_seconds=[], connect=connector(conn)) == ([], 0)
+    assert conn.calls == []

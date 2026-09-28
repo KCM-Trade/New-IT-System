@@ -53,6 +53,7 @@ purpose:
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
 import time
 import uuid
@@ -128,6 +129,7 @@ def _quota_user_id(user: SessionUser | None) -> int:
 # what makes the drill-down reproducible from the audit row alone.
 _SUBJECT_LIST_KEYS = (("client_ids", "client"), ("alert_ids", "alert"))
 _MAX_LABELS_PER_CALL = 50
+_CLIENT_LABEL_RE = re.compile(r"^client:\d{1,12}$")
 
 
 def _subject_labels(tool_input: Any) -> list[str]:
@@ -452,6 +454,11 @@ async def turn(
                         continue
                     elif event == "tool_done" and isinstance(data, dict):
                         _resolve_tool_entry(tool_entries, data)
+                        # Subjects the agent resolved server-side (get_alert_orders:
+                        # alert → client). Only well-formed `client:<int>` labels.
+                        for label in (data.get("subjects") or [])[:_MAX_LABELS_PER_CALL]:
+                            if isinstance(label, str) and _CLIENT_LABEL_RE.match(label) and label not in subjects:
+                                subjects.append(label)
                         if data.get("ok") is False and data.get("error_code") == "scope_denied":
                             scope_denied += 1
                             # The agent container cannot write users.db (its
