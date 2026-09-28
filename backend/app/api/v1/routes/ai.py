@@ -136,6 +136,7 @@ def _subject_labels(tool_input: Any) -> list[str]:
     """What the model asked a tool to look at, as audit labels.
 
     ``{"subject": {"kind": "client_id", "value": "123"}}`` -> ``["client:123"]``;
+    ``{"subjects": [{"kind": "client_id", "value": "1"}, ...]}`` -> ``["client:1", ...]``;
     ``{"client_ids": [1, 2]}`` -> ``["client:1", "client:2"]``;
     ``{"alert_ids": [9]}`` -> ``["alert:9"]``.
 
@@ -146,8 +147,14 @@ def _subject_labels(tool_input: Any) -> list[str]:
     if not isinstance(tool_input, dict):
         return []
     labels: list[str] = []
-    subject = tool_input.get("subject")
-    if isinstance(subject, dict) and subject.get("value") is not None:
+    # `subjects` (a list of subject objects) is get_client_overview's batch
+    # form since 2026-09-28 — without this branch a batch call would audit
+    # as "looked at nobody".
+    many = tool_input.get("subjects")
+    singles = [tool_input.get("subject")] + (many[:_MAX_LABELS_PER_CALL] if isinstance(many, list) else [])
+    for subject in singles:
+        if not (isinstance(subject, dict) and subject.get("value") is not None):
+            continue
         kind = subject.get("kind")
         value = subject.get("value")
         if kind == "client_id":

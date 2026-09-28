@@ -64,14 +64,26 @@ from app.core.logging_config import get_logger
 
 from .prompt import TOOL_DOCSTRINGS, system_prompt
 from .tools import RISK_TOOL_NAMES, TOOL_IMPLS, CallerCtx
-from .tools.common import error_envelope, risk_tools_enabled
+from .tools.client_overview import MAX_SUBJECTS as OVERVIEW_MAX_SUBJECTS
+from .tools.common import risk_tools_enabled
 from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
 from .tools.run_sql import run_sql as run_sql_impl
 
 logger = get_logger(__name__)
 
-MAX_MODEL_ITERATIONS = 8
-TURN_WALL_CLOCK_SECONDS = 280.0
+# A "model iteration" is one model call; a turn that uses tools spends one per
+# tool round, so 8 meant "at most 7 tool rounds" — a multi-step investigation
+# ("rank the top 10, then check each one's money") ran out of rounds before it
+# ran out of anything real. Raised 2026-09-28 after a live run died on the
+# budget rather than on the data; 20 -> 40 the same day with the per-tool
+# call cap removed, so this and the wall clock are the only per-turn bounds.
+# The wall clock, not the round count, is the
+# real cost guard: it must stay BELOW ai_gateway_service.TURN_TOTAL_SECONDS so
+# the agent's own graceful "max_turns" ending wins over the main API cutting
+# the stream, and both stay below nginx's 600s proxy_read_timeout for
+# /api/v1/ai/turn.
+MAX_MODEL_ITERATIONS = 40
+TURN_WALL_CLOCK_SECONDS = 520.0
 
 if "OPENAI_API_KEY" in os.environ:
     # Not an assertion: the container must still come up so the operator can
@@ -145,16 +157,26 @@ class SubjectArg(TypedDict):
 
 # `from` is a Python keyword, so the schema is declared as a plain dict with
 # a description; the tools validate the keys themselves (common.parse_date_range).
-DateRange = Annotated[dict, "{'from': 'YYYY-MM-DD', 'to': 'YYYY-MM-DD'} — closed interval of MT server days, max 366"]
+DateRange = Annotated[dict, "{'from': 'YYYY-MM-DD', 'to': 'YYYY-MM-DD'} — closed interval of MT server days"]
 Subject = Annotated[SubjectArg, "{'kind': 'client_id'|'login_sid', 'value': str} — exact id only"]
+Subjects = Annotated[
+    list[SubjectArg],
+    f"1..{OVERVIEW_MAX_SUBJECTS} subjects, each {{'kind': 'client_id'|'login_sid', 'value': str}} — exact ids only",
+]
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
-# 03 §3 "each tool at most twice per turn", ENFORCED for the Risk control tools
-# (OPT-0066): get_alert_orders' 200-orders-per-call cap only bounds a turn's
-# cost if the call count is bounded too (live run 2026-09-28: the model called
-# it three times in one turn). Older tools still rely on the prompt sentence.
-MAX_CALLS_PER_TOOL_PER_TURN = 2
+# No per-tool call budget (removed 2026-09-28 at the user's request, after a
+# 2-then-6 cap kept turning "check these 9 clients" into a refusal). A turn is
+# bounded by MAX_MODEL_ITERATIONS and TURN_WALL_CLOCK_SECONDS instead; each DB
+# round trip keeps its own timeout.
+
+
+def run_sql_enabled(ctx: CallerCtx) -> bool:
+    """Whether run_sql is registered for this caller: free SQL cannot be
+    filtered by country, so only an unrestricted caller gets it. One function
+    so the tool and the prompt's schema card can never disagree."""
+    return ctx.scope is None
 
 
 def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None) -> list:
@@ -168,20 +190,9 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
     if risk_tools is None:
         risk_tools = risk_tools_enabled(ctx)
 
-    calls: dict[str, int] = {}
-
     async def _run(name: str, impl, **kwargs: Any) -> dict:
         await emit("tool_use", {"name": name, "input": kwargs})
-        calls[name] = calls.get(name, 0) + 1
-        if name in RISK_TOOL_NAMES and calls[name] > MAX_CALLS_PER_TOOL_PER_TURN:
-            envelope = error_envelope(
-                "invalid_argument",
-                f"{name} may be called at most {MAX_CALLS_PER_TOOL_PER_TURN} times per turn. Answer with what you "
-                "have and offer to look at the rest in a follow-up question.",
-                {"calls": calls[name], "limit": MAX_CALLS_PER_TOOL_PER_TURN},
-            )
-        else:
-            envelope = await impl(ctx, **kwargs)
+        envelope = await impl(ctx, **kwargs)
         done: dict[str, Any] = {
             "name": name,
             "ok": bool(envelope.get("ok")),
@@ -200,8 +211,13 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
         return envelope
 
     @tool(name="get_client_overview", description=TOOL_DOCSTRINGS["get_client_overview"])
-    async def get_client_overview(subject: Subject, date_range: DateRange) -> dict:
-        return await _run("get_client_overview", TOOL_IMPLS["get_client_overview"], subject=dict(subject), date_range=dict(date_range))
+    async def get_client_overview(subjects: Subjects, date_range: DateRange) -> dict:
+        return await _run(
+            "get_client_overview",
+            TOOL_IMPLS["get_client_overview"],
+            subjects=[dict(s) for s in subjects],
+            date_range=dict(date_range),
+        )
 
     @tool(name="get_trade_activity", description=TOOL_DOCSTRINGS["get_trade_activity"])
     async def get_trade_activity(
@@ -262,7 +278,7 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
     # caller with a restricted scope the tool is not "refused" — it does not
     # exist in the model's context at all (05 §6.4). The impl repeats the check
     # so a future edit here cannot open it by accident.
-    if ctx.scope is None:
+    if run_sql_enabled(ctx):
 
         @tool(name="run_sql", description=TOOL_DOCSTRINGS["run_sql"])
         async def run_sql(
@@ -325,7 +341,7 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
 
         @tool(name="get_window_scan", description=TOOL_DOCSTRINGS["get_window_scan"])
         async def get_window_scan(
-            anchor_hk: Annotated[str, "Hong Kong wall clock 'YYYY-MM-DD HH:MM', within the past 366 days"],
+            anchor_hk: Annotated[str, "Hong Kong wall clock 'YYYY-MM-DD HH:MM', in the past"],
             window_min: Annotated[Literal[1, 3, 5, 10, 15], "+/- minutes around the anchor"] = 5,
             scan_by: Annotated[Literal["open", "close"], "match OPEN_TIME or CLOSE_TIME to the window"] = "open",
             hold_bucket: Annotated[Literal["total", "lt30m", "m30_2h", "gt2h"], "holding-time filter"] = "total",
@@ -542,7 +558,7 @@ async def run_turn(
     risk_tools = risk_tools_enabled(ctx)
     # Instructions travel as a per-call option, not as a stored message:
     # the "## Today" tail changes daily and must not accumulate in the blob.
-    instructions = system_prompt(risk_tools=risk_tools)
+    instructions = system_prompt(risk_tools=risk_tools, run_sql=run_sql_enabled(ctx))
     agent = Agent(
         client=get_client(model),
         name="risk-analyst",

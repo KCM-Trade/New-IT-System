@@ -23,6 +23,7 @@ chdir's to backend/ because ``create_app()`` mounts StaticFiles("public").
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -521,7 +522,19 @@ def test_docs_subrequest_asks_for_manager():
     """
     conf = _nginx_conf()
     block = conf.split("location = /internal/auth-verify {", 1)[1].split("\n    }", 1)[0]
-    assert "proxy_pass http://api:8001/api/v1/auth/verify?require=manager;" in block
+    # The host half is deliberately NOT pinned: 2f30b77 moved every backend
+    # proxy_pass onto the `api_upstream` block (`server api:8001 resolve;`) so
+    # nginx re-resolves the container at runtime, and this assertion kept the
+    # old literal — a guardrail that fails for a rename stops being read. What
+    # must hold is the PATH AND QUERY (a proxy_pass with its own query string
+    # replaces the request's) and that it resolves to the api container.
+    match = re.search(r"proxy_pass\s+http://(\S+?)/api/v1/auth/verify\?require=manager;", block)
+    assert match, block
+    host = match.group(1)
+    assert host == "api:8001" or f"upstream {host} " in conf, host
+    if host != "api:8001":
+        upstream = conf.split(f"upstream {host} {{", 1)[1].split("}", 1)[0]
+        assert "server api:8001" in upstream, upstream
 
 
 def test_docs_forbidden_explains_instead_of_redirecting():

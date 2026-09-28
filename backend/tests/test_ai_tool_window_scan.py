@@ -150,7 +150,6 @@ def test_trades_capped_at_200_in_total(svc):
         ({"anchor_hk": "2026-09-01 20:30:00"}, "invalid_argument"),
         ({"anchor_hk": "2026-02-30 20:30"}, "invalid_argument"),
         ({"anchor_hk": "nonsense"}, "invalid_argument"),
-        ({"anchor_hk": (datetime.now(HK) - timedelta(days=400)).strftime("%Y-%m-%d %H:%M")}, "range_too_wide"),
         ({"anchor_hk": (datetime.now(HK) + timedelta(days=2)).strftime("%Y-%m-%d %H:%M")}, "range_too_wide"),
         ({"window_min": 7}, "invalid_argument"),
         ({"scan_by": "entry"}, "invalid_argument"),

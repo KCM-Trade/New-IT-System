@@ -101,7 +101,15 @@ CELL_MAX_CHARS = 500
 MAX_SQL_CHARS = 4000
 # Statement budget on both engines (02 §10.1 ③). connect_readonly enforces
 # "strictly below read_timeout" for MySQL; PG gets the same number via SET.
+#
+# Kept at 15s on purpose (2026-09-28: a 30s bump was tried and reverted). The
+# fxbackoffice replica is shared; a long scan there churns the buffer pool and
+# queues behind MDL (the 08-09 / 08-15 incident shape, db-timeout-guard skill),
+# so this is the one agent limit whose cost lands outside this app. The client
+# read_timeout is set explicitly from it — connect_readonly refuses a statement
+# budget that is not strictly under its client-side read timeout.
 STATEMENT_TIMEOUT_MS = 15_000
+MYSQL_READ_TIMEOUT_S = STATEMENT_TIMEOUT_MS // 1000 + 10
 
 # ⑤ whitelists. MySQL: exactly these tables, all in fxbackoffice (an
 # unqualified name resolves there; any other schema — information_schema,
@@ -579,7 +587,11 @@ def execute_mysql(settings: Settings, sql: str, limit: int) -> dict:
     ``prepare_sql`` (limit already inside). Returns a page dict or an error envelope."""
     wrapped = sql
     try:
-        conn = connect_readonly(settings, max_execution_ms=STATEMENT_TIMEOUT_MS)
+        conn = connect_readonly(
+            settings,
+            max_execution_ms=STATEMENT_TIMEOUT_MS,
+            read_timeout=MYSQL_READ_TIMEOUT_S,
+        )
     except pymysql.MySQLError as exc:
         logger.error("run_sql: MySQL connect failed: %s", type(exc).__name__)
         return error_envelope("internal", "Could not connect to the fxbackoffice replica.")
