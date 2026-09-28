@@ -10,6 +10,9 @@
 #   host not found in upstream "api"
 # and break every build. Joining the compose network here makes `api`
 # resolvable, so the check exercises the real configuration.
+# (Since 2026-09-28 the upstreams use `server api:8001 resolve`, which defers
+# resolution to runtime, so this is no longer strictly required — kept because
+# it costs nothing and still exercises the real network.)
 #
 # /var/log/nginx-audit is created inside the throwaway container because
 # `nginx -t` actually open()s every access_log target; in prod that directory
