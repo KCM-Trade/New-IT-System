@@ -1,7 +1,7 @@
 ---
 id: OPT-0065
 title: AI 分析 agent 第二刀 —— 会话记忆（MAF session blob 落库）+ `ai` 进数据范围 + `run_sql` 未认证逃生口 + 群体级受信工具（`rank_accounts` / `get_economic_calendar`）
-status: wip
+status: done
 priority: P1
 area: mixed
 effort: XL
@@ -56,6 +56,20 @@ related: [[OPT-0064]] [[OPT-0063]]
 - 不做：主 agent 接 web search（Tier 4 留第三刀）；回填活库 `ai`；`get_orders`（只记候选）。
 
 ## 结果
+
+**✅ closed 2026-09-28。** 四项按用户确认顺序全部交付并于 09-28 00:27 上 prod（`main` ff 到 `d499ec8`，回滚 `pre-ai-slice2-20260928` 三镜像，`.env` 零改动）。闸门 pytest 2292 / tsc 0 / vitest 315（基线 1986 / 0 / 304）。
+
+**实际交付 vs AC**（细节 05 §6.3 对照在 §7.1–§7.3）：记忆 ✅（活体追问命中；`store:false` wire 证明；compaction 非线性；摘要持久化实测）· 数据范围 ✅ · run_sql ✅（`FLUSH` 等走 `invalid_argument`；`readonly` 实测 DELETE 被从库拒）· rank ✅（与手工 SQL 对账一致）· 日历 ⚠ 数据源改 FRED + Fed（BLS 对本机 403），NFP/CPI 日期与官方一致这条**无法验**直到 `FRED_API_KEY` 配上 · 部署 ✅。
+
+**Stage 1 冷审处理记录**（独立零上下文 agent，10 条「必须处理」全复现，对照表 05 §7.4）：
+- #1 版本注释绕过 AST / #2 PG `pg_*` 未限定 / #3 LIMIT 丢 ORDER BY / #4 PII 函数包裹绕打码 / #6 并发丢更新 / #7 Stop 丢记忆 / #8 刷新 resume 失效 / #10 FRED 分页 + FOMC 错位 / compose PG 账号回落可写角色：**当场修**，commit `d499ec8`。
+- #5 blob 只增不减（框架保留被折叠原文）+ #4 剩余的 `users` 列级 allow-list：**立新 hardening OPT**（待 file：`opt/ai-agent-slice2-hardening`）。
+- #9 `rows_masked_by_scope` 计数泄漏 vs 契约「可见遮蔽」、`rank_accounts` 一周 10.7s（`closeDate` 索引 or 上限收窄）：**待用户拍板**，记 follow-up。
+- nice-to-have（INNER JOIN 丢无 CRM 账户、`FXBACK_DB_NAME` 未设、`generate_series` 靠超时兜底）：**live with**，已写 caveat / 注记。
+
+**Follow-up**：① `FRED_API_KEY` 申请并填两处 .env；② 浏览器手测历史栏 / ⚠ 徽章 / 409 文案；③ manager 给 anson / rose 勾 `ai`；④ hardening OPT 立项；⑤ #9 两个拍板；⑥ 保留期是否加「久未使用也清」；⑦ MySQL 专用 SELECT-only 账号（非阻塞）。
+
+**过程记录（时间序）**
 
 - **2026-09-27 晚**：claim `8cc2b0a`；① 会话记忆 `5322902`、② 数据范围 `21df6aa` 已 commit（未 merge / 未部署）。做法 = 三 fork 按文件所有权并行 + 主线程集成；`./verify.sh` PASS（pytest 2033 / tsc 0 / vitest 313）；dev 全链路活体通过（第 2 轮不带 id 命中 146530、404 / 审计 / CRUD 全对）。契约出入与实测数字在 `02-contracts.md` 实施注记 + `05-rollout.md` §7.1。
 - ③ `run_sql` `0d81c5b` 已 commit（119 守卫单测 + 活体；FLUSH 在 raw 连接可执行 = AST 是唯一防线，已知残余）；④ `rank_accounts` + 日历已实现并活体（两问都命中；BLS 403 → FRED + Fed，FRED 无 key 只 FOMC）。
