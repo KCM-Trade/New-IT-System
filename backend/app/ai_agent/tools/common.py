@@ -117,6 +117,59 @@ def ctx_from_request(caller: dict, scope: Any, trace_id: str) -> CallerCtx:
     )
 
 
+# ── module gates (docs/ai-agent/11 §0 T1) ───────────────────────────────────
+
+
+def has_module(ctx: CallerCtx, name: str) -> bool:
+    """Same meaning as the main API's ``caller_has_module()``: ``"*"`` = every
+    module (including future ones), ``[]`` = none, otherwise membership. The
+    main API already turned SQL NULL into ``["*"]`` before forwarding
+    (``auth_service.parse_allowed_modules``), so a missing list here is ``[]``
+    — fail closed. Never a truthiness test on the tuple."""
+    mods = ctx.allowed_modules
+    return "*" in mods or name in mods
+
+
+def risk_tools_enabled(ctx: CallerCtx) -> bool:
+    """Register the slice-3 Risk control tools (get_risk_alerts /
+    get_alert_orders / get_window_scan)? Only for callers holding ``risk`` AND
+    unrestricted (``scope is None``) — 11 §0 T1: the module gate is an API
+    gate, so the agent must not become a side door into the risk pages; and a
+    restricted person is, by the data-scope design, never meant to hold
+    ``risk`` (the pages would 403 them fail-closed). The WARNING mirrors that
+    page-side refusal so a mis-ticked grant is visible in the log."""
+    if not has_module(ctx, "risk"):
+        return False
+    if ctx.scope is not None:
+        logger.warning(
+            "AI risk tools withheld: caller holds 'risk' but is data-scope restricted "
+            "(email=%s scope=%s trace=%s) — 'risk' is not in SCOPED_MODULES; untick it in /cfg/managers",
+            ctx.email, sorted(ctx.scope), ctx.trace_id,
+        )
+        return False
+    return True
+
+
+# pymysql error numbers that mean "the SERVER stopped the statement":
+# 3024 = ER_QUERY_TIMEOUT (MAX_EXECUTION_TIME fired), 1317 = ER_QUERY_INTERRUPTED,
+# 2013 = CR_SERVER_LOST (read_timeout abandoned the socket). Same set as run_sql.
+MYSQL_TIMEOUT_CODES = frozenset({3024, 1317, 2013})
+
+
+def mysql_timeout_envelope(exc: BaseException, ctx: CallerCtx) -> Optional[dict]:
+    """``upstream_timeout`` envelope when ``exc`` is a MySQL statement/read
+    timeout, else None (caller decides)."""
+    if isinstance(exc, pymysql.MySQLError):
+        code = exc.args[0] if exc.args and isinstance(exc.args[0], int) else None
+        if code in MYSQL_TIMEOUT_CODES:
+            return error_envelope(
+                "upstream_timeout",
+                "The database stopped the query at its 15s limit. Narrow the window/filters and retry once.",
+                {"trace_id": ctx.trace_id, "mysql_errno": code},
+            )
+    return None
+
+
 # ── envelopes (§2.5 / §2.6) ──────────────────────────────────────────────────
 
 ERROR_CODES = frozenset(

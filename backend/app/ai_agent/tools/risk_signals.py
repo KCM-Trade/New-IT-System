@@ -34,6 +34,7 @@ from app.core.sql_helpers import SID_MAP
 from app.services import login_ip_trade_profit_service as lip
 from app.services.risk_cases_service import get_case_detail
 
+from .risk_bands import RULE_BANDS, rule_band_name  # noqa: F401 — re-export
 from .common import (
     MAX_ALERTS,
     CallerCtx,
@@ -52,39 +53,14 @@ from .common import (
 
 TOOL_NAME = "get_risk_signals"
 
-# rule_id bands, mirrored from routes/risk_monitor.py's allocation comment.
-# Kept here as DATA (not imported from the route module) so the agent
-# container never imports FastAPI route code with its scheduler side effects.
-RULE_BANDS: tuple[tuple[int, int, str], ...] = (
-    (1, 50, "burst_open"),
-    (51, 60, "quick_open_close"),
-    (61, 70, "quick_profit"),
-    (71, 80, "gap_trade_so_ab"),
-    (81, 90, "gap_trade_profit"),
-    (91, 100, "hedge_open"),
-    (101, 110, "leverage_abuse"),
-    (111, 120, "martingale"),
-    (121, 130, "rebate_arbitrage"),
-    (131, 140, "intraday_return"),
-)
-
+# RULE_BANDS / rule_band_name moved to risk_bands.py (OPT-0066) and are
+# re-exported here: slice-3 tools share them, existing imports keep working.
 # The shared-IP lookup walks trade_ip_pnl for the whole window and consults
 # the Redis-cached group ranking; a 366-day window would be a scan nobody
 # waits 25s for. Peers are therefore taken over the LAST 30 days of the
 # requested range (order IPs only exist from 2026-09-15 anyway).
 SHARED_IP_WINDOW_DAYS = 30
 _SERVER_LABEL_BY_SID = {sid: label for label, sid in SID_MAP.items()}
-
-
-def rule_band_name(rule_id: Any) -> str:
-    try:
-        rid = int(rule_id)
-    except (TypeError, ValueError):
-        return "unknown"
-    for lo, hi, name in RULE_BANDS:
-        if lo <= rid <= hi:
-            return name
-    return "unknown"
 
 
 # ── data access (monkeypatch targets) ────────────────────────────────────────
