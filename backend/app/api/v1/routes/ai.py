@@ -57,7 +57,7 @@ import re
 import sqlite3
 import time
 import uuid
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -380,6 +380,15 @@ async def turn(
             stream = gateway.open_agent_stream(settings, payload, token=token)
             iterator = stream.__aiter__()
             saw_done = False
+            # ONE pending read, kept across idle waits. asyncio.wait_for() on
+            # iterator.__anext__() CANCELS the read on timeout, and cancelling
+            # an async generator mid-await finalises it: the httpx stream is
+            # closed and the next __anext__() is StopAsyncIteration → "agent
+            # stream ended unexpectedly". The agent's SSE pings are dropped by
+            # the gateway, so any tool quieter than KEEPALIVE_SECONDS (15s:
+            # rank_accounts over a month, cold starts) killed the turn
+            # (2026-09-28, trace req-4e221b39). asyncio.wait() never cancels.
+            pending: Optional[asyncio.Task] = None
             try:
                 while True:
                     now = time.monotonic()
@@ -400,14 +409,17 @@ async def turn(
                     if now - started > TURN_TOTAL_SECONDS:
                         _fail("agent_unavailable", "turn exceeded the time limit")
                         break
-                    try:
-                        event, data = await asyncio.wait_for(
-                            iterator.__anext__(), timeout=KEEPALIVE_SECONDS
-                        )
-                    except asyncio.TimeoutError:
+                    if pending is None:
+                        pending = asyncio.ensure_future(iterator.__anext__())
+                    finished, _ = await asyncio.wait({pending}, timeout=KEEPALIVE_SECONDS)
+                    if not finished:
                         # Keepalives to the browser are the relay's job; here
                         # the wait just loops so the deadlines above are checked.
+                        # The read stays pending — never cancelled.
                         continue
+                    read, pending = pending, None
+                    try:
+                        event, data = read.result()
                     except StopAsyncIteration:
                         break
 
@@ -506,6 +518,15 @@ async def turn(
                     if saw_done:
                         break
             finally:
+                # A read still in flight (deadline / drain exit) must be
+                # cancelled and awaited first: aclose() on a generator that is
+                # mid-__anext__ raises "asynchronous generator is already running".
+                if pending is not None:
+                    pending.cancel()
+                    try:
+                        await pending
+                    except (asyncio.CancelledError, StopAsyncIteration, Exception):  # noqa: BLE001
+                        pass
                 await stream.aclose()
 
             if not saw_done and error_code is None:

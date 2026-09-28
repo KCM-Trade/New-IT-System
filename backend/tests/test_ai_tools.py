@@ -227,6 +227,26 @@ def test_internal_error_is_an_envelope_with_trace_id():
     assert env["error"]["detail"]["trace_id"] == "trace-1"
 
 
+def test_mysql_statement_timeout_is_upstream_timeout_for_every_tool():
+    """2026-09-28: rank_accounts over a month hit MAX_EXECUTION_TIME (errno
+    3024) and answered `internal`; §2.6 says a DB timeout is upstream_timeout
+    ("narrow the range, retry once") whichever tool raised it."""
+    import pymysql
+
+    for errno in (3024, 1317, 2013):
+        def killed(errno=errno):
+            raise pymysql.err.OperationalError(errno, "maximum statement execution time exceeded")
+
+        env = run(common.run_sync_with_timeout(killed, ctx=ctx()))
+        assert env["error"]["code"] == "upstream_timeout", errno
+        assert env["error"]["detail"]["mysql_errno"] == errno
+
+    def other():
+        raise pymysql.err.OperationalError(1045, "access denied")
+
+    assert run(common.run_sync_with_timeout(other, ctx=ctx()))["error"]["code"] == "internal"
+
+
 def test_tool_propagates_upstream_timeout(monkeypatch, subject_ok):
     def slow(settings, cid):
         time.sleep(0.3)
