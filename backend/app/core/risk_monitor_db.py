@@ -51,6 +51,8 @@ SORTABLE_ALERT_COLS: frozenset[str] = frozenset({
     "window_start", "window_end",
     # Leverage Abuse columns (rule 101-110)
     "margin_level", "margin_used", "free_margin", "streak_count",
+    # Martingale (rule 111-120) — AI metric sort (OPT-0066)
+    "lot_ratio_mg",
     # Rebate Arbitrage columns (rule 121-130, OPT-0046)
     "rebate_30d", "total_pl_30d", "combined_30d", "ratio_5m", "ratio_10m",
     "hold_geo_mean_sec", "trading_net_deposit", "ib_withdrawal",
@@ -2515,12 +2517,18 @@ def _build_alert_filters(
     time_field: str = "scanned_at",
     leverage: list[int] | None = None,
     logins: list[int] | None = None,
+    *,
+    servers: list[str] | None = None,
+    user_ids: list[int] | None = None,
 ) -> tuple[str, list[Any]]:
     """Build a shared WHERE clause + params list for alert_events queries.
 
     ``logins`` is the IN-list form of ``login`` (one client's accounts on one
     server, OPT-0064 AI tools). The two are alternatives: passing both is a
     ValueError rather than a silent AND that could only ever match one row.
+    ``servers`` is the same IN-list alternative to ``server`` and
+    ``user_ids`` filters on the CRM client id (``ae.user_id``, OPT-0066 AI
+    group tools); a NULL ``user_id`` never matches an active ``user_ids``.
 
     Extracted so paginated, streaming, and stats queries stay in sync —
     any new filter only needs to be added here once.
@@ -2546,9 +2554,28 @@ def _build_alert_filters(
         where = [f"{time_col} >= ?", f"{time_col} < ?"]
         params = [since, until]
 
+    if server and servers:
+        raise ValueError("pass either server or servers, not both")
     if server:
         where.append("ae.server = ?")
         params.append(server)
+    # `servers` / `user_ids`: None = no filter, an EMPTY list = match nothing.
+    # A scope-filtered list that came out empty must never widen to "all"
+    # (cold review #7; same None-vs-empty rule as data_scope.caller_cids()).
+    if servers is not None:
+        if servers:
+            placeholders = ", ".join(["?"] * len(servers))
+            where.append(f"ae.server IN ({placeholders})")
+            params.extend(str(v) for v in servers)
+        else:
+            where.append("1 = 0")
+    if user_ids is not None:
+        if user_ids:
+            placeholders = ", ".join(["?"] * len(user_ids))
+            where.append(f"ae.user_id IN ({placeholders})")
+            params.extend(int(v) for v in user_ids)
+        else:
+            where.append("1 = 0")
     if login is not None and logins:
         raise ValueError("pass either login or logins, not both")
     if login is not None:
@@ -2789,6 +2816,9 @@ def query_alert_events(
     leverage: list[int] | None = None,
     *,
     logins: list[int] | None = None,
+    servers: list[str] | None = None,
+    user_ids: list[int] | None = None,
+    include_user_id: bool = False,
     conn: sqlite3.Connection | None = None,
 ) -> tuple[list[dict], int]:
     """Query alert events by time range + optional filters.
@@ -2797,6 +2827,12 @@ def query_alert_events(
         since / until: UTC ISO8601 strings (inclusive / exclusive).
         server / login / symbol / rule_id: optional equality filters.
         logins: IN-list alternative to ``login`` (not both).
+        servers: IN-list alternative to ``server`` (not both).
+        user_ids: filter on the CRM client id (``ae.user_id``).
+        include_user_id: add ``user_id`` to every returned dict. Off by
+            default so the page responses keep their exact key set; the
+            AI group tools (OPT-0066) turn it on to fold / scope-filter by
+            client.
         conn: an already-open connection to use instead of opening one —
             the ai-agent container passes ``open_readonly()`` because the
             default connection path writes (WAL pragma + commit) and its data
@@ -2817,8 +2853,10 @@ def query_alert_events(
     where_sql, params = _build_alert_filters(
         since, until, server, login, symbol, rule_id, rule_id_min, rule_id_max, zipcode,
         time_field=time_field, leverage=leverage, logins=logins,
+        servers=servers, user_ids=user_ids,
     )
     order_sql = _resolve_alert_order(sort_by, sort_order)
+    select_sql = _ALERT_SELECT_SQL + (",\n    ae.user_id" if include_user_id else "")
 
     def _run(c: sqlite3.Connection) -> tuple[list[dict], int]:
         total = c.execute(
@@ -2827,7 +2865,7 @@ def query_alert_events(
         ).fetchone()[0]
         rows = c.execute(
             f"""
-            SELECT {_ALERT_SELECT_SQL}
+            SELECT {select_sql}
             {_ALERT_FROM_CLAUSE}
             WHERE {where_sql}
             ORDER BY {order_sql}
@@ -2849,6 +2887,11 @@ def count_alert_events_by_rule(
     server: str | None = None,
     *,
     logins: list[int] | None = None,
+    servers: list[str] | None = None,
+    user_ids: list[int] | None = None,
+    symbol: str | None = None,
+    rule_id_min: int | None = None,
+    rule_id_max: int | None = None,
     time_field: str = "scanned_at",
     conn: sqlite3.Connection | None = None,
 ) -> dict[int, int]:
@@ -2860,8 +2903,8 @@ def count_alert_events_by_rule(
     the same set of rows by construction.
     """
     where_sql, params = _build_alert_filters(
-        since, until, server, None, None, None, None, None, None,
-        time_field=time_field, logins=logins,
+        since, until, server, None, symbol, None, rule_id_min, rule_id_max, None,
+        time_field=time_field, logins=logins, servers=servers, user_ids=user_ids,
     )
 
     def _run(c: sqlite3.Connection) -> dict[int, int]:
@@ -2871,6 +2914,197 @@ def count_alert_events_by_rule(
             params,
         ).fetchall()
         return {int(r["rule_id"]): int(r["n"]) for r in rows}
+
+    if conn is not None:
+        return _run(conn)
+    with get_risk_monitor_db() as own:
+        return _run(own)
+
+
+# ── Group aggregation for the AI group tools (OPT-0066 R4) ──────────────
+#
+# Whitelists: every piece of SQL below that is not a bound parameter comes
+# from one of these three tables, never from caller input.
+
+# metric key -> (aggregate expression over the _ALERT_FROM_CLAUSE aliases,
+# direction in which "worse / more notable" sorts first).
+AGG_METRICS: dict[str, tuple[str, str]] = {
+    "order_count":      ("MAX(ae.order_count)", "desc"),
+    "min_hold_sec":     ("MIN(qoc.hold_duration_sec)", "asc"),
+    "total_profit_usd": ("MAX(ae.total_profit_usd)", "desc"),
+    "net_usd":          ("MAX(gso.net_usd)", "desc"),
+    "total_lots":       ("MAX(ae.total_lots)", "desc"),
+    # Burst-open writes equity_per_lot; the leverage-abuse band (101–110)
+    # leaves it NULL and triggers on margin level instead (measured
+    # 2026-09-28: 0 of 30,471 leverage alerts carry equity_per_lot).
+    "equity_per_lot":   ("MIN(ae.equity_per_lot)", "asc"),
+    "margin_level":     ("MIN(la.margin_level)", "asc"),
+    "lot_ratio_mg":     ("MAX(mg.lot_ratio_mg)", "desc"),
+    "return_pct":       ("MAX(ir.return_pct)", "desc"),
+    # The intraday rule fires when a tick crosses the threshold; return_pct is
+    # the LATEST tick and can fall back below it, peak_return_pct is the high
+    # that fired the alert — the one to rank "strength" by.
+    "peak_return_pct":  ("MAX(ir.peak_return_pct)", "desc"),
+}
+AGG_GROUP_BY: tuple[str, ...] = ("account", "client", "rule")
+AGG_SORTS: tuple[str, ...] = ("alerts", "lots", "profit", "metric")
+
+# group_by -> (SELECT key columns, GROUP BY expression, extra WHERE, ORDER key)
+_AGG_KEYS: dict[str, tuple[str, str, str, str]] = {
+    "account": ("ae.server AS server, ae.login AS login, MAX(ae.user_id) AS user_id",
+                "ae.server, ae.login", "", "ae.server, ae.login"),
+    "client":  ("ae.user_id AS user_id",
+                "ae.user_id", "ae.user_id IS NOT NULL", "ae.user_id"),
+    "rule":    ("ae.rule_id AS rule_id, MAX(ae.rule_label) AS rule_label",
+                "ae.rule_id", "", "ae.rule_id"),
+}
+_AGG_SAMPLE_IDS = 3
+
+
+def aggregate_alert_events(
+    since: str,
+    until: str,
+    *,
+    group_by: str,
+    rule_id_min: int | None = None,
+    rule_id_max: int | None = None,
+    servers: list[str] | None = None,
+    symbol: str | None = None,
+    user_ids: list[int] | None = None,
+    time_field: str = "scanned_at",
+    metric: str | None = None,
+    sort: str = "alerts",
+    limit: int = 50,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """SQL ``GROUP BY`` over the SAME WHERE as ``query_alert_events``.
+
+    Rows are never pulled into Python and folded: a leverage band produces
+    ~1,000 alerts a day, and folding a capped page would produce wrong counts
+    (docs/ai-agent/11 §2.1). The WHERE comes from ``_build_alert_filters`` so
+    "an alert in this window" means the same thing as on the page.
+
+    Returns ``{"groups": [...], "groups_total": int, "alerts_without_user_id": int}``.
+    ``alerts_without_user_id`` counts matching alerts whose ``user_id`` is
+    NULL; they are excluded from ``group_by="client"`` (they cannot be
+    attributed to a client) but still counted by the other groupings.
+    Row shapes are documented in the slice-3 contract (account / client /
+    rule). ``ValueError`` on an unknown group_by / sort / metric, or
+    ``sort="metric"`` without a metric.
+    """
+    if group_by not in _AGG_KEYS:
+        raise ValueError(f"group_by must be one of {list(AGG_GROUP_BY)}, got {group_by!r}")
+    if sort not in AGG_SORTS:
+        raise ValueError(f"sort must be one of {list(AGG_SORTS)}, got {sort!r}")
+    if metric is not None and metric not in AGG_METRICS:
+        raise ValueError(f"metric must be one of {sorted(AGG_METRICS)}, got {metric!r}")
+    if sort == "metric" and metric is None:
+        raise ValueError("sort='metric' requires a metric")
+    limit = max(1, int(limit))
+
+    where_sql, params = _build_alert_filters(
+        since, until, None, None, symbol, None, rule_id_min, rule_id_max, None,
+        time_field=time_field, servers=servers, user_ids=user_ids,
+    )
+    key_select, group_expr, extra_where, key_order = _AGG_KEYS[group_by]
+    group_where = where_sql + (f" AND {extra_where}" if extra_where else "")
+    metric_expr = AGG_METRICS[metric][0] if metric else "NULL"
+
+    if sort == "alerts":
+        order_sql = "COUNT(*) DESC"
+    elif sort == "lots":
+        order_sql = "(SUM(ae.total_lots) IS NULL), SUM(ae.total_lots) DESC"
+    elif sort == "profit":
+        order_sql = "(SUM(ae.total_profit_usd) IS NULL), SUM(ae.total_profit_usd) DESC"
+    else:
+        direction = "ASC" if AGG_METRICS[metric][1] == "asc" else "DESC"
+        order_sql = f"({metric_expr} IS NULL), {metric_expr} {direction}"
+    order_sql += f", COUNT(*) DESC, {key_order}"
+
+    if group_by == "rule":
+        agg_cols = (
+            "COUNT(*) AS alerts, "
+            "COUNT(DISTINCT ae.server || '-' || ae.login) AS accounts, "
+            "COUNT(DISTINCT ae.user_id) AS clients"
+        )
+    else:
+        agg_cols = (
+            "COUNT(*) AS alerts, "
+            "GROUP_CONCAT(DISTINCT ae.rule_id) AS rule_ids_csv, "
+            "MIN(ae.scanned_at) AS first_fired_at, MAX(ae.scanned_at) AS last_fired_at, "
+            "SUM(ae.total_lots) AS lots, SUM(ae.total_profit_usd) AS profit, "
+            f"{metric_expr} AS metric"
+        )
+        if group_by == "client":
+            agg_cols += ", GROUP_CONCAT(DISTINCT ae.server || '|' || ae.login) AS accounts_csv"
+
+    def _run(c: sqlite3.Connection) -> dict[str, Any]:
+        rows = c.execute(
+            f"SELECT {key_select}, {agg_cols} {_ALERT_FROM_CLAUSE} "
+            f"WHERE {group_where} GROUP BY {group_expr} ORDER BY {order_sql} LIMIT ?",
+            params + [limit],
+        ).fetchall()
+        groups_total = c.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 {_ALERT_FROM_CLAUSE} "
+            f"WHERE {group_where} GROUP BY {group_expr})",
+            params,
+        ).fetchone()[0]
+        without_uid = c.execute(
+            f"SELECT COUNT(*) {_ALERT_FROM_CLAUSE} WHERE {where_sql} AND ae.user_id IS NULL",
+            params,
+        ).fetchone()[0]
+
+        groups: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if group_by != "rule":
+                csv = d.pop("rule_ids_csv", None) or ""
+                d["rule_ids"] = sorted({int(x) for x in str(csv).split(",") if x != ""})
+                if group_by == "client":
+                    acc = d.pop("accounts_csv", None) or ""
+                    pairs = set()
+                    for item in str(acc).split(","):
+                        if "|" in item:
+                            srv, lg = item.rsplit("|", 1)
+                            pairs.add((srv, int(lg)))
+                    d["accounts"] = [{"server": s_, "login": l_} for s_, l_ in sorted(pairs)]
+                d["sample_alert_ids"] = []
+            groups.append(d)
+
+        if groups and group_by != "rule":
+            # Newest ≤3 ids per returned group, one query (window function),
+            # restricted to the SAME WHERE plus the returned keys.
+            if group_by == "account":
+                keys = [(g["server"], g["login"]) for g in groups]
+                key_sql = " OR ".join(["(ae.server = ? AND ae.login = ?)"] * len(keys))
+                key_params: list[Any] = [v for k in keys for v in k]
+                part = "ae.server, ae.login"
+            else:
+                keys = [g["user_id"] for g in groups]
+                key_sql = f"ae.user_id IN ({', '.join(['?'] * len(keys))})"
+                key_params = list(keys)
+                part = "ae.user_id"
+            sample_rows = c.execute(
+                f"SELECT * FROM (SELECT ae.id AS id, ae.server AS server, ae.login AS login, "
+                f"ae.user_id AS user_id, ROW_NUMBER() OVER (PARTITION BY {part} "
+                f"ORDER BY ae.scanned_at DESC, ae.id DESC) AS rn "
+                f"{_ALERT_FROM_CLAUSE} WHERE {group_where} AND ({key_sql})) "
+                f"WHERE rn <= ? ORDER BY rn",
+                params + key_params + [_AGG_SAMPLE_IDS],
+            ).fetchall()
+            by_key: dict[Any, list[int]] = {}
+            for sr in sample_rows:
+                k = (sr["server"], sr["login"]) if group_by == "account" else sr["user_id"]
+                by_key.setdefault(k, []).append(int(sr["id"]))
+            for g in groups:
+                k = (g["server"], g["login"]) if group_by == "account" else g["user_id"]
+                g["sample_alert_ids"] = by_key.get(k, [])
+
+        return {
+            "groups": groups,
+            "groups_total": int(groups_total),
+            "alerts_without_user_id": int(without_uid),
+        }
 
     if conn is not None:
         return _run(conn)
@@ -3402,11 +3636,18 @@ def aggregate_burst_open_by_login(
     return entries, int(total)
 
 
-def get_alerts_by_ids(ids: list[int]) -> list[dict[str, Any]]:
+def get_alerts_by_ids(
+    ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+    include_user_id: bool = False,
+) -> list[dict[str, Any]]:
     """Look up specific alert_events rows by primary key.
 
     Used by the Quick Profit floating-refresh endpoint to map a small set of
-    visible row ids back to the (server, login) pairs we need to re-query.
+    visible row ids back to the (server, login) pairs we need to re-query,
+    and by the AI ``get_alert_orders`` tool (OPT-0066), which passes
+    ``conn=open_readonly()`` (read-only mount) and ``include_user_id=True``.
     Empty input returns an empty list without hitting the DB.
     """
     if not ids:
@@ -3414,15 +3655,17 @@ def get_alerts_by_ids(ids: list[int]) -> list[dict[str, Any]]:
     # SQLite's variable limit is 999 by default; the floating refresh poller
     # never sends more than the page size (≤500), so a single IN() clause is fine.
     placeholders = ",".join(["?"] * len(ids))
-    with get_risk_monitor_db() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT {_ALERT_SELECT_SQL}
+    select_sql = _ALERT_SELECT_SQL + (",\n    ae.user_id" if include_user_id else "")
+    sql = f"""
+            SELECT {select_sql}
             {_ALERT_FROM_CLAUSE}
             WHERE ae.id IN ({placeholders})
-            """,
-            list(ids),
-        ).fetchall()
+            """
+    if conn is not None:
+        rows = conn.execute(sql, list(ids)).fetchall()
+    else:
+        with get_risk_monitor_db() as own:
+            rows = own.execute(sql, list(ids)).fetchall()
     return [_row_to_alert_dict(r) for r in rows]
 
 

@@ -1,7 +1,7 @@
 ---
 id: OPT-0066
 title: AI 分析 agent 第三刀 —— Risk control 页面群接入（`get_risk_alerts` / `get_alert_orders` / `get_window_scan` + window-scan 超时/DST 前置修复）
-status: wip
+status: done
 priority: P1
 area: mixed
 effort: L
@@ -58,4 +58,26 @@ related: [[OPT-0065]] [[OPT-0064]] [[OPT-0062]]
 
 ## 结果
 
-（待实施）
+**2026-09-28 实施 + 冷审收口 + 上线**（分支 `feat/ai-agent-slice3`，7 个 commit；回滚镜像 `new-it-system-{api,web,ai-agent}:pre-ai-slice3-all-20260928`）。完整记录 `docs/ai-agent/05-rollout.md` §9，契约与出入 `02-contracts.md` §14–§16。
+
+| 项 | commit | 交付 vs AC |
+|---|---|---|
+| 3.0 window-scan DST + 超时 | `2376009` | ✅ 夏令 4 组改前改后逐行一致；DST 冬/夏/切换日单测；15s `MAX_EXECUTION_TIME`，超时 504 |
+| 3.1 `get_risk_alerts` + R1–R4 | `a735b5a` | ✅ id 集合对账（intraday 8 / gap-trade 64）、martingale 总数 959 == stats、top-3 == 手写 SQL、31 天 0.18s |
+| 3.2 `get_alert_orders` + `alert_orders_service` | `46ffbf3` | ✅ 各段取单对账；MT5 已平仓按开仓秒回落 |
+| 3.3 `get_window_scan` + ai+risk 注册 | `3aa5e2a` | ✅ top 20 == 页面；门控五例单测 + 活体 |
+| 活体修正 | `36b96ce` | 每轮 ≤2 次硬性、`accounts_in_rows`、intraday 主指标改 `peak_return_pct`、审计 subjects |
+| 冷审收口 | `9a7b134` | 见下 |
+
+**与 AC / plan 的偏差**：分刀是各自闸门绿的 commit，但工具在 3.3 才接进 harness → 整刀一次部署（回滚标签一个 `pre-ai-slice3-all`，不是四个）；leverage 主指标 `margin_level`、intraday `peak_return_pct`；intraday 取单 = 当日开仓（隔夜仓不列，caveat）。闸门 pytest 2468 / tsc 0 / vitest 315。
+
+**Stage 1 冷审处理**（独立零上下文 agent，14 个变异 13 个被测试抓到）：
+- 🔴 #1 冬令时下钻全空（告警时间固定 +03:00 存、按 DST 还原）→ 当场修，`9a7b134`
+- 🟡 #2 gap-71 C 腿可由 pair 字段反推 → 当场修
+- 🟡 #3 window-scan 受限时全公司计数 → 当场修
+- 🟡 #4 martingale 跨周窗口丢最新加仓 → 当场修（按开仓秒取单；485096 71/86 → 86/86）
+- 🟡 #5 `alert:<id>` 审计标签 30 天后失效 → 当场修（同时记 `client:<id>`）
+- ⚪ #6 / #7 / #9 → 当场修 + 钉测试
+- ⚪ #8 agent 内 SQLite 读无语句级超时 → **立新 hardening OPT-0067**（用户 2026-09-28 选择）
+
+**Follow-up**：OPT-0067（#8 + 老工具「每轮 2 次」仍只是 prompt）；经济日历无过去日期；dev 活体里 2 次未解释的 stream 中断（上 prod 后留意首批轮次）；即日告警里 7 账户 / 5 客户数据完全相同，值得转 risk team。

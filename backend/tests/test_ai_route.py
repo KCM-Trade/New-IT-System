@@ -610,3 +610,37 @@ def test_ai_is_scoped_since_slice_two():
     assert ROUTE_SCOPE["/ai/usage/today"] == OPEN
     assert ROUTE_SCOPE["/ai/sessions"] == OPEN
     assert ROUTE_SCOPE["/ai/sessions/{session_id}"] == OPEN
+
+
+def test_subject_labels_cover_group_tool_id_lists():
+    from app.api.v1.routes.ai import _subject_labels
+
+    assert _subject_labels({"subject": {"kind": "client_id", "value": "146530"}}) == ["client:146530"]
+    assert _subject_labels({"subject": {"kind": "login_sid", "value": "1-8522845"}}) == ["login:1-8522845"]
+    assert _subject_labels({"tab": "intraday-return", "client_ids": [1, 2]}) == ["client:1", "client:2"]
+    assert _subject_labels({"alert_ids": [484606, 484753]}) == ["alert:484606", "alert:484753"]
+    assert _subject_labels({"tab": "gap-trade", "client_ids": None}) == []
+    assert _subject_labels(None) == []
+
+
+def test_drill_down_subjects_include_the_resolved_clients(make_client, scripted_agent):
+    """Cold review #5: `alert:<id>` stops resolving after the 30-day alert
+    retention, so the clients the agent resolved land in the audit row too.
+    Malformed labels from the agent are ignored."""
+    from app.core.users_db import get_users_db
+
+    scripted_agent["script"]["events"] = [
+        ("tool_use", {"name": "get_alert_orders", "input": {"alert_ids": [484606, 484753], "max_orders_per_alert": 60}}),
+        ("tool_done", {"name": "get_alert_orders", "ok": True, "source": {"function": "fetch_orders", "certified": True},
+                       "certified": True, "subjects": ["client:166916", "client:162462", "email:x@y", "client:1;DROP"]}),
+        ("text", {"delta": "orders"}),
+        ("usage", {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0, "cost_usd": None}),
+        ("done", {"terminal_reason": "end_turn", "num_turns": 1}),
+    ]
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    assert _turn(client, sid).status_code == 200
+    with get_users_db() as conn:
+        row = conn.execute("SELECT new_value FROM audit_log WHERE action = 'ai.query.submit' ORDER BY id DESC LIMIT 1").fetchone()
+    assert json.loads(row["new_value"])["subjects"] == [
+        "alert:484606", "alert:484753", "client:166916", "client:162462"]

@@ -63,7 +63,8 @@ from agent_framework.openai import OpenAIChatClient
 from app.core.logging_config import get_logger
 
 from .prompt import TOOL_DOCSTRINGS, system_prompt
-from .tools import TOOL_IMPLS, CallerCtx
+from .tools import RISK_TOOL_NAMES, TOOL_IMPLS, CallerCtx
+from .tools.common import error_envelope, risk_tools_enabled
 from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
 from .tools.run_sql import run_sql as run_sql_impl
 
@@ -149,13 +150,38 @@ Subject = Annotated[SubjectArg, "{'kind': 'client_id'|'login_sid', 'value': str}
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
+# 03 §3 "each tool at most twice per turn", ENFORCED for the Risk control tools
+# (OPT-0066): get_alert_orders' 200-orders-per-call cap only bounds a turn's
+# cost if the call count is bounded too (live run 2026-09-28: the model called
+# it three times in one turn). Older tools still rely on the prompt sentence.
+MAX_CALLS_PER_TOOL_PER_TURN = 2
 
-def build_tools(ctx: CallerCtx, emit: Emit) -> list:
-    """Per-request tool closures. ``emit`` publishes tool_use / tool_done."""
+
+def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None) -> list:
+    """Per-request tool closures. ``emit`` publishes tool_use / tool_done.
+
+    ``risk_tools``: whether the three Risk control tools are registered
+    (``tools.common.risk_tools_enabled``); ``run_turn`` computes it once and
+    passes the same value to the system prompt so tools and prompt block can
+    never disagree. ``None`` = compute here.
+    """
+    if risk_tools is None:
+        risk_tools = risk_tools_enabled(ctx)
+
+    calls: dict[str, int] = {}
 
     async def _run(name: str, impl, **kwargs: Any) -> dict:
         await emit("tool_use", {"name": name, "input": kwargs})
-        envelope = await impl(ctx, **kwargs)
+        calls[name] = calls.get(name, 0) + 1
+        if name in RISK_TOOL_NAMES and calls[name] > MAX_CALLS_PER_TOOL_PER_TURN:
+            envelope = error_envelope(
+                "invalid_argument",
+                f"{name} may be called at most {MAX_CALLS_PER_TOOL_PER_TURN} times per turn. Answer with what you "
+                "have and offer to look at the rest in a follow-up question.",
+                {"calls": calls[name], "limit": MAX_CALLS_PER_TOOL_PER_TURN},
+            )
+        else:
+            envelope = await impl(ctx, **kwargs)
         done: dict[str, Any] = {
             "name": name,
             "ok": bool(envelope.get("ok")),
@@ -164,6 +190,12 @@ def build_tools(ctx: CallerCtx, emit: Emit) -> list:
         }
         if not envelope.get("ok"):
             done["error_code"] = (envelope.get("error") or {}).get("code", "internal")
+        elif name == "get_alert_orders":
+            # The clients behind the drilled alerts, for the audit row: an
+            # `alert:<id>` label stops resolving once alert_events purges it
+            # (30 d) while audit_log keeps 365 d (cold review #5).
+            ids = {a.get("client_id") for a in (envelope.get("data") or {}).get("alerts") or []}
+            done["subjects"] = [f"client:{int(i)}" for i in sorted(i for i in ids if i is not None)]
         await emit("tool_done", done)
         return envelope
 
@@ -242,6 +274,82 @@ def build_tools(ctx: CallerCtx, emit: Emit) -> list:
 
         assert db_choices_match_impl(), "run_sql db choices drifted from tools.run_sql.DATABASES"
         tools.append(run_sql)
+
+    # Slice 3 (11 §0 T1): the Risk control tools exist only for callers holding
+    # `risk` on top of `ai` AND unrestricted — structural, like run_sql: the
+    # tool is absent from the model's context, not refused. The module gate is
+    # an API gate; the agent must not be a side door into the risk pages.
+    if risk_tools:
+
+        @tool(name="get_risk_alerts", description=TOOL_DOCSTRINGS["get_risk_alerts"])
+        async def get_risk_alerts(
+            date_range: DateRange,
+            tab: Annotated[
+                Optional[Literal["burst-open", "quick-open-close", "quick-profit", "gap-trade",
+                                 "hedge-open", "leverage-abuse", "martingale", "intraday-return"]],
+                "Risk Monitor tab key (the ?tab= of the page URL); or give rule_ids",
+            ] = None,
+            rule_ids: Annotated[Optional[list[int]], "consecutive rule ids inside ONE tab; intersected with tab if both"] = None,
+            group_by: Annotated[Literal["client", "account", "alert", "rule"], "row grouping; 'alert' = every alert row"] = "client",
+            top_n: Annotated[int, "1..50 groups (ignored for group_by='alert')"] = 20,
+            sort: Annotated[Literal["alerts", "lots", "profit", "metric"], "'metric' = the band's main metric (one band only)"] = "alerts",
+            sids: Annotated[Optional[list[int]], "restrict to servers, subset of [1, 5, 6]; null = all"] = None,
+            symbol: Annotated[Optional[str], "exact symbol, e.g. 'XAUUSD'; null = all"] = None,
+            client_ids: Annotated[Optional[list[int]], "only these CRM client ids (<= 50)"] = None,
+        ) -> dict:
+            return await _run(
+                "get_risk_alerts",
+                TOOL_IMPLS["get_risk_alerts"],
+                tab=tab,
+                rule_ids=list(rule_ids) if rule_ids is not None else None,
+                date_range=dict(date_range),
+                group_by=group_by,
+                top_n=top_n,
+                sort=sort,
+                sids=list(sids) if sids is not None else None,
+                symbol=symbol,
+                client_ids=list(client_ids) if client_ids is not None else None,
+            )
+
+        @tool(name="get_alert_orders", description=TOOL_DOCSTRINGS["get_alert_orders"])
+        async def get_alert_orders(
+            alert_ids: Annotated[list[int], "1..3 alert ids from get_risk_alerts"],
+            max_orders_per_alert: Annotated[int, "1..100 orders per alert (default 60; 200 per call in total)"] = 60,
+        ) -> dict:
+            return await _run(
+                "get_alert_orders",
+                TOOL_IMPLS["get_alert_orders"],
+                alert_ids=list(alert_ids),
+                max_orders_per_alert=max_orders_per_alert,
+            )
+
+        @tool(name="get_window_scan", description=TOOL_DOCSTRINGS["get_window_scan"])
+        async def get_window_scan(
+            anchor_hk: Annotated[str, "Hong Kong wall clock 'YYYY-MM-DD HH:MM', within the past 366 days"],
+            window_min: Annotated[Literal[1, 3, 5, 10, 15], "+/- minutes around the anchor"] = 5,
+            scan_by: Annotated[Literal["open", "close"], "match OPEN_TIME or CLOSE_TIME to the window"] = "open",
+            hold_bucket: Annotated[Literal["total", "lt30m", "m30_2h", "gt2h"], "holding-time filter"] = "total",
+            sids: Annotated[Optional[list[int]], "restrict to servers, subset of [1, 5, 6]; null = all"] = None,
+            symbol: Annotated[Optional[str], "symbol prefix, e.g. 'XAUUSD'; null = all"] = None,
+            top_n: Annotated[int, "1..50 clients"] = 20,
+            sort: Annotated[Literal["closed_profit", "net_gain", "lots"], "ranking column"] = "closed_profit",
+            include_trades: Annotated[bool, "per-order trades; honoured only when top_n <= 5"] = False,
+        ) -> dict:
+            return await _run(
+                "get_window_scan",
+                TOOL_IMPLS["get_window_scan"],
+                anchor_hk=anchor_hk,
+                window_min=window_min,
+                scan_by=scan_by,
+                hold_bucket=hold_bucket,
+                sids=list(sids) if sids is not None else None,
+                symbol=symbol,
+                top_n=top_n,
+                sort=sort,
+                include_trades=bool(include_trades),
+            )
+
+        tools.extend([get_risk_alerts, get_alert_orders, get_window_scan])
 
     return tools
 
@@ -429,13 +537,17 @@ async def run_turn(
     async def emit(event: str, data: dict) -> None:
         await queue.put((event, data))
 
+    # Decided ONCE per turn: the prompt's Risk control block and the three
+    # tools must appear together or not at all.
+    risk_tools = risk_tools_enabled(ctx)
+    # Instructions travel as a per-call option, not as a stored message:
+    # the "## Today" tail changes daily and must not accumulate in the blob.
+    instructions = system_prompt(risk_tools=risk_tools)
     agent = Agent(
         client=get_client(model),
         name="risk-analyst",
-        # Instructions travel as a per-call option, not as a stored message:
-        # the "## Today" tail changes daily and must not accumulate in the blob.
-        instructions=system_prompt(),
-        tools=build_tools(ctx, emit),
+        instructions=instructions,
+        tools=build_tools(ctx, emit, risk_tools=risk_tools),
         default_options=dict(SESSION_CHAT_OPTIONS),
         context_providers=build_context_providers(),
     )

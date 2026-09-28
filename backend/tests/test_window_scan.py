@@ -17,7 +17,7 @@ Regression coverage worth calling out:
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 from unittest import mock
 
@@ -54,12 +54,60 @@ def test_parse_anchor_hk_rejects(bad: str):
         svc.parse_anchor_hk(bad)
 
 
-def test_hk_to_mt_is_minus_five_hours():
+def test_hk_to_mt_is_minus_five_hours_in_summer():
     assert svc.hk_to_mt(datetime(2026, 8, 1, 12, 0)) == datetime(2026, 8, 1, 7, 0)
 
 
-def test_mt_to_utc_is_minus_three_hours():
+def test_mt_to_utc_is_minus_three_hours_in_summer():
     assert svc.mt_to_utc(datetime(2026, 8, 1, 7, 0)) == datetime(2026, 8, 1, 4, 0)
+
+
+# OPT-0066 P0: the MT server runs UTC+2 in winter on the US DST calendar
+# (2nd Sunday of March → 1st Sunday of November). Before P0 this module
+# hard-coded UTC+3 and every winter window was one hour off.
+
+
+def test_hk_to_mt_is_minus_six_hours_in_winter():
+    assert svc.hk_to_mt(datetime(2026, 11, 10, 12, 0)) == datetime(2026, 11, 10, 6, 0)
+
+
+def test_mt_to_utc_is_minus_two_hours_in_winter():
+    assert svc.mt_to_utc(datetime(2026, 11, 10, 6, 0)) == datetime(2026, 11, 10, 4, 0)
+
+
+@pytest.mark.parametrize(
+    "hk,mt",
+    [
+        # 2026 US DST starts Sunday 2026-03-08.
+        (datetime(2026, 3, 7, 12, 0), datetime(2026, 3, 7, 6, 0)),   # before: UTC+2
+        (datetime(2026, 3, 10, 12, 0), datetime(2026, 3, 10, 7, 0)),  # after: UTC+3
+        # 2026 US DST ends Sunday 2026-11-01 (the CLAUDE.md mt5_deals sample:
+        # 10-28 still +3, 11-04 already +2).
+        (datetime(2026, 10, 28, 12, 0), datetime(2026, 10, 28, 7, 0)),
+        (datetime(2026, 11, 4, 12, 0), datetime(2026, 11, 4, 6, 0)),
+    ],
+)
+def test_hk_to_mt_follows_the_us_dst_calendar(hk, mt):
+    assert svc.hk_to_mt(hk) == mt
+    # Round trip: MT → UTC is HK − 8h regardless of season.
+    assert svc.mt_to_utc(mt) == hk - timedelta(hours=8)
+
+
+def test_compute_window_in_winter_uses_utc_plus_two():
+    w = svc.compute_window(datetime(2026, 11, 10, 12, 0), 5)
+    assert w.anchor_mt == datetime(2026, 11, 10, 6, 0)
+    assert w.mt_from == datetime(2026, 11, 10, 5, 55)
+    assert w.mt_to == datetime(2026, 11, 10, 6, 5)
+
+
+def test_now_mt_is_naive_and_dst_aware():
+    from app.services.rule_intraday_return_service import MT_SERVER_TZ
+
+    before = datetime.now(timezone.utc).astimezone(MT_SERVER_TZ).replace(tzinfo=None)
+    got = svc.now_mt()
+    after = datetime.now(timezone.utc).astimezone(MT_SERVER_TZ).replace(tzinfo=None)
+    assert got.tzinfo is None
+    assert before <= got <= after
 
 
 def test_compute_window_same_day():
@@ -267,6 +315,26 @@ def test_open_row_has_null_close_times_and_grows_hold_sec():
     assert row["close_time_utc"] is None
     assert row["hold_sec"] == 3600
     assert row["hold_bucket"] == "gt2h" if row["hold_sec"] >= 7200 else True
+
+
+def test_mt_and_utc_timestamps_are_two_hours_apart_in_winter():
+    row = svc.build_trade_row(
+        {
+            "client_id": 1,
+            "ticket_sid": "1-31691183",
+            "sid": 1,
+            "login": 8522845,
+            "symbol": "XAUUSD",
+            "cmd": 0,
+            "lots": 1.0,
+            "total_profit": 1.0,
+            "open_time": datetime(2026, 11, 10, 6, 0, 0),
+            "close_time": datetime(2026, 11, 10, 6, 5, 0),
+        },
+        datetime(2026, 11, 11),
+    )
+    assert row["open_time_utc"] == "2026-11-10T04:00:00Z"
+    assert row["close_time_utc"] == "2026-11-10T04:05:00Z"
 
 
 def test_mt_and_utc_timestamps_are_three_hours_apart():
@@ -676,6 +744,69 @@ def _fetch_with(rows):
         )
 
 
+def test_default_connection_is_connect_readonly_with_a_15s_budget():
+    sentinel = object()
+    with mock.patch.object(svc, "connect_readonly", return_value=sentinel) as cr:
+        settings = mock.Mock()
+        assert svc._connect_mysql(settings) is sentinel
+    cr.assert_called_once()
+    assert cr.call_args.args[0] is settings
+    assert cr.call_args.kwargs["max_execution_ms"] == 15000
+
+
+def test_connect_injection_bypasses_the_default_connection():
+    window = svc.compute_window(svc.parse_anchor_hk("2026-08-01T03:00"), 5)
+    seen = []
+
+    def _connect(settings):
+        seen.append(settings)
+        return _FakeConn([{"x": 1}])
+
+    settings = mock.Mock()
+    with mock.patch.object(svc, "_get_excluded_groupsids", return_value=[]), \
+         mock.patch.object(svc, "_connect_mysql", side_effect=AssertionError("default used")):
+        rows, truncated = svc.fetch_window_trades(
+            settings, window=window, sids=[1], symbol=None, connect=_connect
+        )
+    assert rows == [{"x": 1}] and truncated is False
+    assert seen == [settings]
+
+
+def test_query_window_scan_forwards_connect():
+    seen = []
+
+    def _connect(settings):
+        seen.append(True)
+        return _FakeConn([])
+
+    with mock.patch.object(svc, "_get_excluded_groupsids", return_value=[]), \
+         mock.patch.object(svc, "_connect_mysql", side_effect=AssertionError("default used")), \
+         mock.patch.object(svc, "enrich_clients", return_value=True):
+        rows, _ = svc.query_window_scan(
+            mock.Mock(), anchor="2026-08-01T03:00", window_min=5, connect=_connect
+        )
+    assert rows == [] and seen == [True]
+
+
+def test_statement_timeout_is_not_swallowed_by_the_service():
+    import pymysql
+
+    class _SlowCursor(_FakeCursor):
+        def execute(self, *_a, **_k):
+            raise pymysql.err.OperationalError(3024, "Query execution was interrupted, maximum statement execution time exceeded")
+
+    class _SlowConn(_FakeConn):
+        def cursor(self):
+            return _SlowCursor([])
+
+    window = svc.compute_window(svc.parse_anchor_hk("2026-08-01T03:00"), 5)
+    with mock.patch.object(svc, "_get_excluded_groupsids", return_value=[]):
+        with pytest.raises(pymysql.err.OperationalError):
+            svc.fetch_window_trades(
+                mock.Mock(), window=window, sids=[1], symbol=None, connect=lambda s: _SlowConn([])
+            )
+
+
 def test_truncated_false_below_the_cap():
     rows, truncated = _fetch_with([{"x": i} for i in range(10)])
     assert len(rows) == 10
@@ -1032,6 +1163,34 @@ def test_mysql_failure_maps_to_500_without_leaking_details(client: TestClient):
         svc,
         "query_window_scan",
         side_effect=RuntimeError("mysql://user:pw@host down"),
+    ):
+        r = client.get("/api/v1/risk/window-scan", params=_OK_PARAMS)
+    assert r.status_code == 500
+    assert "pw@host" not in r.text
+
+
+@pytest.mark.parametrize("errno", [3024, 1317, 2013])
+def test_statement_timeout_maps_to_504_with_a_hint(client: TestClient, errno: int):
+    import pymysql
+
+    with mock.patch.object(
+        svc,
+        "query_window_scan",
+        side_effect=pymysql.err.OperationalError(errno, "mysql://user:pw@host interrupted"),
+    ):
+        r = client.get("/api/v1/risk/window-scan", params=_OK_PARAMS)
+    assert r.status_code == 504
+    assert "timed out" in r.json()["detail"]
+    assert "pw@host" not in r.text
+
+
+def test_other_mysql_operational_error_is_still_500(client: TestClient):
+    import pymysql
+
+    with mock.patch.object(
+        svc,
+        "query_window_scan",
+        side_effect=pymysql.err.OperationalError(2003, "mysql://user:pw@host refused"),
     ):
         r = client.get("/api/v1/risk/window-scan", params=_OK_PARAMS)
     assert r.status_code == 500

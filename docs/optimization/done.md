@@ -10,6 +10,7 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | Commit | 标题 |
 |------|----|--------|------|
+| 2026-09-28 | [OPT-0066](./items/OPT-0066-ai-agent-slice3.md) | — | AI 分析 agent 第三刀：Risk control 页面群接入（`get_risk_alerts` / `get_alert_orders` / `get_window_scan`，需 `ai`+`risk` 且不受限才注册，每轮各 ≤2 次）+ window-scan DST/15s 超时前置；冷审 🔴 冬令时下钻全空等 8 条当场修，#8 立 OPT-0067 |
 | 2026-09-28 | [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | — | AI 分析 agent 第二刀：会话记忆（MAF session blob 主 API 落库 + compaction）· `ai` 进数据范围 · `run_sql` 未认证逃生口（sqlglot AST 七道门槛）· `rank_accounts` + 经济日历（FRED + Fed）；冷审 10 条全复现、8 条当场修（版本注释绕过 AST / Stop 丢记忆 / 并发 409 / 刷新 resume）；prod 09-28 00:27 `d499ec8` |
 | 2026-09-18 | [OPT-0062](./items/OPT-0062-intraday-return-rule.md) | — | 即日高收益 Intraday Return 规则（band 131-140）：公式 v3（隔夜仓 max(now,0)−max(昨日终,0)，7 日净利过滤，门槛 50/30）+ 独立 5 分钟 job + 每 tick 回种去重 & 原子 UPSERT + detail 表 + 邮件源（seed 131/132 → risk@）+ 前端 tab + 回测脚本（四行重点账户全中）；冷审两轮 21+12 条，二轮 4 🔴 7 🟡 全部当场修 |
 | 2026-09-04 | [OPT-0060](./items/OPT-0060-client-return-mdd.md) | — | Client Return Rate 加 MDD 5 窗口列：TWR（R1 修正递推+三条件 re-base+G1-G5）按 loginSid 建序列客户取 MAX；夜间作业形态 B（0061 老查询不动 + PK 序流式 22.6M 行 120s 零 filesort）；换表 client_metrics_snapshot + H1 staging 原子换名 + 跨进程刷新锁；三客户独立对账 <0.1pp；冷审 10 条修 7 |

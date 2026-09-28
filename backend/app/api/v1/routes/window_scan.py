@@ -13,6 +13,7 @@ import logging
 import time
 from typing import List, Optional
 
+import pymysql
 from fastapi import APIRouter, HTTPException, Query, status
 
 from ....schemas.window_scan import (
@@ -25,6 +26,11 @@ from ....services import window_scan_service as svc
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/risk")
+
+# MAX_EXECUTION_TIME exceeded (3024), query interrupted (1317), lost
+# connection mid-query after read_timeout (2013): all three mean "the window
+# was too heavy", not "the server is broken" — answer 504 with a hint.
+_TIMEOUT_ERRNOS = frozenset({3024, 1317, 2013})
 
 
 def _unprocessable(detail: str) -> HTTPException:
@@ -123,6 +129,19 @@ def window_scan(
     except ValueError as exc:
         # Domain validation that slipped past the checks above.
         raise _unprocessable(str(exc)) from exc
+    except pymysql.err.OperationalError as exc:
+        if exc.args and exc.args[0] in _TIMEOUT_ERRNOS:
+            logger.warning("window-scan query timed out (errno %s)", exc.args[0])
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="window scan timed out (15s statement budget); "
+                "narrow the window, pick fewer servers or add a symbol",
+            ) from exc
+        logger.exception("window-scan query failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal error while running the window scan",
+        ) from exc
     except Exception as exc:
         # Connection strings / SQL text stay in the log, never in the body.
         logger.exception("window-scan query failed")
