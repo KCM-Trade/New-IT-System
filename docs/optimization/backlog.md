@@ -23,6 +23,7 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
+| [OPT-0066](./items/OPT-0066-ai-agent-slice3.md) | P1 | mixed | L | AI 分析 agent 第三刀：Risk control 页面群接入（get_risk_alerts / get_alert_orders / get_window_scan，ai+risk 双模块注册）+ window-scan 超时/DST 前置；plan 在 docs/ai-agent/11，分支 feat/ai-agent-slice3 |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
 | [OPT-0044](./items/OPT-0044-alert-mail-hardening.md) | P2 | backend | M | 告警邮件中心 hardening：发送移出扫描锁 / digest 渲染上限 / digest UNIQUE 认领 / 注册表 dataclass 化 |
