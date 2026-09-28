@@ -17,13 +17,13 @@
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
 | [OPT-0064](./items/OPT-0064-ai-agent-slice1.md) | main（原 feat/ai-agent-slice1） | 2026-09-27 | AI 分析 agent 第一刀 **已上 prod 09-27**（`ac21437`，回滚 `pre-ai-slice1-20260927`）；UI 二轮 + prompt 日期 + PG `ai_agent_ro` **09-27 15:44 已上**（回滚 `pre-ai-ui2-20260927`）；MySQL `ai_agent_ro` 用户拍板不建（run_sql 时重议）；第二刀已另 file 为 OPT-0065 |
 | [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | main（原 opt/trade-ip-profit-attribution） | 2026-09-22 | Phase 1–3 + 定点查找（2026-09-24 `78882c0`…`16cc5d3`）均在 main/prod。列表固定「同 IP ≥5 客户」；lookup = Client/账户/开仓 IP → peers + 琥珀色共用 IP。剩 cs-only 抽查 + Phase 1 时间项（可选） |
+| [OPT-0066](./items/OPT-0066-ai-agent-slice3.md) | feat/ai-agent-slice3 | 2026-09-28 | AI 分析 agent 第三刀：3.0 window-scan 超时/DST → 3.1 get_risk_alerts → 3.2 get_alert_orders → 3.3 get_window_scan；plan 在 docs/ai-agent/11 |
 ## ✅ 待领取（Ready）
 
 > AC 已经在 item 文件里定义好了。按 priority + effort + 你的当前心智状态挑一个。
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
-| [OPT-0066](./items/OPT-0066-ai-agent-slice3.md) | P1 | mixed | L | AI 分析 agent 第三刀：Risk control 页面群接入（get_risk_alerts / get_alert_orders / get_window_scan，ai+risk 双模块注册）+ window-scan 超时/DST 前置；plan 在 docs/ai-agent/11，分支 feat/ai-agent-slice3 |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
 | [OPT-0044](./items/OPT-0044-alert-mail-hardening.md) | P2 | backend | M | 告警邮件中心 hardening：发送移出扫描锁 / digest 渲染上限 / digest UNIQUE 认领 / 注册表 dataclass 化 |

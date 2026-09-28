@@ -1,7 +1,7 @@
 ---
 id: OPT-0066
 title: AI 分析 agent 第三刀 —— Risk control 页面群接入（`get_risk_alerts` / `get_alert_orders` / `get_window_scan` + window-scan 超时/DST 前置修复）
-status: ready
+status: wip
 priority: P1
 area: mixed
 effort: L
