@@ -31,6 +31,15 @@ paid for once):
   * sid=5 (MT5 mirror) CLOSED rows record the EXIT direction, so the stored
     CMD is the opposite of the position that was held. Open rows are fine.
 
+  * MT wall clock is UTC+3 in summer and UTC+2 in winter on the US DST
+    calendar (``rule_intraday_return_service.MT_SERVER_TZ``). Until
+    2026-09-28 this module hard-coded UTC+3, which would have shifted every
+    winter window by one hour (OPT-0066 P0).
+  * the MySQL connection carries the db-timeout-guard three lines
+    (``connect_readonly``: connect 5s / read / server-side
+    MAX_EXECUTION_TIME 15s). Before OPT-0066 it had no statement budget, so
+    a heavy window could hold a replica thread long after the page gave up.
+
 No Redis, no SingleFlight: one window is a small, ad-hoc, investigative
 query and stale results would be actively misleading.
 """
@@ -41,14 +50,16 @@ import logging
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
-import pymysql
+from zoneinfo import ZoneInfo
 
 from ..core.config import Settings, get_settings
+from ..core.mysql_readonly import connect_readonly
 from ..core.risk_cases_pg import RiskCasesUnavailable, risk_cases_conn
 from .net_gain_sql import net_gain_by_ids
 from .open_positions_service import _get_excluded_groupsids
+from .rule_intraday_return_service import MT_SERVER_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +89,10 @@ SERVER_LABELS: Dict[int, str] = {1: "MT4_Live", 5: "MT5", 6: "MT4_Live2"}
 BUCKET_LT30M_SEC = 1800
 BUCKET_M30_2H_SEC = 7200
 
-# HK is UTC+8, MT servers run UTC+3 without DST → MT = HK - 5h.
-HK_TO_MT_OFFSET_HOURS = 5
-MT_TO_UTC_OFFSET_HOURS = 3
+# HK is UTC+8 all year; the MT server is UTC+3 in summer / UTC+2 in winter
+# on the US DST calendar, so MT = HK - 5h in summer and HK - 6h in winter.
+# Conversions go through the shared tzinfo, never a fixed offset.
+_HK_TZ = ZoneInfo("Asia/Hong_Kong")
 
 # Anchor is a bare local-wall-clock HK instant: no timezone suffix allowed.
 ANCHOR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
@@ -96,8 +108,9 @@ _OPEN_CLOSE_TIME_CUTOFF = datetime(1971, 1, 1)
 # Cent products: BOTH lots and money are stored in cents.
 _CENT_SUFFIXES = (".kcmc", ".cent")
 
-_MYSQL_CONNECT_TIMEOUT_SEC = 5
-_MYSQL_READ_TIMEOUT_SEC = 30
+# Server-side statement budget (db-timeout-guard). A normal window returns
+# in well under a second; 15s is the same budget the AI tools use.
+_MYSQL_MAX_EXECUTION_MS = 15_000
 
 # Hard ceiling so a mis-typed wide window cannot pull an unbounded result
 # set into memory. A 15-minute window across three servers is normally a
@@ -145,20 +158,18 @@ def parse_anchor_hk(anchor: str) -> datetime:
 
 
 def hk_to_mt(dt: datetime) -> datetime:
-    """HK wall clock (UTC+8) → MT wall clock (UTC+3). MT has no DST."""
-    return dt - timedelta(hours=HK_TO_MT_OFFSET_HOURS)
+    """HK wall clock (naive, UTC+8) → MT wall clock (naive, DST-aware)."""
+    return dt.replace(tzinfo=_HK_TZ).astimezone(MT_SERVER_TZ).replace(tzinfo=None)
 
 
 def mt_to_utc(dt: datetime) -> datetime:
-    """MT wall clock (UTC+3) → UTC."""
-    return dt - timedelta(hours=MT_TO_UTC_OFFSET_HOURS)
+    """MT wall clock (naive, DST-aware) → UTC (naive)."""
+    return dt.replace(tzinfo=MT_SERVER_TZ).astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def now_mt() -> datetime:
     """Current MT wall clock, naive (matches how OPEN_TIME is stored)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
-        hours=MT_TO_UTC_OFFSET_HOURS
-    )
+    return datetime.now(timezone.utc).astimezone(MT_SERVER_TZ).replace(tzinfo=None)
 
 
 def compute_window(anchor_hk: datetime, window_min: int) -> WindowRange:
@@ -584,17 +595,8 @@ def build_trades_sql(
 
 
 def _connect_mysql(settings: Settings):
-    return pymysql.connect(
-        host=settings.DB_HOST,
-        user=settings.DB_USER,
-        password=settings.DB_PASSWORD,
-        database=settings.FXBACK_DB_NAME,
-        port=int(settings.DB_PORT),
-        charset=settings.DB_CHARSET,
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=_MYSQL_CONNECT_TIMEOUT_SEC,
-        read_timeout=_MYSQL_READ_TIMEOUT_SEC,
-    )
+    """Default connection: replica, DictCursor, all three timeouts."""
+    return connect_readonly(settings, max_execution_ms=_MYSQL_MAX_EXECUTION_MS)
 
 
 def fetch_window_trades(
@@ -604,6 +606,7 @@ def fetch_window_trades(
     sids: Sequence[int],
     symbol: Optional[str],
     scan_by: str = DEFAULT_SCAN_BY,
+    connect: Optional[Callable[[Settings], Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Fetch candidate rows whose open (or close) time falls in the window.
 
@@ -615,6 +618,10 @@ def fetch_window_trades(
     reached, i.e. the result is INCOMPLETE — it is propagated all the way
     into ``statistics`` because a silently short answer to "who profited"
     is worse than no answer.
+
+    ``connect`` overrides the connection factory (the AI agent passes its
+    own read-only helper). A MAX_EXECUTION_TIME kill is NOT caught here: it
+    surfaces as ``pymysql.err.OperationalError`` for the caller to map.
     """
     excluded_groupsids = _get_excluded_groupsids(settings)
     sql, params = build_trades_sql(
@@ -634,7 +641,7 @@ def fetch_window_trades(
     if symbol:
         params["symbol_like"] = f"{escape_like(symbol)}%"
 
-    conn = _connect_mysql(settings)
+    conn = (connect or _connect_mysql)(settings)
     with conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -704,6 +711,7 @@ def query_window_scan(
     symbol: Optional[str] = None,
     scan_by: str = DEFAULT_SCAN_BY,
     as_of_mt: Optional[datetime] = None,
+    connect: Optional[Callable[[Settings], Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Run one window scan. Returns (client rows, statistics).
 
@@ -733,7 +741,8 @@ def query_window_scan(
 
     t0 = time.perf_counter()
     raw_rows, truncated = fetch_window_trades(
-        settings, window=window, sids=sid_list, symbol=symbol, scan_by=scan_by
+        settings, window=window, sids=sid_list, symbol=symbol, scan_by=scan_by,
+        connect=connect,
     )
 
     trades = [build_trade_row(r, as_of) for r in raw_rows]
