@@ -644,3 +644,38 @@ def test_drill_down_subjects_include_the_resolved_clients(make_client, scripted_
         row = conn.execute("SELECT new_value FROM audit_log WHERE action = 'ai.query.submit' ORDER BY id DESC LIMIT 1").fetchone()
     assert json.loads(row["new_value"])["subjects"] == [
         "alert:484606", "alert:484753", "client:166916", "client:162462"]
+
+
+def test_a_quiet_agent_longer_than_the_keepalive_does_not_kill_the_turn(make_client, scripted_agent, monkeypatch):
+    """2026-09-28 prod (trace req-4e221b39): a tool silent for > KEEPALIVE_SECONDS
+    (rank_accounts over a month) ended the turn as "agent stream ended
+    unexpectedly" — asyncio.wait_for cancelled the pending __anext__ of the
+    agent stream, which finalises the async generator. The read must survive
+    idle waits."""
+    import asyncio
+
+    from app.api.v1.routes import ai as ai_route
+    from app.core.users_db import get_users_db
+    from app.services import ai_gateway_service as gateway
+
+    monkeypatch.setattr(ai_route, "KEEPALIVE_SECONDS", 0.05)
+
+    async def _slow(settings, payload, *, token):
+        yield ("tool_use", {"name": "rank_accounts", "input": {"metric": "win_rate"}})
+        await asyncio.sleep(0.4)  # 8 keepalive periods of silence, like a 15s+ query
+        yield ("tool_done", {"name": "rank_accounts", "ok": False, "error_code": "upstream_timeout"})
+        yield ("text", {"delta": "narrow the window"})
+        yield ("usage", {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0, "cost_usd": None})
+        yield ("done", {"terminal_reason": "end_turn", "num_turns": 2})
+
+    monkeypatch.setattr(gateway, "open_agent_stream", _slow)
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    r = _turn(client, sid)
+    assert r.status_code == 200
+    assert "ended unexpectedly" not in r.text
+    assert "narrow the window" in r.text
+    with get_users_db() as conn:
+        row = conn.execute("SELECT new_value FROM audit_log WHERE action = 'ai.query.submit' ORDER BY id DESC LIMIT 1").fetchone()
+    v = json.loads(row["new_value"])
+    assert v["tools_called"] == ["rank_accounts"] and v.get("error_code") is None

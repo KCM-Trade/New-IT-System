@@ -623,6 +623,14 @@ async def run_sync_with_timeout(
             {"trace_id": ctx.trace_id},
         )
     except Exception as exc:  # noqa: BLE001 — the contract forbids raising
+        # A MySQL statement/read timeout is the documented `upstream_timeout`
+        # (§2.6: "narrow the range, retry once"), not an internal error — for
+        # EVERY tool, not only the ones that wrap their own calls
+        # (rank_accounts over a month returned `internal`, 2026-09-28).
+        timeout_env = mysql_timeout_envelope(exc, ctx)
+        if timeout_env is not None:
+            logger.warning("AI tool MySQL timeout fn=%s trace=%s: %s", getattr(fn, "__name__", fn), ctx.trace_id, exc)
+            return timeout_env
         logger.error("AI tool internal error fn=%s trace=%s: %s", getattr(fn, "__name__", fn), ctx.trace_id, exc, exc_info=True)
         return error_envelope(
             "internal",
