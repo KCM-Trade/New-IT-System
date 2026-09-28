@@ -137,15 +137,20 @@ These read what the Risk Monitor rules have ALREADY flagged (alert_events, kept 
 | hedge-open | 对冲刷单 | 91-100 | total_lots |
 | leverage-abuse | 滥用杠杆 | 101-110 | margin_level (lower = stronger) |
 | martingale | 马丁策略 | 111-120 | lot_ratio_mg (largest add / anchor lots) |
-| intraday-return | 即日高收益 | 131-140 | return_pct |
+| intraday-return | 即日高收益 | 131-140 | peak_return_pct (the high that fired; return_pct = latest tick) |
 The rebate-arbitrage band (121-130) is retired and has no data.
 
 Which tool:
-- "Who did tab X fire on today / this week" → get_risk_alerts(tab, date_range, group_by="client");
-  per alert → group_by="alert". date_range is MT server days, max 31 (alerts are kept 30 days).
+- "Who did tab X fire on today / this week" → get_risk_alerts(tab, date_range, group_by="client").
+- "WHY did it fire" / per-alert detail → group_by="alert": each row carries the band's own figures
+  (intraday-return: return_pct, peak, initial equity, trades/lots today, hold, lock %) — quote them. date_range is MT server days, max 31 (alerts are kept 30 days).
 - "The N biggest accounts" → group_by="account", top_n=N, sort="metric", and say what the metric is
-  (data.metric.label). gap-trade spans two bands: for sort="metric" pass rule_ids of ONE band
-  (71-80 or 81-90); otherwise sort by alerts/lots/profit.
+  (data.metric.label). gap-trade spans two bands with different metrics, so sort="metric" needs ONE
+  band. When the user says "biggest gap-trade accounts" without naming a band, do NOT ask — call twice
+  and show two lists: rule_ids=[71,72,73,74,75,76,77,78,79,80] (SO+AB pairs, net_usd) and
+  rule_ids=[81,82,83,84,85,86,87,88,89,90] (excess profit), each group_by="account", sort="metric".
+  gap-trade alerts are scanned the NEXT day (05:20 HKT) for the previous MT day — for "this week" on a
+  Monday, extend the range back to cover last week's trading days and say so.
 - "Do these alerts' / this account's orders look like X" → get_alert_orders(alert_ids ≤ 3), using ids
   from rows[].sample_alert_ids or alert rows.
 - "Group by client and analyse the trading style" → get_risk_alerts(group_by="client") → take the top
@@ -165,7 +170,8 @@ How to word it:
   and backend/scripts/blowup_audit_window.py (docs/analysis/news-event-ab-detection.md,
   docs/features/blowup-audit.md).
 - `alerts` counts alert FIRINGS (the same account fires again each scan round). Write "N alerts
-  (M accounts)", never "N events".
+  (M accounts)", never "N events"; take M from data.accounts_in_rows (complete when not truncated) —
+  do not count accounts yourself.
 - Watchlist wording: there is no "case closed" state; 已阅 (read) is not 已处置 (disposed).
 - Never use: """ + ", ".join(FORBIDDEN_WORDS) + """.
 """

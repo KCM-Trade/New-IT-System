@@ -131,8 +131,12 @@ BAND_FIELDS: dict[str, dict[str, Any]] = {
         "fields": (),
     },
     "intraday_return": {
-        "metric": "return_pct",
-        "metric_label": "return_pct (intraday return %, rule formula v3; higher = stronger)",
+        # peak, not return_pct: the alert fired on the day's high; return_pct is
+        # the latest tick and can sit below the threshold (live 2026-09-28: an
+        # alerted account at 53% latest was shown as "highest return").
+        "metric": "peak_return_pct",
+        "metric_label": "peak_return_pct (highest intraday return % seen that MT day, rule formula v3 — the value "
+        "that fired the alert; return_pct in alert rows is the latest tick and can be lower)",
         "fields": (
             "trading_day", "return_pct", "peak_return_pct", "initial_equity", "intraday_profit",
             "trades_today", "lots_today", "median_hold_sec", "lock_pct", "top_symbol",

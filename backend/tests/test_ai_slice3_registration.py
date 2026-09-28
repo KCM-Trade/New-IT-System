@@ -243,3 +243,40 @@ def test_harness_passes_risk_flag_to_the_prompt(monkeypatch):
         with pytest.raises(_Boom):
             asyncio.run(drain(c))
         assert seen.get("risk_tools") is expected
+
+
+def test_risk_tools_are_capped_at_two_calls_per_turn(monkeypatch):
+    """03 §3's per-turn cap, enforced for the Risk control tools: the third
+    call in one turn is refused without reaching the impl."""
+    pytest.importorskip("agent_framework")
+    import asyncio
+
+    from app.ai_agent import harness
+
+    hits: list[dict] = []
+
+    async def fake_impl(_ctx, **kw):
+        hits.append(kw)
+        return {"ok": True, "data": {}, "source": {"certified": True}}
+
+    monkeypatch.setitem(harness.TOOL_IMPLS, "get_alert_orders", fake_impl)
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(e, d):
+        events.append((e, d))
+
+    tools = {t.name: t for t in harness.build_tools(ctx(["*"]), _emit)}
+    results = [
+        asyncio.run(tools["get_alert_orders"].invoke(alert_ids=[i], max_orders_per_alert=10)) for i in (1, 2, 3)
+    ]
+    assert len(hits) == 2
+    third = results[2] if isinstance(results[2], dict) else None
+    done = [d for e, d in events if e == "tool_done"]
+    assert [d["ok"] for d in done] == [True, True, False]
+    assert done[2]["error_code"] == "invalid_argument"
+    if third is not None:
+        assert third["ok"] is False
+    # a fresh turn (new build_tools) starts from zero
+    tools2 = {t.name: t for t in harness.build_tools(ctx(["*"]), _emit)}
+    asyncio.run(tools2["get_alert_orders"].invoke(alert_ids=[4], max_orders_per_alert=10))
+    assert len(hits) == 3

@@ -610,3 +610,14 @@ def test_ai_is_scoped_since_slice_two():
     assert ROUTE_SCOPE["/ai/usage/today"] == OPEN
     assert ROUTE_SCOPE["/ai/sessions"] == OPEN
     assert ROUTE_SCOPE["/ai/sessions/{session_id}"] == OPEN
+
+
+def test_subject_labels_cover_group_tool_id_lists():
+    from app.api.v1.routes.ai import _subject_labels
+
+    assert _subject_labels({"subject": {"kind": "client_id", "value": "146530"}}) == ["client:146530"]
+    assert _subject_labels({"subject": {"kind": "login_sid", "value": "1-8522845"}}) == ["login:1-8522845"]
+    assert _subject_labels({"tab": "intraday-return", "client_ids": [1, 2]}) == ["client:1", "client:2"]
+    assert _subject_labels({"alert_ids": [484606, 484753]}) == ["alert:484606", "alert:484753"]
+    assert _subject_labels({"tab": "gap-trade", "client_ids": None}) == []
+    assert _subject_labels(None) == []

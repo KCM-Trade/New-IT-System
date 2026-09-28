@@ -285,3 +285,19 @@ def test_caveats_carry_the_contract_lines(db):
     text = " ".join(env["definition"]["caveats"])
     for token in ("30 days", "FIRINGS", "trading_day", "NULL", "121-130", "signal ≠ violation"):
         assert token in text, token
+
+
+def test_accounts_in_rows_counts_distinct_accounts_for_every_grouping(db):
+    # leverage week: client 100 has one account fired twice, 200 and 300 one each → 3 accounts
+    by_client = call(tab="leverage-abuse", group_by="client", date_range=WEEK)["data"]
+    assert by_client["accounts_in_rows"] == 3
+    by_alert = call(tab="leverage-abuse", group_by="alert", date_range=WEEK)["data"]
+    assert by_alert["alerts_total"] == 4 and by_alert["accounts_in_rows"] == 3
+
+
+def test_intraday_metric_is_the_peak_that_fired_not_the_latest_tick(db):
+    env = call(tab="intraday-return", group_by="account", sort="metric", date_range=DAY, top_n=1)
+    d = env["data"]
+    assert d["metric"]["key"] == "peak_return_pct"
+    # fixture: account 1-11 return_pct 200, peak 210
+    assert d["rows"][0]["login_sid"] == "1-11" and d["rows"][0]["top_metric"] == 210.0

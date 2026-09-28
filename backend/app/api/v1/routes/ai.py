@@ -122,27 +122,43 @@ def _quota_user_id(user: SessionUser | None) -> int:
     return int(user.user_id) if user is not None else 0
 
 
-def _subject_label(tool_input: Any) -> str | None:
-    """``{"subject": {"kind": "client_id", "value": "123"}}`` -> ``client:123``.
+# Group-level tools (OPT-0066) name who they look at through id LISTS instead
+# of one `subject`; each id becomes its own audit label. Alert ids are kept as
+# `alert:<id>` — the tool resolves them to clients server-side, and the id is
+# what makes the drill-down reproducible from the audit row alone.
+_SUBJECT_LIST_KEYS = (("client_ids", "client"), ("alert_ids", "alert"))
+_MAX_LABELS_PER_CALL = 50
+
+
+def _subject_labels(tool_input: Any) -> list[str]:
+    """What the model asked a tool to look at, as audit labels.
+
+    ``{"subject": {"kind": "client_id", "value": "123"}}`` -> ``["client:123"]``;
+    ``{"client_ids": [1, 2]}`` -> ``["client:1", "client:2"]``;
+    ``{"alert_ids": [9]}`` -> ``["alert:9"]``.
 
     Read from the agent's ``tool_use`` event, i.e. what the model actually
     asked the tool for — the audit wants "who was looked at", not the words in
     the question.
     """
     if not isinstance(tool_input, dict):
-        return None
+        return []
+    labels: list[str] = []
     subject = tool_input.get("subject")
-    if not isinstance(subject, dict):
-        return None
-    kind = subject.get("kind")
-    value = subject.get("value")
-    if value is None:
-        return None
-    if kind == "client_id":
-        return f"client:{value}"
-    if kind == "login_sid":
-        return f"login:{value}"
-    return f"{kind}:{value}"
+    if isinstance(subject, dict) and subject.get("value") is not None:
+        kind = subject.get("kind")
+        value = subject.get("value")
+        if kind == "client_id":
+            labels.append(f"client:{value}")
+        elif kind == "login_sid":
+            labels.append(f"login:{value}")
+        else:
+            labels.append(f"{kind}:{value}")
+    for key, prefix in _SUBJECT_LIST_KEYS:
+        ids = tool_input.get(key)
+        if isinstance(ids, list):
+            labels.extend(f"{prefix}:{v}" for v in ids[:_MAX_LABELS_PER_CALL] if v is not None)
+    return labels
 
 
 def _resolve_tool_entry(entries: list[dict[str, Any]], done: dict) -> None:
@@ -411,9 +427,9 @@ async def turn(
                                     "input": data.get("input"),
                                 }
                             )
-                        label = _subject_label(data.get("input"))
-                        if label and label not in subjects:
-                            subjects.append(label)
+                        for label in _subject_labels(data.get("input")):
+                            if label not in subjects:
+                                subjects.append(label)
                         if name == RUN_SQL_TOOL:
                             sql_text = (data.get("input") or {}).get("sql") if isinstance(data.get("input"), dict) else None
                             if isinstance(sql_text, str) and sql_text.strip():

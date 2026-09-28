@@ -63,8 +63,8 @@ from agent_framework.openai import OpenAIChatClient
 from app.core.logging_config import get_logger
 
 from .prompt import TOOL_DOCSTRINGS, system_prompt
-from .tools import TOOL_IMPLS, CallerCtx
-from .tools.common import risk_tools_enabled
+from .tools import RISK_TOOL_NAMES, TOOL_IMPLS, CallerCtx
+from .tools.common import error_envelope, risk_tools_enabled
 from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
 from .tools.run_sql import run_sql as run_sql_impl
 
@@ -150,6 +150,12 @@ Subject = Annotated[SubjectArg, "{'kind': 'client_id'|'login_sid', 'value': str}
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
+# 03 §3 "each tool at most twice per turn", ENFORCED for the Risk control tools
+# (OPT-0066): get_alert_orders' 200-orders-per-call cap only bounds a turn's
+# cost if the call count is bounded too (live run 2026-09-28: the model called
+# it three times in one turn). Older tools still rely on the prompt sentence.
+MAX_CALLS_PER_TOOL_PER_TURN = 2
+
 
 def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None) -> list:
     """Per-request tool closures. ``emit`` publishes tool_use / tool_done.
@@ -162,9 +168,20 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
     if risk_tools is None:
         risk_tools = risk_tools_enabled(ctx)
 
+    calls: dict[str, int] = {}
+
     async def _run(name: str, impl, **kwargs: Any) -> dict:
         await emit("tool_use", {"name": name, "input": kwargs})
-        envelope = await impl(ctx, **kwargs)
+        calls[name] = calls.get(name, 0) + 1
+        if name in RISK_TOOL_NAMES and calls[name] > MAX_CALLS_PER_TOOL_PER_TURN:
+            envelope = error_envelope(
+                "invalid_argument",
+                f"{name} may be called at most {MAX_CALLS_PER_TOOL_PER_TURN} times per turn. Answer with what you "
+                "have and offer to look at the rest in a follow-up question.",
+                {"calls": calls[name], "limit": MAX_CALLS_PER_TOOL_PER_TURN},
+            )
+        else:
+            envelope = await impl(ctx, **kwargs)
         done: dict[str, Any] = {
             "name": name,
             "ok": bool(envelope.get("ok")),

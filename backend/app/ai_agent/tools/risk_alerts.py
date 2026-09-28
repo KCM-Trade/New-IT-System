@@ -511,6 +511,13 @@ async def get_risk_alerts(
         "groups_total": groups_total,
         "alerts_total": alerts_total,
         "alerts_by_rule": alerts_by_rule,
+        # Distinct accounts across the RETURNED rows, so "N alerts (M accounts)"
+        # never has to be counted by the model (it miscounted in the live run).
+        # Complete only when `truncated` is false.
+        "accounts_in_rows": len(
+            {r["login_sid"] for r in rows if r.get("login_sid")}
+            | {sid for r in rows for sid in (r.get("login_sids") or [])}
+        ),
         "rows_masked_by_scope": rows_masked,
         "verdict": None,
     }

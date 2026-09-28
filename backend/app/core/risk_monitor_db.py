@@ -2930,6 +2930,10 @@ AGG_METRICS: dict[str, tuple[str, str]] = {
     "margin_level":     ("MIN(la.margin_level)", "asc"),
     "lot_ratio_mg":     ("MAX(mg.lot_ratio_mg)", "desc"),
     "return_pct":       ("MAX(ir.return_pct)", "desc"),
+    # The intraday rule fires when a tick crosses the threshold; return_pct is
+    # the LATEST tick and can fall back below it, peak_return_pct is the high
+    # that fired the alert — the one to rank "strength" by.
+    "peak_return_pct":  ("MAX(ir.peak_return_pct)", "desc"),
 }
 AGG_GROUP_BY: tuple[str, ...] = ("account", "client", "rule")
 AGG_SORTS: tuple[str, ...] = ("alerts", "lots", "profit", "metric")
