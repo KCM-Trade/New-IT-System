@@ -48,12 +48,14 @@ def test_prompt_no_longer_claims_amnesia_but_still_denies_other_capabilities():
 
 
 def test_prompt_carries_the_run_sql_rules():
-    """02 §10.3: only when no certified tool can answer, <= 2 calls per turn,
-    the answer says uncertified, shows the SQL, and lists the 口径 pitfalls."""
+    """02 §10.3: only when no certified tool can answer, at most the harness'
+    (no per-turn call cap since 2026-09-28), the answer says uncertified, shows the SQL, and lists
+    the 口径 pitfalls. The call budget is read from the harness so the prompt
+    and the enforcement can never drift apart."""
     flat = " ".join(ANALYST_SYSTEM_PROMPT.split())
     assert "## run_sql" in ANALYST_SYSTEM_PROMPT
     assert "ONLY when no certified tool can answer" in flat
-    assert "at most 2 calls per turn" in flat
+    assert "There is no per-tool call limit" in flat  # removed 2026-09-28
     assert "未认证 / uncertified" in flat
     assert "show the exact SQL you ran" in flat
     for pitfall in ("divide by 100", "isEmployee", "sid=5 closed rows have CMD inverted", "MT server days"):
@@ -75,3 +77,53 @@ def test_rule_one_allows_restated_figures_only_when_marked():
 def test_prompt_tells_the_model_how_to_resolve_an_omitted_id():
     flat = " ".join(ANALYST_SYSTEM_PROMPT.split())
     assert "use the subject from earlier in this conversation and say which one you assumed" in flat
+
+
+# ── run_sql schema card + net-deposit wording (2026-09-28) ───────────────────
+
+
+def test_schema_card_only_when_run_sql_is_registered():
+    from app.ai_agent.prompt import RUN_SQL_SCHEMA_BLOCK
+
+    assert RUN_SQL_SCHEMA_BLOCK not in system_prompt()
+    assert RUN_SQL_SCHEMA_BLOCK in system_prompt(run_sql=True)
+
+
+def test_schema_card_names_the_join_path_and_the_cid_trap():
+    """The two facts whose absence produced silent garbage, not an error."""
+    from app.ai_agent.prompt import RUN_SQL_SCHEMA_BLOCK as card
+
+    assert "mt4_trades.loginSid = mt4_users.loginSid" in card
+    assert "mt4_users.userId = users.id" in card
+    assert "NO client-id column on mt4_trades" in card
+    assert "`users.cid` is NOT a client id" in card
+
+
+def test_schema_card_covers_every_whitelisted_table_and_no_pii_column():
+    import re
+
+    from app.ai_agent.prompt import RUN_SQL_SCHEMA_BLOCK as card
+    from app.ai_agent.tools import run_sql as rs
+
+    for table in rs.MYSQL_TABLES:
+        assert re.search(rf"^{table}\b", card, re.M) or f"{table}:" in card, table
+    words = {w.lower() for w in re.findall(r"[A-Za-z_]+", card)}
+    # A column the card advertises must not be one the guard refuses.
+    assert not (words & rs.PII_COLUMNS), words & rs.PII_COLUMNS
+
+
+def test_schema_card_statement_budget_matches_the_guard():
+    from app.ai_agent.prompt import RUN_SQL_SCHEMA_BLOCK as card
+    from app.ai_agent.tools import run_sql as rs
+
+    assert f"{rs.STATEMENT_TIMEOUT_MS // 1000}s" in card
+    assert f"{rs.STATEMENT_TIMEOUT_MS // 1000}s statement budget" in TOOL_DOCSTRINGS["run_sql"]
+
+
+def test_net_deposit_wording_allows_a_labelled_sum_and_routes_profit_to_net_gain():
+    """Old wording ("do not add them back together unless…") was read as
+    "cannot combine" and the model refused (2026-09-28)."""
+    p = ANALYST_SYSTEM_PROMPT
+    assert "Do not add them\n  back together" not in p
+    assert "legacy net deposit (incl. IB withdrawal)" in p
+    assert "net_gain question, not a net-deposit question" in p

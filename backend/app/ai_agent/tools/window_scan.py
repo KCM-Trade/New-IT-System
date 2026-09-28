@@ -41,7 +41,7 @@ from .common import (
 TOOL_NAME = "get_window_scan"
 
 MAX_TOP_N = 50
-MAX_ANCHOR_AGE_DAYS = 366
+MAX_ANCHOR_AGE_DAYS: Optional[int] = None  # keep in step with common.MAX_RANGE_DAYS (None = no cap)
 TRADES_MAX_TOP_N = 5
 SORTS = {"net_gain": "net_gain", "closed_profit": "closed_profit", "lots": "lots_sum"}
 _ANCHOR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$")
@@ -102,10 +102,12 @@ async def get_window_scan(
     except ValueError:
         return error_envelope("invalid_argument", "anchor_hk is not a real date/time")
     now_hk = datetime.now(_HK)
-    if anchor_dt > now_hk + timedelta(minutes=1) or now_hk - anchor_dt > timedelta(days=MAX_ANCHOR_AGE_DAYS):
+    too_old = MAX_ANCHOR_AGE_DAYS is not None and now_hk - anchor_dt > timedelta(days=MAX_ANCHOR_AGE_DAYS)
+    if anchor_dt > now_hk + timedelta(minutes=1) or too_old:
         return error_envelope(
             "range_too_wide",
-            f"anchor_hk must be in the past and within {MAX_ANCHOR_AGE_DAYS} days.",
+            "anchor_hk must be in the past"
+            + (f" and within {MAX_ANCHOR_AGE_DAYS} days." if MAX_ANCHOR_AGE_DAYS is not None else "."),
             {"anchor_hk": str(anchor_hk)},
         )
 

@@ -2,8 +2,9 @@
 
 "Which orders are behind these alerts, and what do they look like?" — the
 drill-down from ``get_risk_alerts`` (its ``sample_alert_ids``). Up to 3 alert
-ids per call: 03 §3 allows each tool 2 calls per turn and "group by client,
-then analyse the style" usually needs 2–3 representative alerts.
+ids per call: "group by client, then analyse the style" usually needs 2–3
+representative alerts (there is no per-turn call cap since 2026-09-28, so more
+alerts are more calls, not a bigger one).
 
 Steps per alert: read the stored alert (``get_alerts_by_ids`` on a read-only
 connection) → single-subject scope check on its client (restricted callers) →

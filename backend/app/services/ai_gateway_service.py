@@ -34,8 +34,14 @@ logger = get_logger(__name__)
 # by the tool contract (02 §2.7). The whole turn is capped separately by the
 # route (TURN_TOTAL_SECONDS) so a stuck stream cannot hold a worker forever.
 AGENT_CONNECT_TIMEOUT_S = 5.0
-AGENT_READ_TIMEOUT_S = 120.0
-TURN_TOTAL_SECONDS = 300.0
+# Raised with the tool budget on 2026-09-28. The ordering that matters:
+# harness.TURN_WALL_CLOCK_SECONDS (520) < TURN_TOTAL_SECONDS (560) < nginx
+# proxy_read_timeout for /api/v1/ai/turn (600). The agent must be the one that
+# gives up first, because only it can end the turn with a written answer.
+# AGENT_READ_TIMEOUT_S is the gap BETWEEN events and so must exceed the longest
+# silence a tool can cause (tools.common.TOOL_TIMEOUT_SECONDS, now 60s).
+AGENT_READ_TIMEOUT_S = 180.0
+TURN_TOTAL_SECONDS = 560.0
 
 # SSE keepalive while waiting on the agent — the shared figure in core/sse.py.
 KEEPALIVE_SECONDS = SSE_KEEPALIVE_SECONDS

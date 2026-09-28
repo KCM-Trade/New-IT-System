@@ -8,7 +8,8 @@ What is pinned here and why:
     the model with wording nobody reviewed);
   * scope: ``None`` passes, ``frozenset()`` refuses, an unresolvable cid
     refuses a restricted caller (fail closed), and the refusal is logged;
-  * range 366 ok / 367 refused, demo & employee refused with subject_excluded,
+  * no generic range cap (MAX_RANGE_DAYS is None), demo & employee
+    refused with subject_excluded,
     CEN ÷100, sid=5 closed CMD flipped, alerts capped at 500 with the full
     count kept, verdict None, masked peers counted, IPs masked.
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -67,10 +68,11 @@ def subject_ok(monkeypatch):
 
 @pytest.fixture
 def overview_data(monkeypatch):
-    monkeypatch.setattr(co, "_fetch_money_pg", lambda s, cid: {"profit_all": 10.0, "rebate_all": 2.0, "floating_pl": -1.0, "net_gain": 11.0})
-    monkeypatch.setattr(co, "_fetch_net_deposit_split", lambda s, cid: {"net_deposit_trading": 500.0, "ib_withdrawal": -20.0})
+    # Data access is batch: a list of client ids in, a dict keyed by id out.
+    monkeypatch.setattr(co, "_fetch_money_pg", lambda s, cids: {c: {"profit_all": 10.0, "rebate_all": 2.0, "floating_pl": -1.0, "net_gain": 11.0} for c in cids})
+    monkeypatch.setattr(co, "_fetch_net_deposit_split", lambda s, cids: {c: {"net_deposit_trading": 500.0, "ib_withdrawal": -20.0} for c in cids})
     monkeypatch.setattr(co, "_fetch_last_trades", lambda s, sids, rng: {"1-8522845": "2026-09-20T10:00:00Z"})
-    monkeypatch.setattr(co, "_fetch_activity", lambda s, cid, asof: {"activity_status": "active_7d", "crm_tags": ["VIP"], "holding_live": True})
+    monkeypatch.setattr(co, "_fetch_activity", lambda s, cids, asof: {c: {"activity_status": "active_7d", "crm_tags": ["VIP"], "holding_live": True} for c in cids})
 
 
 # ── envelope + validation ────────────────────────────────────────────────────
@@ -99,12 +101,13 @@ def test_bad_subject_is_a_structured_error(subject, subject_ok, overview_data):
     assert env["ok"] is False and env["error"]["code"] == "invalid_argument"
 
 
-def test_range_366_days_ok_367_refused(subject_ok, overview_data):
-    ok = run(co.get_client_overview(ctx(), CLIENT, {"from": "2025-09-27", "to": "2026-09-27"}))
-    assert ok["ok"] is True  # 366 days inclusive
-    bad = run(co.get_client_overview(ctx(), CLIENT, {"from": "2025-09-26", "to": "2026-09-27"}))
-    assert bad["ok"] is False and bad["error"]["code"] == "range_too_wide"
-    assert bad["error"]["detail"] == {"days": 367, "max_days": 366}
+def test_no_generic_range_cap(subject_ok, overview_data):
+    """The generic cap was removed on 2026-09-28 (366 -> 1096 -> None): a
+    ten-year "since the account opened" range is accepted. Tools whose limit
+    is a fact about the data (rank_accounts, get_risk_alerts) keep their own."""
+    assert common.MAX_RANGE_DAYS is None
+    env = run(co.get_client_overview(ctx(), CLIENT, {"from": "2016-01-01", "to": "2026-09-27"}))
+    assert env["ok"] is True
 
 
 def test_reversed_range_is_invalid(subject_ok, overview_data):
@@ -447,3 +450,88 @@ def test_shared_ip_leg_degrades_instead_of_failing_the_tool(subject_ok, signals_
     assert d["shared_ip"] is None
     assert len(d["alerts"]) == 500 and d["cases"] and d["crm_risk_tags"]
     assert any(c.startswith("shared-IP leg unavailable: internal") for c in env["definition"]["caveats"])
+
+
+# ── get_client_overview batch form (2026-09-28) ─────────────────────────────
+
+
+def _resolved_for(cid_by_value: dict):
+    """_fetch_subject stub: client_id value -> ResolvedSubject with that id;
+    a value missing from the map is not found."""
+
+    def _fetch(settings, subject):
+        if subject.value not in cid_by_value:
+            return None
+        r = resolved()
+        return ResolvedSubject(client_id=int(subject.value), cid=cid_by_value[subject.value], is_employee=False,
+                               country=r.country, registered_at=None, accounts=r.accounts,
+                               excluded_accounts=0, crm_row_found=True)
+
+    return _fetch
+
+
+def test_batch_fetches_money_once_for_all_subjects(monkeypatch, overview_data):
+    """The point of the batch form: ONE call per money service, not one per client."""
+    seen: list = []
+    monkeypatch.setattr(common, "_fetch_subject", _resolved_for({"11": 1, "22": 1, "33": 1}))
+    monkeypatch.setattr(
+        co, "_fetch_money_pg",
+        lambda s, cids: seen.append(list(cids)) or {c: {"profit_all": c, "rebate_all": 0.0, "floating_pl": 0.0, "net_gain": c} for c in cids},
+    )
+    subjects = [{"kind": "client_id", "value": v} for v in ("11", "22", "33")]
+    env = run(co.get_client_overviews(ctx(), subjects, RANGE))
+    assert env["ok"] is True
+    assert seen == [[11, 22, 33]]
+    assert [c["client"]["client_id"] for c in env["data"]["clients"]] == [11, 22, 33]
+    assert [c["money"]["net_gain"] for c in env["data"]["clients"]] == [11, 22, 33]
+    assert env["data"]["failed"] == []
+    assert any("`failed`" in c for c in env["definition"]["caveats"])
+
+
+def test_batch_reports_failed_subjects_without_failing_the_others(monkeypatch, overview_data):
+    monkeypatch.setattr(common, "_fetch_subject", _resolved_for({"11": 1}))
+    subjects = [{"kind": "client_id", "value": "11"}, {"kind": "client_id", "value": "99"}]
+    env = run(co.get_client_overviews(ctx(), subjects, RANGE))
+    assert env["ok"] is True
+    assert [c["subject"] for c in env["data"]["clients"]] == ["client:11"]
+    assert env["data"]["failed"] == [
+        {"subject": "client:99", "code": "subject_not_found", "message": env["data"]["failed"][0]["message"]}
+    ]
+
+
+def test_batch_applies_scope_per_subject(monkeypatch, overview_data):
+    """A restricted caller's batch must refuse the out-of-scope subject and keep the rest."""
+    monkeypatch.setattr(common, "_fetch_subject", _resolved_for({"11": 1, "22": 0}))
+    subjects = [{"kind": "client_id", "value": "11"}, {"kind": "client_id", "value": "22"}]
+    env = run(co.get_client_overviews(ctx(scope=frozenset({1})), subjects, RANGE))
+    assert [c["client"]["client_id"] for c in env["data"]["clients"]] == [11]
+    assert [(f["subject"], f["code"]) for f in env["data"]["failed"]] == [("client:22", "scope_denied")]
+
+
+@pytest.mark.parametrize("subjects", [None, [], {"kind": "client_id", "value": "1"}])
+def test_batch_needs_a_non_empty_list(subjects, subject_ok, overview_data):
+    env = run(co.get_client_overviews(ctx(), subjects, RANGE))
+    assert env["ok"] is False and env["error"]["code"] == "invalid_argument"
+
+
+def test_batch_cap_and_bad_member(subject_ok, overview_data):
+    too_many = [{"kind": "client_id", "value": str(i)} for i in range(co.MAX_SUBJECTS + 1)]
+    env = run(co.get_client_overviews(ctx(), too_many, RANGE))
+    assert env["error"]["code"] == "invalid_argument" and env["error"]["detail"]["limit"] == co.MAX_SUBJECTS
+    env = run(co.get_client_overviews(ctx(), [CLIENT, {"kind": "email", "value": "a@b"}], RANGE))
+    assert env["error"]["code"] == "invalid_argument" and env["error"]["detail"]["index"] == 1
+
+
+def test_batch_data_source_failure_fails_the_call(subject_ok, overview_data, monkeypatch):
+    def _boom(s, cids):
+        raise RuntimeError("pg down")
+
+    monkeypatch.setattr(co, "_fetch_money_pg", _boom)
+    env = run(co.get_client_overviews(ctx(), [CLIENT], RANGE))
+    assert env["ok"] is False and env["error"]["code"] == "internal"
+
+
+def test_model_facing_overview_is_the_batch_form():
+    from app.ai_agent.tools import TOOL_IMPLS
+
+    assert TOOL_IMPLS["get_client_overview"] is co.get_client_overviews

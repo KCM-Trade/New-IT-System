@@ -49,10 +49,19 @@ T = TypeVar("T")
 
 # ── contract constants (§2.7) ────────────────────────────────────────────────
 
-MAX_RANGE_DAYS = 366
+# No generic cap (None) since 2026-09-28 (366 -> 1096 -> removed at the user's
+# request): "since the account opened" is a normal risk question. What protects
+# the replica is TOOL_TIMEOUT_SECONDS plus the DB-side statement timeouts, and
+# the two tools whose limit is a fact about the data keep their own cap
+# (rank_accounts 92 days = whole-universe scan, get_risk_alerts 31 days because
+# alert_events is only kept 30).
+MAX_RANGE_DAYS: Optional[int] = None
 MAX_ROWS = 200
 MAX_ALERTS = 500
-TOOL_TIMEOUT_SECONDS = 25.0
+# Raised from 25.0 on 2026-09-28. One tool call is one DB round trip, and the
+# turn budget (harness.TURN_WALL_CLOCK_SECONDS) is what bounds a turn; 25s made
+# every multi-year or group query fail as upstream_timeout.
+TOOL_TIMEOUT_SECONDS = 60.0
 DAY_BASIS = "MT server day (DST-aware, UTC+3 summer / UTC+2 winter, US DST calendar)"
 
 # ── MySQL connection: the db-timeout-guard three lines ──────────────────────
@@ -336,7 +345,7 @@ class DateRange:
 
 
 def parse_date_range(raw: Any) -> DateRange | dict:
-    """Closed interval of MT server days, at most MAX_RANGE_DAYS wide.
+    """Closed interval of MT server days, at most MAX_RANGE_DAYS wide (None = no cap).
 
     Over-wide ranges are REFUSED with ``range_too_wide``, not clipped: a
     silently narrowed window is a number that looks right and is not (§2.4).
@@ -353,7 +362,7 @@ def parse_date_range(raw: Any) -> DateRange | dict:
     if day_from > day_to:
         return error_envelope("invalid_argument", "date_range.from is after date_range.to")
     rng = DateRange(day_from, day_to)
-    if rng.days > MAX_RANGE_DAYS:
+    if MAX_RANGE_DAYS is not None and rng.days > MAX_RANGE_DAYS:
         return error_envelope(
             "range_too_wide",
             f"date_range spans {rng.days} days; the limit is {MAX_RANGE_DAYS}. Narrow the range.",

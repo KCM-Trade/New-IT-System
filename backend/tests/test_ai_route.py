@@ -617,6 +617,11 @@ def test_subject_labels_cover_group_tool_id_lists():
 
     assert _subject_labels({"subject": {"kind": "client_id", "value": "146530"}}) == ["client:146530"]
     assert _subject_labels({"subject": {"kind": "login_sid", "value": "1-8522845"}}) == ["login:1-8522845"]
+    # get_client_overview's batch form: every subject becomes a label.
+    assert _subject_labels(
+        {"subjects": [{"kind": "client_id", "value": "1"}, {"kind": "login_sid", "value": "5-60001"}]}
+    ) == ["client:1", "login:5-60001"]
+    assert _subject_labels({"subjects": "nope"}) == []
     assert _subject_labels({"tab": "intraday-return", "client_ids": [1, 2]}) == ["client:1", "client:2"]
     assert _subject_labels({"alert_ids": [484606, 484753]}) == ["alert:484606", "alert:484753"]
     assert _subject_labels({"tab": "gap-trade", "client_ids": None}) == []

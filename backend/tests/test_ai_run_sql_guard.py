@@ -247,7 +247,9 @@ def test_connect_readonly_never_enables_multi_statements(monkeypatch):
         DB_PORT = 3306
         DB_CHARSET = "utf8mb4"
 
-    mysql_readonly.connect_readonly(_S(), max_execution_ms=rs.STATEMENT_TIMEOUT_MS)
+    mysql_readonly.connect_readonly(
+        _S(), max_execution_ms=rs.STATEMENT_TIMEOUT_MS, read_timeout=rs.MYSQL_READ_TIMEOUT_S
+    )
     assert "client_flag" not in captured
     assert captured["autocommit"] is True
     assert captured["read_timeout"] * 1000 > rs.STATEMENT_TIMEOUT_MS
@@ -259,7 +261,7 @@ def test_connect_readonly_never_enables_multi_statements(monkeypatch):
     assert not (default_flag & CLIENT.MULTI_STATEMENTS)
 
 
-def test_execute_mysql_passes_the_15s_statement_budget(monkeypatch):
+def test_execute_mysql_passes_the_statement_budget(monkeypatch):
     seen: dict[str, Any] = {}
 
     class _Cur:
@@ -284,13 +286,17 @@ def test_execute_mysql_passes_the_15s_statement_budget(monkeypatch):
         def close(self):
             seen["closed"] = True
 
-    def _fake_connect(settings, *, max_execution_ms):
+    def _fake_connect(settings, *, max_execution_ms, read_timeout):
         seen["max_execution_ms"] = max_execution_ms
+        seen["read_timeout"] = read_timeout
         return _Conn()
 
     monkeypatch.setattr(rs, "connect_readonly", _fake_connect)
     out = rs.execute_mysql(object(), "SELECT 1 LIMIT 201", 200)
-    assert seen["max_execution_ms"] == 15_000
+    assert seen["max_execution_ms"] == rs.STATEMENT_TIMEOUT_MS
+    # The client-side backstop must outlive the server-side budget, or the
+    # socket dies first and the error is a connection drop, not a timeout.
+    assert seen["read_timeout"] * 1000 > rs.STATEMENT_TIMEOUT_MS
     assert seen["closed"] is True
     # The executor runs EXACTLY the prepared text (prepare_sql owns the limit).
     assert seen["sql"] == "SELECT 1 LIMIT 201"
@@ -318,7 +324,7 @@ def _mysql_conn_raising(exc):
         def close(self):
             pass
 
-    return lambda settings, *, max_execution_ms: _Conn()
+    return lambda settings, *, max_execution_ms, read_timeout=None: _Conn()
 
 
 @pytest.mark.parametrize("errno", [3024, 1317, 2013])
@@ -372,7 +378,7 @@ def test_pg_query_canceled_maps_to_upstream_timeout(monkeypatch):
     assert out["error"]["code"] == "upstream_timeout"
 
 
-def test_pg_session_sets_read_only_and_the_15s_budget(monkeypatch):
+def test_pg_session_sets_read_only_and_the_statement_budget(monkeypatch):
     executed: list[str] = []
 
     class _Cur:
@@ -407,7 +413,7 @@ def test_pg_session_sets_read_only_and_the_15s_budget(monkeypatch):
     monkeypatch.setattr(rs, "pg_session", _fake_session)
     out = rs.execute_pg(_S(), "SELECT 1", 10)
     assert executed[0] == "SET TRANSACTION READ ONLY"
-    assert executed[1] == "SET LOCAL statement_timeout = 15000"
+    assert executed[1] == f"SET LOCAL statement_timeout = {rs.STATEMENT_TIMEOUT_MS}"
     assert out["rows"] == [[1, "***"]] and out["masked_columns"] == ["email"]
 
 
@@ -645,7 +651,7 @@ def test_pg_catalog_objects_and_server_functions_are_refused(sql):
 def test_pg_whitelisted_relations_still_pass():
     assert rs.validate_sql("SELECT id FROM kcm.crm_user_tags LIMIT 3", PG) is None
     assert rs.validate_sql("SELECT id FROM public.risk_cases", PG) is None
-    assert rs.validate_sql("SELECT generate_series(1, 10)", PG) is None  # bounded; the 15s budget covers abuse
+    assert rs.validate_sql("SELECT generate_series(1, 10)", PG) is None  # bounded; the statement budget covers abuse
 
 
 # ── LIMIT is pushed into the statement, not wrapped around it ────────────────
