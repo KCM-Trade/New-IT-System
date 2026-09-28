@@ -480,6 +480,18 @@ def test_harness_registers_run_sql_only_for_unrestricted_callers():
     certified = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar"]
     assert unrestricted == certified + ["run_sql"]
     assert restricted == empty_scope == certified
+    # OPT-0066: a third list — `risk` holders additionally get the three Risk
+    # control tools, but only when unrestricted (docs/ai-agent/11 §0 T1).
+    risk_tools = ["get_risk_alerts", "get_alert_orders", "get_window_scan"]
+
+    def _risk_ctx(scope):
+        return ctx_from_request({"user_id": 7, "email": "x@kohleservices.com", "role": "user",
+                                 "allowed_modules": ["ai", "risk"]}, scope, "trace-1")
+
+    with_risk = [t.name for t in harness.build_tools(_risk_ctx(None), _emit)]
+    risk_restricted = [t.name for t in harness.build_tools(_risk_ctx([1]), _emit)]
+    assert sorted(with_risk) == sorted(certified + ["run_sql"] + risk_tools)
+    assert risk_restricted == certified
 
 
 # ── the envelope ─────────────────────────────────────────────────────────────
