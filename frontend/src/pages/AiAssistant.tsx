@@ -9,6 +9,7 @@ import {
 import { AiStatusBar, type TodayUsage } from "@/components/ai/AiStatusBar"
 import { SessionList } from "@/components/ai/SessionList"
 import { SourceBadge } from "@/components/ai/SourceBadge"
+import { MarkdownMessage } from "@/components/ai/MarkdownMessage"
 import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
@@ -432,7 +433,7 @@ const MessageRow = memo(function MessageRow({
       </div>
       <div className="min-w-0 flex-1 space-y-2">
         {message.text && (
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</div>
+          <MarkdownMessage text={message.text} />
         )}
         {showThinking && <p className="text-sm text-muted-foreground">{t("ai.thinking")}</p>}
         {message.tools.length > 0 && (
