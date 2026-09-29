@@ -179,6 +179,16 @@ class Settings:
     AI_SESSION_RETENTION_DAYS: int
     FRED_API_KEY: str
 
+    # Execution-price compensation (OPT-0068, 01 D21)
+    EXEC_COMP_STATEMENT_TIMEOUT_MS: int
+    EXEC_COMP_QUERY_BUDGET_S: int
+    EXEC_COMP_MAX_DEALS: int
+    EXEC_COMP_MAX_CONCURRENT: int
+    EXEC_COMP_CACHE_TTL_S: int
+    EXEC_COMP_CACHE_MAX_BYTES: int
+    EXEC_COMP_PAGE_SIZE_MAX: int
+    EXEC_COMP_SLOT_DIR: str
+
     # Interactive API docs surface (Swagger /docs, ReDoc /redoc, /openapi.json)
     API_DOCS_ENABLED: bool
 
@@ -687,6 +697,30 @@ class Settings:
         # Optional: unset = the calendar carries FOMC dates only and the tool
         # says so (`fred_api_key_missing`). Never logged.
         self.FRED_API_KEY = (os.environ.get("FRED_API_KEY") or "").strip()
+
+        # ── Execution-price compensation (OPT-0068, docs/exec-compensation 01 D21)
+        # No precompute: every query reads the mt5_live replica on demand, so
+        # these are the guard rails that keep one query from hurting it.
+        # Defaults are the decided values; env only to tune without a deploy.
+        self.EXEC_COMP_STATEMENT_TIMEOUT_MS = int(
+            os.environ.get("EXEC_COMP_STATEMENT_TIMEOUT_MS", "10000")
+        )
+        self.EXEC_COMP_QUERY_BUDGET_S = int(os.environ.get("EXEC_COMP_QUERY_BUDGET_S", "60"))
+        self.EXEC_COMP_MAX_DEALS = int(os.environ.get("EXEC_COMP_MAX_DEALS", "500000"))
+        # Server-wide (all uvicorn worker processes) via flock slot files. The
+        # slot dir must be container-local (/tmp), never under backend/data:
+        # that bind mount is shared by dev and prod, which would share slots.
+        self.EXEC_COMP_MAX_CONCURRENT = int(os.environ.get("EXEC_COMP_MAX_CONCURRENT", "2"))
+        self.EXEC_COMP_CACHE_TTL_S = int(os.environ.get("EXEC_COMP_CACHE_TTL_S", "3600"))
+        # Prod Redis is 256MB allkeys-lru shared by every page: a row blob
+        # (compressed) above this is not cached — only the summary is.
+        self.EXEC_COMP_CACHE_MAX_BYTES = int(
+            os.environ.get("EXEC_COMP_CACHE_MAX_BYTES", str(8 * 1024 * 1024))
+        )
+        self.EXEC_COMP_PAGE_SIZE_MAX = int(os.environ.get("EXEC_COMP_PAGE_SIZE_MAX", "1000"))
+        self.EXEC_COMP_SLOT_DIR = (
+            os.environ.get("EXEC_COMP_SLOT_DIR") or "/tmp/exec_comp_slots"
+        ).strip()
 
         # ── Entra ID (Azure AD) OIDC provider (auth design P3) ───────────────
         # App registration lives in tenant 11cf6a7b-… (design doc §8.1). The

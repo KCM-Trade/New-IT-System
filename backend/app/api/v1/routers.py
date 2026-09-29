@@ -36,6 +36,7 @@ from .routes.window_scan import router as window_scan_router
 from .routes.ibid_lots import router as ibid_lots_router
 from .routes.honeypot import router as honeypot_router
 from .routes.ai import router as ai_router
+from .routes.exec_compensation import router as exec_compensation_router
 
 
 # The page-level permission gate (auth P4b) is mounted ONCE, here, on the
@@ -119,3 +120,7 @@ api_v1_router.include_router(honeypot_router, tags=["honeypot"])
 # The route relays to the ai-agent container; policy (gate, quota, audit)
 # stays here so the parent router's two dependencies cover it like any page.
 api_v1_router.include_router(ai_router, tags=["ai"])
+# Execution-price compensation (OPT-0068): /api/v1/exec-compensation/* —
+# classified `data` in MODULE_MAP (Data Query page, 01 D10). Read-only, no
+# audit (01 D16); rules live in services/exec_comp/query.py.
+api_v1_router.include_router(exec_compensation_router, tags=["exec-compensation"])

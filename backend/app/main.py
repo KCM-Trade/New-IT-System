@@ -27,6 +27,10 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 
 from app.api.v1.routers import api_v1_router
 from app.core.config import get_settings
@@ -36,6 +40,7 @@ from app.core.api_key_middleware import APIKeyMiddleware
 from app.core.auth_middleware import AuthMiddleware
 from app.core.audit_missing_middleware import AuditMissingMiddleware
 from app.core.users_db import init_users_db
+from app.services.exec_comp.errors import ExecCompError
 from app.core.ai_usage_db import init_ai_usage_db, purge_ai_sessions
 from app.core.sqlite_wal_keepalive import hold_wal_sidecars
 from app.core.database import init_db
@@ -433,6 +438,7 @@ def create_app() -> FastAPI:
 
     # Mount versioned routers
     app.include_router(api_v1_router, prefix="/api/v1")
+    _register_exec_comp_error_handlers(app)
 
     # Serve static files under /static from local ./public directory
     app.mount("/static", StaticFiles(directory="public"), name="static")
@@ -444,6 +450,36 @@ def create_app() -> FastAPI:
 
     logger.info("FastAPI application created successfully")
     return app
+
+
+_EXEC_COMP_PREFIX = "/api/v1/exec-compensation"
+
+
+def _register_exec_comp_error_handlers(app: FastAPI) -> None:
+    """Stable error body for the exec-compensation API (03 §4.2 rule 8):
+    ``{"error": {"code", "message"}}``. The validation handler is scoped to
+    that path prefix and delegates to FastAPI's default everywhere else, so no
+    other endpoint's 422 shape changes."""
+
+    @app.exception_handler(ExecCompError)
+    async def _exec_comp_error(request: Request, exc: ExecCompError):
+        return JSONResponse(
+            status_code=exc.status, content={"error": {"code": exc.code, "message": exc.message}}
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        if not request.url.path.startswith(_EXEC_COMP_PREFIX):
+            return await request_validation_exception_handler(request, exc)
+        errors = exc.errors()
+        code = "VALIDATION_ERROR"
+        if any(tuple(e.get("loc", ()))[-1:] == ("sort_by",) for e in errors):
+            code = "SORT_NOT_ALLOWED"
+        message = "; ".join(
+            f"{'.'.join(str(x) for x in e.get('loc', ())[1:]) or 'request'}: {e.get('msg', 'invalid')}"
+            for e in errors
+        ) or "invalid request"
+        return JSONResponse(status_code=422, content={"error": {"code": code, "message": message}})
 
 
 app = create_app()

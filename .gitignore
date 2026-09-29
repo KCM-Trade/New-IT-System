@@ -25,6 +25,11 @@ __pycache__
 # The ai-agent image's pip layer (OPT-0064); `*.txt` above would otherwise
 # drop it from every clean clone and break `COPY requirements-ai-agent.txt`.
 !backend/requirements-ai-agent.txt
+# exec-compensation (OPT-0068): offline MT5 fixtures + the OpenAPI contract
+# snapshot. `*.json` above would drop them from clean clones, and the snapshot
+# test would then stop guarding the contract.
+!backend/tests/fixtures/exec_comp/*.json
+!backend/tests/snapshots/*.json
 frontend/public/profit_last_refresh.txt
 *.csv
 *.xlsx
