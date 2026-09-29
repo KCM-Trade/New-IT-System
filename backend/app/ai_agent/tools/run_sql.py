@@ -483,7 +483,38 @@ def validate_sql(sql: Any, db: Any) -> Optional[dict]:
             if schema not in PG_SCHEMAS:
                 return _invalid(f"schema {schema} is not in the whitelist ({', '.join(sorted(PG_SCHEMAS))}.*)", text)
 
+    if db == DB_MYSQL:
+        slow = _check_open_sentinel(tree, text)
+        if slow is not None:
+            return slow
+
     return _check_pii(tree, text)
+
+
+# The open-order sentinel on mt4_trades is `closeDate = '1970-01-01'` (indexed).
+# `CLOSE_TIME = '1970-01-01…'` means the same thing but is not indexed: a full
+# scan of ~48M rows that always dies on the 15s limit (2026-09-29, twice in one
+# turn, "who holds the most XAUUSD"). Refusing it is exact — it is never the
+# right way to write the query — and the message tells the model the fix.
+_TIME_COLUMNS = frozenset({"close_time", "open_time"})
+OPEN_SENTINEL_HINT = (
+    "open (still-held) orders are `closeDate = '1970-01-01'` (indexed, sub-second); "
+    "CLOSE_TIME / OPEN_TIME are not indexed and this scan cannot finish in 15s. "
+    "Do not add an openDate range to an open-positions question. "
+    "For current exposure by symbol use the certified rank_open_positions tool instead of SQL"
+)
+
+
+def _check_open_sentinel(tree: exp.Expression, text: str) -> Optional[dict]:
+    for node in tree.find_all(exp.EQ):
+        sides = (node.left, node.right)
+        col = next((s for s in sides if isinstance(s, exp.Column)), None)
+        lit = next((s for s in sides if isinstance(s, exp.Literal) and s.is_string), None)
+        if col is None or lit is None:
+            continue
+        if str(col.name or "").lower() in _TIME_COLUMNS and str(lit.this).startswith("1970-01-01"):
+            return _invalid(OPEN_SENTINEL_HINT, text)
+    return None
 
 
 # ── execution (① ③-timeouts ④) ───────────────────────────────────────────────
@@ -572,7 +603,10 @@ def _timeout_envelope(engine: str) -> dict:
     return error_envelope(
         "upstream_timeout",
         f"The {engine} query was stopped by the {STATEMENT_TIMEOUT_MS // 1000}s statement limit. "
-        "Narrow it (fewer rows, tighter WHERE, an indexed column) and retry once.",
+        "Narrow it (fewer rows, tighter WHERE, an indexed column) and retry once. "
+        "On mt4_trades the indexed filters are closeDate, openDate and loginSid "
+        "(open orders: closeDate = '1970-01-01'); a narrower range on a NON-indexed "
+        "column will time out again.",
     )
 
 

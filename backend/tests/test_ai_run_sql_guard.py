@@ -483,7 +483,8 @@ def test_harness_registers_run_sql_only_for_unrestricted_callers():
     assert "run_sql" not in empty_scope
     # Every certified tool (Tier 1 + Tier 2) is offered to everyone; run_sql is
     # the only tool whose presence depends on the caller.
-    certified = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar"]
+    certified = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar",
+                 "rank_open_positions"]
     assert unrestricted == certified + ["run_sql"]
     assert restricted == empty_scope == certified
     # OPT-0066: a third list — `risk` holders additionally get the three Risk
@@ -755,3 +756,40 @@ def test_the_ast_check_runs_before_any_connection(monkeypatch):
 
     monkeypatch.setattr(rs, "connect_readonly", _boom)
     assert _code(rs.validate_sql("SELECT email FROM users", MYSQL)) == "invalid_argument"
+
+
+# ── open-order sentinel (2026-09-29) ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT COUNT(*) FROM mt4_trades t WHERE t.CLOSE_TIME = '1970-01-01'",
+        "SELECT COUNT(*) FROM mt4_trades WHERE '1970-01-01 00:00:00' = CLOSE_TIME AND SYMBOL = 'XAUUSD'",
+        "SELECT loginSid FROM mt4_trades t WHERE t.openDate BETWEEN '2026-09-01' AND '2026-09-29' "
+        "AND t.close_time = '1970-01-01'",
+    ],
+)
+def test_open_orders_by_close_time_are_refused_with_the_fix(sql):
+    env = rs.validate_sql(sql, MYSQL)
+    assert _code(env) == "invalid_argument"
+    msg = env["error"]["message"]
+    assert "closeDate = '1970-01-01'" in msg and "rank_open_positions" in msg
+
+
+def test_open_orders_by_close_date_pass():
+    assert rs.validate_sql(
+        "SELECT t.loginSid, SUM(t.lots) FROM mt4_trades t WHERE t.closeDate = '1970-01-01' "
+        "AND t.SYMBOL = 'XAUUSD' GROUP BY t.loginSid",
+        MYSQL,
+    ) is None
+    # A real CLOSE_TIME comparison (not the sentinel) is still allowed.
+    assert rs.validate_sql(
+        "SELECT COUNT(*) FROM mt4_trades WHERE closeDate = '2026-09-28' AND CLOSE_TIME >= '2026-09-28 10:00:00'",
+        MYSQL,
+    ) is None
+
+
+def test_timeout_message_points_at_the_indexed_columns():
+    env = rs._timeout_envelope("MySQL")
+    assert "closeDate" in env["error"]["message"] and "loginSid" in env["error"]["message"]

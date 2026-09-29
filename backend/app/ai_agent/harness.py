@@ -272,7 +272,29 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
             importance=importance,
         )
 
-    tools = [get_client_overview, get_trade_activity, get_risk_signals, rank_accounts, get_economic_calendar]
+    # Group-level like rank_accounts: output scope-filtered in the impl, so it
+    # is registered for every caller, restricted ones included.
+    @tool(name="rank_open_positions", description=TOOL_DOCSTRINGS["rank_open_positions"])
+    async def rank_open_positions(
+        symbol: Annotated[str, "one trading symbol, e.g. 'XAUUSD'"],
+        symbol_match: Annotated[Literal["family", "exact"], "'family' = the symbol and its suffixed variants (XAUUSD.c, .kcmc …)"] = "family",
+        group_by: Annotated[Literal["client", "account"], "one row per client (default) or per MT account"] = "client",
+        sort: Annotated[Literal["net_lots", "gross_lots", "floating_profit", "floating_loss"], "'net_lots' ranks by |buy - sell|"] = "net_lots",
+        top_n: Annotated[int, "1..50 rows"] = 20,
+        sids: Annotated[Optional[list[int]], "restrict to servers, subset of [1, 5, 6]; null = all"] = None,
+    ) -> dict:
+        return await _run(
+            "rank_open_positions",
+            TOOL_IMPLS["rank_open_positions"],
+            symbol=symbol,
+            symbol_match=symbol_match,
+            group_by=group_by,
+            sort=sort,
+            top_n=top_n,
+            sids=list(sids) if sids is not None else None,
+        )
+
+    tools = [get_client_overview, get_trade_activity, get_risk_signals, rank_accounts, get_economic_calendar, rank_open_positions]
 
     # run_sql (02 §10, gate ⑥): free SQL cannot be filtered by country, so for a
     # caller with a restricted scope the tool is not "refused" — it does not

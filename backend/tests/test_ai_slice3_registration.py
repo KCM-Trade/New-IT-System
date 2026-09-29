@@ -82,7 +82,8 @@ def test_unrestricted_or_riskless_callers_do_not_warn(caplog):
 
 # ── build_tools: three lists ─────────────────────────────────────────────────
 
-BASE = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar"]
+BASE = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts", "get_economic_calendar",
+        "rank_open_positions"]
 
 
 def _names(c):

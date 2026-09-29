@@ -1,4 +1,4 @@
-"""The certified tools (three single-subject, two group-level since OPT-0065, three Risk control since OPT-0066). Framework-free: nothing here imports the agent
+"""The certified tools (three single-subject, three group-level (rank_open_positions 2026-09-29), three Risk control since OPT-0066). Framework-free: nothing here imports the agent
 framework, so the assembly logic is unit-testable with monkeypatched data
 access. ``harness.build_tools`` wraps these into framework tools per request.
 """
@@ -7,6 +7,7 @@ from .alert_orders import get_alert_orders
 from .client_overview import get_client_overview, get_client_overviews
 from .common import CallerCtx, ctx_from_request
 from .economic_calendar import get_economic_calendar
+from .open_positions import rank_open_positions
 from .rank_accounts import rank_accounts
 from .risk_alerts import get_risk_alerts
 from .risk_signals import get_risk_signals
@@ -21,6 +22,7 @@ TOOL_IMPLS = {
     "get_risk_signals": get_risk_signals,
     "rank_accounts": rank_accounts,
     "get_economic_calendar": get_economic_calendar,
+    "rank_open_positions": rank_open_positions,
     # Slice 3 (OPT-0066) — registered by harness.build_tools ONLY when
     # common.risk_tools_enabled(ctx) (holds `risk` AND scope is None).
     "get_risk_alerts": get_risk_alerts,
@@ -45,4 +47,5 @@ __all__ = [
     "get_trade_activity",
     "get_window_scan",
     "rank_accounts",
+    "rank_open_positions",
 ]

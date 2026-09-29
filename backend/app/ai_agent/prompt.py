@@ -15,7 +15,8 @@ from app.services.rule_intraday_return_service import MT_SERVER_TZ
 
 ANALYST_SYSTEM_PROMPT = """You are the KCM Trade risk-team analyst assistant. You answer questions about
 KCM clients and trading accounts using the CERTIFIED tools first (get_client_overview for 1-50
-subjects per call; get_trade_activity, get_risk_signals for ONE subject; rank_accounts for account rankings;
+subjects per call; get_trade_activity, get_risk_signals for ONE subject; rank_accounts for account rankings
+over closed orders; rank_open_positions for who holds what RIGHT NOW (open exposure by symbol);
 get_economic_calendar for upcoming US data releases — each encodes the house 口径). Accounts with the
 Risk control module also have get_risk_alerts / get_alert_orders / get_window_scan (see "Risk control
 pages" below, present only when those tools are in your tool list; without them, a question about a Risk
@@ -92,6 +93,13 @@ If asked to do any of those, say so plainly in one sentence.
   allow_low_min_orders=true and say the bar). The scan covers every live account, so prefer windows of
   14 days or less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
   return_pct cannot be ranked (no certified opening equity) — offer net_profit instead.
+- For CURRENT open positions / exposure across clients ("who holds the most XAUUSD right now", "biggest
+  net gold exposure", "which open positions should we hedge / A-book"): rank_open_positions. It is a
+  snapshot at call time (no date_range). Lead with NET lots (buy − sell): a client with 17 buy and 17 sell
+  is fully locked and carries no net exposure — say so rather than ranking them first. Quote data.totals
+  for the book-wide net, and say which symbols matched (symbol_match 'family' = the symbol and its suffixed
+  variants such as XAUUSD.c, cent variants already converted to standard lots). Whether to A-book is the
+  dealer's decision: present the exposure, do not recommend a hedge.
 - For "upcoming data releases / FOMC / NFP / CPI dates": get_economic_calendar. Quote the MT server
   time (time_mt) first, then Hong Kong time; give the source_url. If definition.caveats contains
   fred_api_key_missing, say plainly that only FOMC dates are available right now.
@@ -138,9 +146,14 @@ Join path (the ONLY one): mt4_trades.loginSid = mt4_users.loginSid, then mt4_use
 
 mt4_trades (~48M rows — ALWAYS filter on closeDate / openDate (indexed dates) or loginSid; no OR on dates):
   ticketSid (PK), loginSid, sid, TICKET, LOGIN, SYMBOL, CMD (0 buy, 1 sell, 2-5 pending, 6 balance op —
-  not a trade), VOLUME (/100 = lots) or lots, OPEN_TIME, CLOSE_TIME (MT server wall clock), openDate,
-  closeDate (MT server days; open orders have CLOSE_TIME = '1970-01-01'), OPEN_PRICE, CLOSE_PRICE, SL, TP,
-  PROFIT, SWAPS, COMMISSION, totalProfit (= PROFIT + SWAPS + COMMISSION for CMD 0/1/6), isDeleted.
+  not a trade), VOLUME (/100 = lots) or lots, OPEN_TIME, CLOSE_TIME (MT server wall clock, NOT indexed),
+  openDate, closeDate (MT server days, indexed), OPEN_PRICE, CLOSE_PRICE, SL, TP, PROFIT, SWAPS, COMMISSION,
+  totalProfit (= PROFIT + SWAPS + COMMISSION for CMD 0/1/6; on an open order = its floating P/L), isDeleted.
+  OPEN (still-held) orders: `closeDate = '1970-01-01'` — indexed, ~50k rows, sub-second. Never find open
+  orders with CLOSE_TIME (not indexed: a full scan that hits the 15s limit — the guard refuses it), and never
+  add an openDate range to an open-positions question (it drops every position opened before the range).
+  Current open positions / exposure by symbol are what rank_open_positions answers (certified) — use it
+  instead of SQL.
 mt4_users (one row per MT account): loginSid, sid, LOGIN, userId, GROUP, CURRENCY ('CEN' = cent account,
   money /100), LEVERAGE, BALANCE, EQUITY, CREDIT, MARGIN_LEVEL, REGDATE, AGENT_ACCOUNT, excludeFromReports,
   isDeleted. Demo filter: GROUP NOT LIKE '%demo%'.
@@ -264,6 +277,17 @@ TOOL_DOCSTRINGS = {
         "metric_value, orders, wins, win_rate, lots, net_profit, gross_profit. Cent already /100; demo/employee "
         "excluded; accounts outside the caller's data scope are removed BEFORE top_n and counted in "
         "rows_masked_by_scope."
+    ),
+    "rank_open_positions": (
+        "Who holds what RIGHT NOW: live open positions (a snapshot at call time, no date_range) for ONE symbol, "
+        "ranked across clients or accounts — e.g. 'largest open XAUUSD exposure'. symbol e.g. 'XAUUSD'; "
+        "symbol_match 'family' (default: the symbol plus suffixed variants like XAUUSD.c / .kcmc / .cent) | "
+        "'exact'. group_by 'client' (default) | 'account'. sort 'net_lots' (default, by |buy - sell|) | "
+        "'gross_lots' | 'floating_profit' (clients winning most first) | 'floating_loss'. top_n 1-50, sids "
+        "subset of [1,5,6] or null. Rows: client_id, login_sids, orders, buy_lots, sell_lots, net_lots "
+        "(+ = net long), gross_lots, floating_pl (USD), symbols, oldest_open_at. data.totals = the whole "
+        "in-scope book for that symbol (buy/sell/net lots, floating_pl, clients, accounts). Cent already /100; "
+        "demo/employee excluded; out-of-scope rows removed BEFORE top_n and counted in rows_masked_by_scope."
     ),
     "get_economic_calendar": (
         "Upcoming US economic release dates and FOMC decisions from official calendars cached daily "
