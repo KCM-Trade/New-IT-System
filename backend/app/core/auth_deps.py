@@ -269,6 +269,7 @@ MODULE_MAP: dict[tuple[str, ...], ModulePolicy] = {
     ("open-positions",): "data",
     ("trade-summary",): "data",
     ("trading",): "data",
+    ("exec-compensation",): "data",  # OPT-0068, 01 D10
     ("audience",): "data",       # dead endpoint, classified rather than deleted
     ("ib-report",): "data",      # dead endpoint, classified rather than deleted
     # ── risk ─────────────────────────────────────────────────────────────────

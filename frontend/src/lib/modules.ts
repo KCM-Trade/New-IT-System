@@ -116,6 +116,8 @@ export const PAGE_POLICIES: Record<string, PagePolicy> = {
   "/warehouse/agent-global": "data",
   "/position": "data",
   "/gold": "data",
+  // OPT-0068 execution-price compensation (成交价差补偿), MT5 v1.
+  "/exec-compensation": "data",
 
   // ── risk ───────────────────────────────────────────────────────────────────
   "/risk-monitor": "risk",

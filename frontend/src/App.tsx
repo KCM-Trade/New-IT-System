@@ -41,6 +41,8 @@ const ConfigPlaceholder = lazyWithRetry(() => import("@/pages/ConfigPlaceholder"
 const ManagersConfigPage = lazyWithRetry(() => import("@/pages/cfg/Managers"))
 // [REMOVED] IBReport page removed from frontend
 const HoldBucketReportPage = lazyWithRetry(() => import("@/pages/HoldBucketReport"))
+// OPT-0068: execution-price compensation (成交价差补偿), Data Query group.
+const ExecCompensationPage = lazyWithRetry(() => import("@/pages/ExecCompensation"))
 const IBFinancialMonitorPage = lazyWithRetry(() => import("@/pages/IBFinancialMonitor"))
 const RiskMonitorPage = lazyWithRetry(() => import("@/pages/RiskMonitor"))
 const RiskAlertMailCenterPage = lazyWithRetry(() => import("@/pages/RiskAlertMailCenter"))
@@ -135,6 +137,7 @@ function App() {
               {/* [REMOVED] ib-report route removed from frontend */}
               <Route path="hold-bucket-report" element={<HoldBucketReportPage />} />
               <Route path="ib-financial-monitor" element={<IBFinancialMonitorPage />} />
+              <Route path="exec-compensation" element={<ExecCompensationPage />} />
               <Route path="risk-monitor" element={<RiskMonitorPage />} />
               <Route path="risk-alert-mail" element={<RiskAlertMailCenterPage />} />
               <Route path="risk-watchlist" element={<RiskWatchlistPage />} />

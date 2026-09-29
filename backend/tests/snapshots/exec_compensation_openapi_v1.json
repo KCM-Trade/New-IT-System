@@ -1,0 +1,1606 @@
+{
+  "paths": {
+    "/api/v1/exec-compensation/export": {
+      "get": {
+        "operationId": "get_export_api_v1_exec_compensation_export_get",
+        "parameters": [
+          {
+            "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+            "in": "query",
+            "name": "login_sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+              "title": "Login Sid"
+            }
+          },
+          {
+            "description": "First MT server day (inclusive)",
+            "in": "query",
+            "name": "date_from",
+            "required": true,
+            "schema": {
+              "description": "First MT server day (inclusive)",
+              "format": "date",
+              "title": "Date From",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Last MT server day (inclusive); clipped to as_of",
+            "in": "query",
+            "name": "date_to",
+            "required": true,
+            "schema": {
+              "description": "Last MT server day (inclusive); clipped to as_of",
+              "format": "date",
+              "title": "Date To",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Data cut-off MT server day; default = yesterday",
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Data cut-off MT server day; default = yesterday",
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+            },
+            "description": "xlsx: 汇总 + 明细"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "SUBJECT_NOT_FOUND"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UNKNOWN_CURRENCY"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UPSTREAM_TIMEOUT"
+          }
+        },
+        "summary": "Get Export",
+        "tags": [
+          "exec-compensation"
+        ]
+      }
+    },
+    "/api/v1/exec-compensation/orders": {
+      "get": {
+        "operationId": "get_orders_api_v1_exec_compensation_orders_get",
+        "parameters": [
+          {
+            "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+            "in": "query",
+            "name": "login_sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+              "title": "Login Sid"
+            }
+          },
+          {
+            "description": "First MT server day (inclusive)",
+            "in": "query",
+            "name": "date_from",
+            "required": true,
+            "schema": {
+              "description": "First MT server day (inclusive)",
+              "format": "date",
+              "title": "Date From",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Last MT server day (inclusive); clipped to as_of",
+            "in": "query",
+            "name": "date_to",
+            "required": true,
+            "schema": {
+              "description": "Last MT server day (inclusive); clipped to as_of",
+              "format": "date",
+              "title": "Date To",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Data cut-off MT server day; default = yesterday",
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Data cut-off MT server day; default = yesterday",
+              "title": "As Of"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "counted",
+              "enum": [
+                "counted",
+                "excluded_open",
+                "all"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "fill_time_srv",
+              "enum": [
+                "fill_time_srv",
+                "comp_usd",
+                "delay_ms",
+                "lots",
+                "symbol",
+                "login",
+                "deal_id"
+              ],
+              "title": "Sort By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "default": "asc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Dir",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdersResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "SUBJECT_NOT_FOUND"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UNKNOWN_CURRENCY"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UPSTREAM_TIMEOUT"
+          }
+        },
+        "summary": "Get Orders",
+        "tags": [
+          "exec-compensation"
+        ]
+      }
+    },
+    "/api/v1/exec-compensation/status": {
+      "get": {
+        "operationId": "get_status_api_v1_exec_compensation_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "SUBJECT_NOT_FOUND"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UNKNOWN_CURRENCY"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UPSTREAM_TIMEOUT"
+          }
+        },
+        "summary": "Get Status",
+        "tags": [
+          "exec-compensation"
+        ]
+      }
+    },
+    "/api/v1/exec-compensation/summary": {
+      "get": {
+        "operationId": "get_summary_api_v1_exec_compensation_summary_get",
+        "parameters": [
+          {
+            "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CRM client id (fxbackoffice.users.id); exclusive with login_sid",
+              "title": "Client Id"
+            }
+          },
+          {
+            "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+            "in": "query",
+            "name": "login_sid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One MT5 account, '5-<login>'; exclusive with client_id",
+              "title": "Login Sid"
+            }
+          },
+          {
+            "description": "First MT server day (inclusive)",
+            "in": "query",
+            "name": "date_from",
+            "required": true,
+            "schema": {
+              "description": "First MT server day (inclusive)",
+              "format": "date",
+              "title": "Date From",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Last MT server day (inclusive); clipped to as_of",
+            "in": "query",
+            "name": "date_to",
+            "required": true,
+            "schema": {
+              "description": "Last MT server day (inclusive); clipped to as_of",
+              "format": "date",
+              "title": "Date To",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Data cut-off MT server day; default = yesterday",
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Data cut-off MT server day; default = yesterday",
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "SUBJECT_NOT_FOUND"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UNKNOWN_CURRENCY"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "UPSTREAM_TIMEOUT"
+          }
+        },
+        "summary": "Get Summary",
+        "tags": [
+          "exec-compensation"
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "Basis": {
+      "description": "Machine-readable statement of how every number was computed.",
+      "properties": {
+        "calc_version": {
+          "default": 1,
+          "title": "Calc Version",
+          "type": "integer"
+        },
+        "currency": {
+          "const": "USD",
+          "default": "USD",
+          "title": "Currency",
+          "type": "string"
+        },
+        "day_boundary": {
+          "const": "mt_server",
+          "default": "mt_server",
+          "title": "Day Boundary",
+          "type": "string"
+        },
+        "exclude_open_positions": {
+          "const": true,
+          "default": true,
+          "title": "Exclude Open Positions",
+          "type": "boolean"
+        },
+        "netting": {
+          "const": "net",
+          "default": "net",
+          "description": "Headline figure nets better fills against worse ones; comp_positive_usd is given alongside.",
+          "title": "Netting",
+          "type": "string"
+        },
+        "order_scope": {
+          "const": "client_market_open_close",
+          "default": "client_market_open_close",
+          "title": "Order Scope",
+          "type": "string"
+        },
+        "reference": {
+          "const": "request_price",
+          "default": "request_price",
+          "title": "Reference",
+          "type": "string"
+        }
+      },
+      "title": "Basis",
+      "type": "object"
+    },
+    "ClassRow": {
+      "properties": {
+        "cls": {
+          "enum": [
+            "no_plugin",
+            "plugin_passthrough",
+            "close_by",
+            "so_first",
+            "so_rest",
+            "limit",
+            "stop",
+            "other_type",
+            "sl",
+            "tp",
+            "market",
+            "dealer",
+            "other_reason"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "comp_net_usd": {
+          "default": 0.0,
+          "title": "Comp Net Usd",
+          "type": "number"
+        },
+        "comp_positive_usd": {
+          "default": 0.0,
+          "title": "Comp Positive Usd",
+          "type": "number"
+        },
+        "deals": {
+          "default": 0,
+          "title": "Deals",
+          "type": "integer"
+        },
+        "lots": {
+          "default": 0.0,
+          "title": "Lots",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cls"
+      ],
+      "title": "ClassRow",
+      "type": "object"
+    },
+    "Coverage": {
+      "properties": {
+        "complete": {
+          "description": "False = the replica has not caught up to as_of; numbers are partial",
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "earliest_srv_date": {
+          "description": "First MT5 fill day; lower bound for date_from",
+          "format": "date",
+          "title": "Earliest Srv Date",
+          "type": "string"
+        },
+        "ready_through_srv_date": {
+          "description": "Latest as_of the replica fully covers (normally yesterday)",
+          "format": "date",
+          "title": "Ready Through Srv Date",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "replica_latest_fill_utc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Replica Latest Fill Utc"
+        },
+        "unmatched_deals": {
+          "default": 0,
+          "description": "Fills in range whose order row was not found (never dropped silently; not counted)",
+          "title": "Unmatched Deals",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "earliest_srv_date",
+        "ready_through_srv_date",
+        "complete"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "DelayStats": {
+      "description": "Over counted fills only.",
+      "properties": {
+        "max_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max Ms"
+        },
+        "median_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Median Ms"
+        },
+        "min_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Min Ms"
+        },
+        "n": {
+          "default": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "p95_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "P95 Ms"
+        }
+      },
+      "title": "DelayStats",
+      "type": "object"
+    },
+    "ErrorDetail": {
+      "properties": {
+        "code": {
+          "enum": [
+            "SUBJECT_REQUIRED",
+            "SUBJECT_AMBIGUOUS",
+            "INVALID_LOGIN_SID",
+            "SUBJECT_NOT_FOUND",
+            "RANGE_INVALID",
+            "RANGE_BEFORE_COVERAGE",
+            "AS_OF_TOO_LATE",
+            "SORT_NOT_ALLOWED",
+            "VALIDATION_ERROR",
+            "QUERY_TOO_LARGE",
+            "BUSY",
+            "UNKNOWN_CURRENCY",
+            "UPSTREAM_TIMEOUT",
+            "UPSTREAM_UNAVAILABLE",
+            "QUERY_BUDGET_EXCEEDED"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "properties": {
+        "error": {
+          "$ref": "#/components/schemas/ErrorDetail"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "ExcludedOpen": {
+      "description": "Eligible fills left out because their position was still open at as_of (01 D13).",
+      "properties": {
+        "comp_net_usd_if_counted": {
+          "default": 0.0,
+          "title": "Comp Net Usd If Counted",
+          "type": "number"
+        },
+        "deals": {
+          "default": 0,
+          "title": "Deals",
+          "type": "integer"
+        },
+        "lots": {
+          "default": 0.0,
+          "title": "Lots",
+          "type": "number"
+        },
+        "positions": {
+          "default": 0,
+          "title": "Positions",
+          "type": "integer"
+        }
+      },
+      "title": "ExcludedOpen",
+      "type": "object"
+    },
+    "GroupRow": {
+      "properties": {
+        "comp_net_usd": {
+          "default": 0.0,
+          "title": "Comp Net Usd",
+          "type": "number"
+        },
+        "comp_positive_usd": {
+          "default": 0.0,
+          "title": "Comp Positive Usd",
+          "type": "number"
+        },
+        "deals": {
+          "default": 0,
+          "title": "Deals",
+          "type": "integer"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "lots": {
+          "default": 0.0,
+          "title": "Lots",
+          "type": "number"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "GroupRow",
+      "type": "object"
+    },
+    "Limits": {
+      "properties": {
+        "cache_ttl_s": {
+          "title": "Cache Ttl S",
+          "type": "integer"
+        },
+        "max_concurrent": {
+          "title": "Max Concurrent",
+          "type": "integer"
+        },
+        "max_deals": {
+          "title": "Max Deals",
+          "type": "integer"
+        },
+        "page_size_max": {
+          "title": "Page Size Max",
+          "type": "integer"
+        },
+        "query_budget_s": {
+          "title": "Query Budget S",
+          "type": "integer"
+        },
+        "statement_timeout_ms": {
+          "title": "Statement Timeout Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "statement_timeout_ms",
+        "query_budget_s",
+        "max_deals",
+        "max_concurrent",
+        "cache_ttl_s",
+        "page_size_max"
+      ],
+      "title": "Limits",
+      "type": "object"
+    },
+    "OrderRow": {
+      "description": "One in-range fill that has its order row. Fills whose order row is\nmissing are not rows; they only appear as ``coverage.unmatched_deals``.",
+      "properties": {
+        "account_group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "mt4_users.GROUP; explains plugin_passthrough rows (01 D20)",
+          "title": "Account Group"
+        },
+        "ccy": {
+          "enum": [
+            "CEN",
+            "USD"
+          ],
+          "title": "Ccy",
+          "type": "string"
+        },
+        "cls": {
+          "enum": [
+            "no_plugin",
+            "plugin_passthrough",
+            "close_by",
+            "so_first",
+            "so_rest",
+            "limit",
+            "stop",
+            "other_type",
+            "sl",
+            "tp",
+            "market",
+            "dealer",
+            "other_reason"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "comp_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Not truncated; negative = better fill",
+          "title": "Comp Usd"
+        },
+        "counted": {
+          "title": "Counted",
+          "type": "boolean"
+        },
+        "deal_id": {
+          "title": "Deal Id",
+          "type": "integer"
+        },
+        "delay_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Delay Ms"
+        },
+        "eligible": {
+          "title": "Eligible",
+          "type": "boolean"
+        },
+        "entry": {
+          "enum": [
+            "open",
+            "close",
+            "inout",
+            "close_by"
+          ],
+          "title": "Entry",
+          "type": "string"
+        },
+        "fill_price": {
+          "title": "Fill Price",
+          "type": "number"
+        },
+        "fill_time_srv": {
+          "description": "MT server wall clock, 'YYYY-MM-DD HH:MM:SS.fff'",
+          "title": "Fill Time Srv",
+          "type": "string"
+        },
+        "fill_time_utc": {
+          "title": "Fill Time Utc",
+          "type": "string"
+        },
+        "login": {
+          "title": "Login",
+          "type": "integer"
+        },
+        "login_sid": {
+          "title": "Login Sid",
+          "type": "string"
+        },
+        "lots": {
+          "title": "Lots",
+          "type": "number"
+        },
+        "not_counted_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_eligible_class",
+                "position_open_at_as_of",
+                "position_anomaly"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Not Counted Reason"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "integer"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "worse",
+                "same",
+                "better"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outcome"
+        },
+        "position_id": {
+          "title": "Position Id",
+          "type": "integer"
+        },
+        "raw": {
+          "$ref": "#/components/schemas/RawCodes"
+        },
+        "ref_price": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ref Price"
+        },
+        "req_time_srv": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "MT server wall clock of the request",
+          "title": "Req Time Srv"
+        },
+        "req_time_utc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Req Time Utc"
+        },
+        "side": {
+          "enum": [
+            "buy",
+            "sell"
+          ],
+          "title": "Side",
+          "type": "string"
+        },
+        "srv_date": {
+          "format": "date",
+          "title": "Srv Date",
+          "type": "string"
+        },
+        "symbol": {
+          "title": "Symbol",
+          "type": "string"
+        },
+        "worse_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "> 0 = worse for the client",
+          "title": "Worse Px"
+        }
+      },
+      "required": [
+        "deal_id",
+        "order_id",
+        "position_id",
+        "login",
+        "login_sid",
+        "ccy",
+        "symbol",
+        "side",
+        "entry",
+        "cls",
+        "eligible",
+        "counted",
+        "lots",
+        "fill_time_utc",
+        "fill_time_srv",
+        "srv_date",
+        "fill_price",
+        "raw"
+      ],
+      "title": "OrderRow",
+      "type": "object"
+    },
+    "OrdersResponse": {
+      "properties": {
+        "as_of": {
+          "format": "date",
+          "title": "As Of",
+          "type": "string"
+        },
+        "basis": {
+          "$ref": "#/components/schemas/Basis"
+        },
+        "coverage": {
+          "$ref": "#/components/schemas/Coverage"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/components/schemas/OrderRow"
+          },
+          "title": "Data",
+          "type": "array"
+        },
+        "page": {
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_size": {
+          "title": "Page Size",
+          "type": "integer"
+        },
+        "statistics": {
+          "$ref": "#/components/schemas/Statistics"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        },
+        "total_pages": {
+          "title": "Total Pages",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "data",
+        "total",
+        "page",
+        "page_size",
+        "total_pages",
+        "basis",
+        "as_of",
+        "coverage",
+        "statistics"
+      ],
+      "title": "OrdersResponse",
+      "type": "object"
+    },
+    "OutcomeCounts": {
+      "properties": {
+        "better": {
+          "default": 0,
+          "title": "Better",
+          "type": "integer"
+        },
+        "same": {
+          "default": 0,
+          "title": "Same",
+          "type": "integer"
+        },
+        "worse": {
+          "default": 0,
+          "title": "Worse",
+          "type": "integer"
+        }
+      },
+      "title": "OutcomeCounts",
+      "type": "object"
+    },
+    "QueryEcho": {
+      "description": "The effective query after defaults / clipping.",
+      "properties": {
+        "as_of": {
+          "format": "date",
+          "title": "As Of",
+          "type": "string"
+        },
+        "date_from": {
+          "format": "date",
+          "title": "Date From",
+          "type": "string"
+        },
+        "date_to": {
+          "format": "date",
+          "title": "Date To",
+          "type": "string"
+        },
+        "date_to_clipped": {
+          "description": "True when date_to was cut to as_of",
+          "title": "Date To Clipped",
+          "type": "boolean"
+        },
+        "date_to_requested": {
+          "format": "date",
+          "title": "Date To Requested",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date_from",
+        "date_to",
+        "date_to_requested",
+        "date_to_clipped",
+        "as_of"
+      ],
+      "title": "QueryEcho",
+      "type": "object"
+    },
+    "RawCodes": {
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "integer"
+        },
+        "dealer": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Dealer"
+        },
+        "entry": {
+          "title": "Entry",
+          "type": "integer"
+        },
+        "order_reason": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Order Reason"
+        },
+        "order_type": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Order Type"
+        }
+      },
+      "required": [
+        "action",
+        "entry"
+      ],
+      "title": "RawCodes",
+      "type": "object"
+    },
+    "Statistics": {
+      "properties": {
+        "from_cache": {
+          "default": false,
+          "title": "From Cache",
+          "type": "boolean"
+        },
+        "query_time_ms": {
+          "default": 0,
+          "title": "Query Time Ms",
+          "type": "integer"
+        }
+      },
+      "title": "Statistics",
+      "type": "object"
+    },
+    "StatusData": {
+      "properties": {
+        "calc_version": {
+          "default": 1,
+          "title": "Calc Version",
+          "type": "integer"
+        },
+        "default_as_of": {
+          "format": "date",
+          "title": "Default As Of",
+          "type": "string"
+        },
+        "earliest_srv_date": {
+          "format": "date",
+          "title": "Earliest Srv Date",
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/components/schemas/Limits"
+        },
+        "ready_through_srv_date": {
+          "format": "date",
+          "title": "Ready Through Srv Date",
+          "type": "string"
+        },
+        "replica_latest_fill_utc": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Replica Latest Fill Utc"
+        }
+      },
+      "required": [
+        "earliest_srv_date",
+        "default_as_of",
+        "ready_through_srv_date",
+        "limits"
+      ],
+      "title": "StatusData",
+      "type": "object"
+    },
+    "StatusResponse": {
+      "properties": {
+        "basis": {
+          "$ref": "#/components/schemas/Basis"
+        },
+        "data": {
+          "$ref": "#/components/schemas/StatusData"
+        }
+      },
+      "required": [
+        "data",
+        "basis"
+      ],
+      "title": "StatusResponse",
+      "type": "object"
+    },
+    "Subject": {
+      "properties": {
+        "client_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Id"
+        },
+        "login_sid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Login Sid"
+        },
+        "logins": {
+          "description": "MT5 logins covered",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Logins",
+          "type": "array"
+        }
+      },
+      "title": "Subject",
+      "type": "object"
+    },
+    "SummaryData": {
+      "properties": {
+        "anomaly_positions": {
+          "default": 0,
+          "title": "Anomaly Positions",
+          "type": "integer"
+        },
+        "by_account": {
+          "description": "key = login_sid",
+          "items": {
+            "$ref": "#/components/schemas/GroupRow"
+          },
+          "title": "By Account",
+          "type": "array"
+        },
+        "by_day": {
+          "description": "key = MT server day YYYY-MM-DD",
+          "items": {
+            "$ref": "#/components/schemas/GroupRow"
+          },
+          "title": "By Day",
+          "type": "array"
+        },
+        "by_entry": {
+          "description": "key = open | close",
+          "items": {
+            "$ref": "#/components/schemas/GroupRow"
+          },
+          "title": "By Entry",
+          "type": "array"
+        },
+        "by_symbol": {
+          "items": {
+            "$ref": "#/components/schemas/GroupRow"
+          },
+          "title": "By Symbol",
+          "type": "array"
+        },
+        "comp_net_usd": {
+          "default": 0.0,
+          "title": "Comp Net Usd",
+          "type": "number"
+        },
+        "comp_positive_usd": {
+          "default": 0.0,
+          "title": "Comp Positive Usd",
+          "type": "number"
+        },
+        "deals": {
+          "default": 0,
+          "title": "Deals",
+          "type": "integer"
+        },
+        "delay": {
+          "$ref": "#/components/schemas/DelayStats"
+        },
+        "excluded_open": {
+          "$ref": "#/components/schemas/ExcludedOpen"
+        },
+        "lots": {
+          "default": 0.0,
+          "title": "Lots",
+          "type": "number"
+        },
+        "max_single_comp_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Largest comp_usd among counted fills",
+          "title": "Max Single Comp Usd"
+        },
+        "not_counted_by_class": {
+          "description": "In-range fills of non-compensable classes",
+          "items": {
+            "$ref": "#/components/schemas/ClassRow"
+          },
+          "title": "Not Counted By Class",
+          "type": "array"
+        },
+        "outcomes": {
+          "$ref": "#/components/schemas/OutcomeCounts"
+        },
+        "query": {
+          "$ref": "#/components/schemas/QueryEcho"
+        },
+        "subject": {
+          "$ref": "#/components/schemas/Subject"
+        }
+      },
+      "required": [
+        "subject",
+        "query",
+        "outcomes",
+        "delay",
+        "excluded_open"
+      ],
+      "title": "SummaryData",
+      "type": "object"
+    },
+    "SummaryResponse": {
+      "properties": {
+        "as_of": {
+          "format": "date",
+          "title": "As Of",
+          "type": "string"
+        },
+        "basis": {
+          "$ref": "#/components/schemas/Basis"
+        },
+        "coverage": {
+          "$ref": "#/components/schemas/Coverage"
+        },
+        "data": {
+          "$ref": "#/components/schemas/SummaryData"
+        },
+        "statistics": {
+          "$ref": "#/components/schemas/Statistics"
+        }
+      },
+      "required": [
+        "data",
+        "basis",
+        "as_of",
+        "coverage",
+        "statistics"
+      ],
+      "title": "SummaryResponse",
+      "type": "object"
+    }
+  }
+}
