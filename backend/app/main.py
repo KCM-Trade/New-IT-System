@@ -463,8 +463,13 @@ def _register_exec_comp_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ExecCompError)
     async def _exec_comp_error(request: Request, exc: ExecCompError):
+        from app.schemas.exec_compensation import RETRY_AFTER_S
+
+        retry = RETRY_AFTER_S.get(exc.code)
         return JSONResponse(
-            status_code=exc.status, content={"error": {"code": exc.code, "message": exc.message}}
+            status_code=exc.status,
+            content={"error": {"code": exc.code, "message": exc.message}},
+            headers={"Retry-After": str(retry)} if retry is not None else None,
         )
 
     @app.exception_handler(RequestValidationError)

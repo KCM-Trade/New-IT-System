@@ -432,3 +432,74 @@ def test_get_logs_no_audit_missing(http, tmp_path, monkeypatch):
         assert r.status_code == 200, (suffix, r.text)
     assert _audit_count(tmp_path) == before
     assert not [w for w in warned if "AUDIT_MISSING" in w]
+
+
+# --- cold-review fixes (OPT-0068): retryable errors carry Retry-After -------
+
+
+def _set(monkeypatch, **env):
+    from app.core.config import get_settings
+
+    for k, v in env.items():
+        monkeypatch.setenv(k, str(v))
+    get_settings.cache_clear()
+
+
+@needs_routes
+def test_budget_exceeded_is_503_with_retry_after(http, monkeypatch):
+    _set(monkeypatch, EXEC_COMP_QUERY_BUDGET_S=0)
+    h = _mint(STAFF, '["data"]')
+    r = http.get(f"{PREFIX}/summary", params={**RANGE, "client_id": 1001}, headers=h)
+    _assert_error(r, "QUERY_BUDGET_EXCEEDED")
+    assert r.headers.get("retry-after") == "30"
+
+
+@needs_routes
+def test_busy_is_503_with_retry_after(http, monkeypatch, tmp_path):
+    from app.services.exec_comp.limits import QuerySlot
+
+    slot_dir = str(tmp_path / "busy")
+    _set(monkeypatch, EXEC_COMP_SLOT_DIR=slot_dir, EXEC_COMP_MAX_CONCURRENT=1)
+    h = _mint(STAFF, '["data"]')
+    with QuerySlot(slot_dir, 1):
+        r = http.get(f"{PREFIX}/summary", params={**RANGE, "client_id": 1001}, headers=h)
+    _assert_error(r, "BUSY")
+    assert r.headers.get("retry-after") == "30"
+
+
+@needs_routes
+def test_deal_cap_is_422_without_retry_after(http, monkeypatch):
+    _set(monkeypatch, EXEC_COMP_MAX_DEALS=1)
+    h = _mint(STAFF, '["data"]')
+    r = http.get(
+        f"{PREFIX}/summary",
+        params={"client_id": 1001, "date_from": "2026-09-01", "date_to": "2026-09-28"},
+        headers=h,
+    )
+    _assert_error(r, "QUERY_TOO_LARGE")
+    assert "retry-after" not in r.headers
+    assert "请联系 IT" in r.json()["error"]["message"]
+
+
+@needs_routes
+def test_export_is_an_xlsx_built_from_row_dicts(http):
+    import io
+
+    from openpyxl import load_workbook
+
+    from app.services.exec_comp.export import ROUNDING_NOTE
+
+    h = _mint(STAFF, '["data"]')
+    r = http.get(
+        f"{PREFIX}/export",
+        params={"client_id": 1001, "date_from": "2026-09-01", "date_to": "2026-09-28"},
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+    wb = load_workbook(io.BytesIO(r.content), read_only=True)
+    summary = [c for row in wb["汇总"].iter_rows(values_only=True) for c in row if c is not None]
+    assert ROUNDING_NOTE in summary
+    assert "只適用於市價單開倉和平倉的差價" in str(summary[0])
+    detail = list(wb["明细"].iter_rows(values_only=True))
+    assert detail[2][0] == "成交号"
+    assert len(detail) - 3 == 16    # every in-range fill with an order row (view=all)

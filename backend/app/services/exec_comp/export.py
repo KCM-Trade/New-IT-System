@@ -5,7 +5,9 @@ of both sheets carries the three mandatory notices (01 D13 / D14 / D17) and
 the basis on one line (it overflows into the empty cells to its right), so a
 sheet forwarded on its own still says what it is. Numbers are written as
 numbers; nothing is recomputed here. Write-only workbook: a 100k-row detail
-sheet streams instead of building a cell object graph.
+sheet streams instead of building a cell object graph. Detail rows are the
+query core's plain row dicts (``query.export_rows``), not pydantic objects —
+at the 150k deal cap that difference is hundreds of MB.
 """
 
 from __future__ import annotations
@@ -18,11 +20,15 @@ from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font
 
-from app.schemas.exec_compensation import OrderRow, SummaryResponse
+from typing import Iterable, Mapping
+
+from app.schemas.exec_compensation import SummaryResponse
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 BASIS_LINE = "口径 = 客户下单时的请求价；只统计客户主动市价单；金额以正负相抵为准（USD，CEN 已 ÷100）"
+
+ROUNDING_NOTE = "逐笔金额保留 4 位小数，合计按未舍入值计算，逐笔相加可能与合计有 ±0.01 以内的差异"
 
 
 def notices(s: SummaryResponse) -> str:
@@ -98,6 +104,8 @@ def _summary_sheet(ws, s: SummaryResponse) -> None:
     ]
     for k, v in kv:
         ws.append([k, v])
+    ws.append([])
+    ws.append([ROUNDING_NOTE])
 
     def table(title: str, rows, key_label: str, key_attr: str = "key") -> None:
         ws.append([])
@@ -126,14 +134,14 @@ _DETAIL_COLS: list[tuple[str, str]] = [
 ]
 
 
-def _detail_sheet(ws, s: SummaryResponse, rows: list[OrderRow]) -> None:
+def _detail_sheet(ws, s: SummaryResponse, rows: Iterable[Mapping]) -> None:
     ws.freeze_panes = "A4"   # below the notice row, blank row and header
     _head(ws, s)
     ws.append([_bold(ws, label) for _, label in _DETAIL_COLS])
     for r in rows:
         out = []
         for attr, _ in _DETAIL_COLS:
-            v = getattr(r, attr)
+            v = r[attr]
             if isinstance(v, bool):
                 v = "是" if v else "否"
             elif isinstance(v, dt.date):
@@ -142,7 +150,8 @@ def _detail_sheet(ws, s: SummaryResponse, rows: list[OrderRow]) -> None:
         ws.append(out)
 
 
-def build_xlsx(s: SummaryResponse, rows: list[OrderRow]) -> bytes:
+def build_xlsx(s: SummaryResponse, rows: Iterable[Mapping]) -> bytes:
+    """``rows``: row dicts with the ``OrderRow`` field names (extra keys ignored)."""
     wb = Workbook(write_only=True)
     _summary_sheet(wb.create_sheet("汇总"), s)
     _detail_sheet(wb.create_sheet("明细"), s, rows)

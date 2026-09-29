@@ -46,6 +46,12 @@ Not-counted precedence (one reason per row, first match wins):
 ``compute_uncached()`` runs the same computation without cache / slots and
 returns the internal result, including the 02 §4.1 unit self-check counters
 (``unit_checked`` / ``unit_mismatches``) for the reconcile script.
+
+``build_summary()`` is the one aggregation: a pure function over finished row
+dicts (with their internal unrounded ``_comp_raw``). ``_compute`` calls it,
+and so does the offline export (backend/scripts/exec_comp_offline_export.py)
+over the concatenated rows of several date chunks — open-position status
+depends only on as_of, never on the range, so chunks are additive.
 """
 
 from __future__ import annotations
@@ -194,19 +200,32 @@ def export_rows(
     cache: Any = None,
     clock: Clock = None,
     settings: Optional[Settings] = None,
-) -> tuple[SummaryResponse, list[OrderRow]]:
-    """Full summary + every in-range row (view=all) for the xlsx export."""
+) -> tuple[SummaryResponse, list[dict]]:
+    """Full summary + every in-range row (view=all) for the xlsx export.
+
+    Rows are the core's plain dicts with the ``OrderRow`` fields (plus
+    internal ``_``-prefixed keys), sorted by fill time — not 150k pydantic
+    objects: ``export.build_xlsx`` writes straight from them."""
     started = time.perf_counter()
     res = _result(q, source, cache, clock, settings or get_settings(), need_rows=True)
-    resp = SummaryResponse(
-        data=SummaryData.model_validate(res.summary),
+    resp = summary_response(res.summary, res.as_of, res.coverage, from_cache=res.from_cache, started=started)
+    # A new list of the same dicts (8 bytes a row). Never clear ``res.rows``:
+    # SingleFlight hands the same result object to concurrent waiters.
+    return resp, _sorted(res.rows, "fill_time_srv", "asc")
+
+
+def summary_response(
+    summary_dict: dict, as_of: dt.date, coverage: dict, *, from_cache: bool = False,
+    started: Optional[float] = None,
+) -> SummaryResponse:
+    """The contract envelope around a summary dict (also used offline)."""
+    return SummaryResponse(
+        data=SummaryData.model_validate(summary_dict),
         basis=Basis(),
-        as_of=res.as_of,
-        coverage=Coverage.model_validate(res.coverage),
-        statistics=_stats(res.from_cache, started),
+        as_of=as_of,
+        coverage=Coverage.model_validate(coverage),
+        statistics=_stats(from_cache, started if started is not None else time.perf_counter()),
     )
-    rows = _sorted(res.rows, "fill_time_srv", "asc")
-    return resp, [OrderRow.model_validate(r) for r in rows]
 
 
 def status(
@@ -222,7 +241,7 @@ def status(
         data=StatusData(
             earliest_srv_date=EARLIEST_SRV_DATE,
             default_as_of=default_as_of,
-            ready_through_srv_date=_ready_through(head, default_as_of),
+            ready_through_srv_date=_ready_through(head, default_as_of, _now_utc(clock), settings),
             replica_latest_fill_utc=calc.iso_z(head.time_utc) if head else None,
             limits=Limits(
                 statement_timeout_ms=settings.EXEC_COMP_STATEMENT_TIMEOUT_MS,
@@ -240,28 +259,48 @@ def status(
 # --- time / validation -------------------------------------------------------
 
 
+def _now(clock: Clock) -> dt.datetime:
+    if clock is None:
+        return dt.datetime.now(dt.timezone.utc)
+    return clock() if callable(clock) else clock
+
+
 def _today_srv(clock: Clock) -> dt.date:
     """Today's MT server date (US-DST GMT+2/+3 calendar — never a fixed +3).
     A naive injected clock is already MT server wall clock."""
-    if clock is None:
-        now = dt.datetime.now(dt.timezone.utc)
-    else:
-        now = clock() if callable(clock) else clock
+    now = _now(clock)
     if now.tzinfo is None:
         return now.date()
     return now.astimezone(MT_SERVER_TZ).date()
+
+
+def _now_utc(clock: Clock) -> dt.datetime:
+    """"Now" as naive UTC (the replica head's ``time_utc`` is naive UTC)."""
+    now = _now(clock)
+    if now.tzinfo is None:
+        return calc.srv_to_utc_calendar(now)
+    return now.astimezone(dt.timezone.utc).replace(tzinfo=None)
 
 
 def _day_start(d: dt.date) -> dt.datetime:
     return dt.datetime(d.year, d.month, d.day)
 
 
-def _ready_through(head, cap: dt.date) -> dt.date:
-    """Latest MT day the replica fully covers: its newest fill is at/after the
-    next day's 00:00 server time. Capped at the default as_of."""
+def _ready_through(head, cap: dt.date, now_utc: dt.datetime, settings: Settings) -> dt.date:
+    """Latest MT day the replica fully covers, capped at the default as_of.
+
+    Primary rule: the newest fill is at/after the next day's 00:00 server
+    time. Secondary rule (quiet periods have no fill after MT midnight): the
+    head's true-UTC time is at most ``EXEC_COMP_READY_LAG_S`` behind now — the
+    replica is taken as current, so everything before today is there.
+    ``EXEC_COMP_READY_LAG_S=0`` disables the secondary rule."""
     if head is None:
         return EARLIEST_SRV_DATE - dt.timedelta(days=1)
-    return min(cap, head.time_srv.date() - dt.timedelta(days=1))
+    ready = head.time_srv.date() - dt.timedelta(days=1)
+    lag_s = max(0, int(settings.EXEC_COMP_READY_LAG_S))
+    if ready < cap and lag_s and (now_utc - head.time_utc).total_seconds() <= lag_s:
+        ready = cap
+    return min(cap, ready)
 
 
 @dataclass(frozen=True)
@@ -305,6 +344,7 @@ class ComputeResult:
     rows: list[dict]
     from_cache: bool
     date_to_eff: Optional[dt.date] = None
+    ids: int = 0                    # deal numbers located for the range
     # 02 §4.1 unit self-check over in-range close fills (04 §1.4).
     unit_checked: int = 0
     unit_mismatches: dict[str, int] = field(default_factory=dict)  # by symbol
@@ -435,7 +475,8 @@ def _check_range(q: Query, as_of: dt.date) -> None:
 
 
 def _run_bounded(
-    q: Query, subject: _Subject, source: FillSource, settings: Settings, default_as_of: dt.date
+    q: Query, subject: _Subject, source: FillSource, settings: Settings, default_as_of: dt.date,
+    now_utc: dt.datetime, head: Any = None,
 ) -> ComputeResult:
     """One replica run inside a server-wide slot and the time budget."""
     with QuerySlot(settings.EXEC_COMP_SLOT_DIR, settings.EXEC_COMP_MAX_CONCURRENT):
@@ -443,7 +484,7 @@ def _run_bounded(
         bind = getattr(source, "with_deadline", None)
         src = bind(deadline) if callable(bind) else source
         try:
-            return _compute(q, subject, src, settings, deadline, default_as_of)
+            return _compute(q, subject, src, settings, deadline, default_as_of, now_utc, head)
         finally:
             _close(src)
             if src is not source:
@@ -466,7 +507,7 @@ def compute_uncached(
     bind = getattr(source, "with_deadline", None)
     src = bind(deadline) if callable(bind) else source
     try:
-        return _compute(q, subject, src, settings, deadline, default_as_of)
+        return _compute(q, subject, src, settings, deadline, default_as_of, _now_utc(clock))
     finally:
         _close(src)
         if src is not source:
@@ -477,21 +518,56 @@ def _result(
     q: Query, source: FillSource, cache, clock: Clock, settings: Settings, *, need_rows: bool
 ) -> ComputeResult:
     subject, default_as_of = _validate(q, clock)
+    now_utc = _now_utc(clock)
     candidate = q.as_of or default_as_of
     key = _cache_key(subject, q.date_from, min(q.date_to, candidate), candidate)
     hit = _cache_get(cache, key, need_rows)
     if hit is not None:
         return hit
 
+    head = None
+    if q.as_of is None and cache is not None:
+        # Default as_of may step back (replica not past MT midnight yet). The
+        # result is cached under the as_of it actually used, so look it up —
+        # and coalesce concurrent runs — under that key too; otherwise every
+        # request in that window recomputes. The head read is two PK/index
+        # probes; it is handed to the run so it is not read twice.
+        try:
+            head = source.replica_head()
+        except BaseException:
+            _close(source)
+            raise
+        stepped = _stepped_as_of(head, default_as_of, now_utc, settings)
+        if stepped != default_as_of:
+            _check_range(q, stepped)
+            key = _cache_key(subject, q.date_from, min(q.date_to, stepped), stepped)
+            hit = _cache_get(cache, key, need_rows)
+            if hit is not None:
+                _close(source)
+                return hit
+
     def compute() -> ComputeResult:
-        res = _run_bounded(q, subject, source, settings, default_as_of)
+        res = _run_bounded(q, subject, source, settings, default_as_of, now_utc, head)
         # Only complete results are reproducible (deals are write-once); a
         # partial one must be recomputed once the replica catches up.
         if res.coverage["complete"]:
             _cache_put(cache, _cache_key(subject, q.date_from, res.date_to_eff, res.as_of), res, settings)
         return res
 
-    return _singleflight.do(key, compute)
+    try:
+        return _singleflight.do(key, compute)
+    finally:
+        # A waiter never runs ``compute`` — close the connection the head
+        # probe may have opened (closing twice is a no-op).
+        _close(source)
+
+
+def _stepped_as_of(head, default_as_of: dt.date, now_utc: dt.datetime, settings: Settings) -> dt.date:
+    """The as_of a default-as_of query uses: one day back while the replica
+    has not finished the default day (01 D14, 04 §4)."""
+    if _ready_through(head, default_as_of, now_utc, settings) < default_as_of:
+        return default_as_of - dt.timedelta(days=1)
+    return default_as_of
 
 
 def _close(src) -> None:
@@ -523,19 +599,21 @@ def _compute(
     settings: Settings,
     deadline: Deadline,
     default_as_of: dt.date,
+    now_utc: dt.datetime,
+    head: Any = None,
 ) -> ComputeResult:
     accounts = _resolve_accounts(subject, source)
-    head = source.replica_head()
-    ready = _ready_through(head, default_as_of)
+    if head is None:
+        head = source.replica_head()
+    ready = _ready_through(head, default_as_of, now_utc, settings)
 
     # as_of + readiness (01 D14, 04 §4).
     reason: Optional[str] = None
     if q.as_of is not None:
         as_of = q.as_of
     else:
-        as_of = default_as_of
-        if ready < default_as_of:
-            as_of = default_as_of - dt.timedelta(days=1)
+        as_of = _stepped_as_of(head, default_as_of, now_utc, settings)
+        if as_of != default_as_of:
             reason = (
                 f"the replica has not finished {default_as_of.isoformat()} yet; "
                 f"data cut-off stepped back to {as_of.isoformat()}"
@@ -557,25 +635,26 @@ def _compute(
     deadline.check("accounts")
     ids = source.deal_ids(sorted(acct_by_login), srv_from, srv_to) if accounts else []
     max_deals = int(settings.EXEC_COMP_MAX_DEALS)
-    if len(ids) > max_deals:
+    n_ids = len(ids)
+    if n_ids > max_deals:
         raise ExecCompError(
             "QUERY_TOO_LARGE",
-            f"{len(ids):,} fills in this range exceed the limit of {max_deals:,}; "
-            "narrow the date range",
+            f"本次查询涉及 {n_ids:,} 笔成交，超过单次上限 {max_deals:,} 笔。"
+            "请缩小日期范围；如确需整段数据，请联系 IT 手动处理。",
         )
     deadline.check("deal ids")
     fills = source.fills(ids) if ids else []
+    del ids
     deadline.check("fills")
+    fills.sort(key=lambda x: x.deal_id)
 
     rows: list[dict] = []
-    raw_comp: dict[int, Optional[float]] = {}   # unrounded, for the sums
-    raw_vol: dict[int, int] = {}
     unmatched = 0
     unit_checked = 0
     unit_bad: dict[str, int] = defaultdict(int)
     odd: dict[str, int] = defaultdict(int)      # other_type / other_reason
     positions: set[tuple[int, int]] = set()
-    for f in sorted(fills, key=lambda x: x.deal_id):
+    for f in fills:
         if not srv_from <= f.time_msc < srv_to:
             continue
         acct = acct_by_login.get(f.login)
@@ -593,11 +672,12 @@ def _compute(
         if cls in ("other_type", "other_reason"):
             odd[f"{cls}:{f.symbol}:type={f.order_type}:reason={f.order_reason}"] += 1
         comp = calc.comp_usd(f, acct.ccy)   # unknown currency raises: fail closed
-        raw_comp[f.deal_id] = comp
-        raw_vol[f.deal_id] = f.volume
         rows.append(_row(f, acct, cls, comp))
         if is_eligible(cls):
             positions.add((f.login, f.position_id))
+    # The RawFill list is the largest object of a run; the rows carry
+    # everything from here on, so let it go before position legs / summary.
+    del fills
 
     # One aggregated line per query, never per row (CLAUDE.md log rule).
     if unit_bad:
@@ -647,7 +727,16 @@ def _compute(
         else:
             r["counted"] = True
 
-    summary_dict = _summarise(rows, raw_comp, raw_vol, accounts, subject, q, date_to, as_of, anomalies, positions)
+    summary_dict = build_summary(
+        rows,
+        logins=[a.login for a in accounts],
+        client_id=subject.client_id,
+        login_sid=subject.login_sid,
+        date_from=q.date_from,
+        date_to=date_to,
+        date_to_requested=q.date_to,
+        as_of=as_of,
+    )
     coverage = Coverage(
         earliest_srv_date=EARLIEST_SRV_DATE,
         ready_through_srv_date=ready,
@@ -658,7 +747,7 @@ def _compute(
     ).model_dump(mode="json")
     logger.debug(
         "exec_comp computed subject=%s %s..%s as_of=%s ids=%d rows=%d counted=%d unmatched=%d",
-        subject.key, q.date_from, date_to, as_of, len(ids), len(rows),
+        subject.key, q.date_from, date_to, as_of, n_ids, len(rows),
         summary_dict["deals"], unmatched,
     )
     return ComputeResult(
@@ -668,6 +757,7 @@ def _compute(
         rows=rows,
         from_cache=False,
         date_to_eff=date_to,
+        ids=n_ids,
         unit_checked=unit_checked,
         unit_mismatches=dict(unit_bad),
     )
@@ -704,6 +794,9 @@ def _row(f: RawFill, acct: Account, cls: str, comp: Optional[float]) -> dict:
         "worse_px": wpx,
         "outcome": calc.outcome(wpx),
         "comp_usd": round(comp, _MONEY_DP) if comp is not None else None,
+        # Internal: the unrounded amount the sums use. Not an OrderRow field,
+        # never cached, never serialised.
+        "_comp_raw": comp,
         "raw": {
             "action": f.action,
             "entry": f.entry,
@@ -747,39 +840,51 @@ def _percentile(sorted_vals: list[int], p: float) -> float:
     return float(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (k - lo))
 
 
-def _summarise(
+def build_summary(
     rows: list[dict],
-    raw_comp: dict[int, Optional[float]],
-    raw_vol: dict[int, int],
-    accounts: list[Account],
-    subject: _Subject,
-    q: Query,
+    *,
+    logins: list[int],
+    client_id: Optional[int],
+    login_sid: Optional[str],
+    date_from: dt.date,
     date_to: dt.date,
+    date_to_requested: dt.date,
     as_of: dt.date,
-    anomalies: set,
-    positions: set,
 ) -> dict:
+    """The summary dict (``SummaryData`` shape) from finished row dicts.
+
+    Pure: everything comes from the rows (``counted`` / ``not_counted_reason``
+    already decided, unrounded ``_comp_raw``); ``logins`` fixes the
+    ``by_account`` order and lists accounts that had no fill. Rows are summed
+    in deal order, so the rows of several date chunks concatenated give the
+    same result as one run over the whole range; delay percentiles are taken
+    over all rows, never averaged."""
     total = _Acc()
-    by_account = {f"5-{a.login}": _Acc() for a in accounts}
+    by_account = {f"5-{login}": _Acc() for login in logins}
     by_symbol: dict[str, _Acc] = defaultdict(_Acc)
     by_entry: dict[str, _Acc] = {}
     by_day: dict[str, _Acc] = defaultdict(_Acc)
     by_class: dict[str, _Acc] = defaultdict(_Acc)
     excluded = _Acc()
     excluded_pos: set = set()
+    anomaly_pos: set = set()
     outcomes = {"worse": 0, "same": 0, "better": 0}
     delays: list[int] = []
     max_single: Optional[float] = None
 
-    for r in rows:
-        vol = raw_vol[r["deal_id"]]
-        comp = raw_comp.get(r["deal_id"])
+    for r in sorted(rows, key=lambda x: x["deal_id"]):
+        vol = int(round(r["lots"] * 10000))   # lots = volume / 10000, exact at 4 dp
+        comp = r["_comp_raw"]
         if not r["eligible"]:
             by_class[r["cls"]].add(vol, comp)
             continue
-        if r["not_counted_reason"] == "position_open_at_as_of":
+        reason = r["not_counted_reason"]
+        if reason == "position_open_at_as_of":
             excluded.add(vol, comp)
             excluded_pos.add((r["login"], r["position_id"]))
+            continue
+        if reason == "position_anomaly":
+            anomaly_pos.add((r["login"], r["position_id"]))
             continue
         if not r["counted"]:
             continue
@@ -800,15 +905,15 @@ def _summarise(
     return {
         **total.dump(),
         "subject": {
-            "client_id": subject.client_id,
-            "login_sid": subject.login_sid,
-            "logins": sorted(a.login for a in accounts),
+            "client_id": client_id,
+            "login_sid": login_sid,
+            "logins": sorted(logins),
         },
         "query": {
-            "date_from": q.date_from.isoformat(),
+            "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
-            "date_to_requested": q.date_to.isoformat(),
-            "date_to_clipped": date_to < q.date_to,
+            "date_to_requested": date_to_requested.isoformat(),
+            "date_to_clipped": date_to < date_to_requested,
             "as_of": as_of.isoformat(),
         },
         "outcomes": outcomes,
@@ -834,7 +939,7 @@ def _summarise(
             "lots": round(excluded.volume / 10000.0, _LOTS_DP),
             "comp_net_usd_if_counted": round(excluded.net, _MONEY_DP),
         },
-        "anomaly_positions": len(anomalies & positions),
+        "anomaly_positions": len(anomaly_pos),
         "not_counted_by_class": [
             v.dump(cls=k) for k, v in sorted(by_class.items(), key=lambda kv: (-kv[1].deals, kv[0]))
         ],

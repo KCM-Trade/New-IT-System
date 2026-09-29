@@ -37,9 +37,13 @@ router = APIRouter(prefix="/exec-compensation")
 
 _ERRORS = {
     404: {"model": ErrorResponse, "description": "SUBJECT_NOT_FOUND"},
-    422: {"model": ErrorResponse, "description": "Invalid parameters / QUERY_TOO_LARGE"},
+    422: {"model": ErrorResponse, "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"},
     500: {"model": ErrorResponse, "description": "UNKNOWN_CURRENCY"},
-    503: {"model": ErrorResponse, "description": "BUSY — all query slots taken"},
+    503: {
+        "model": ErrorResponse,
+        "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / "
+        "QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After",
+    },
     504: {"model": ErrorResponse, "description": "UPSTREAM_TIMEOUT"},
 }
 

@@ -69,8 +69,10 @@ class Deadline:
     def check(self, stage: str = "") -> None:
         if self.expired():
             where = f" ({stage})" if stage else ""
+            # Load-dependent (the same query may fit when the replica is
+            # quiet), unlike the deterministic deal cap: 503 + Retry-After.
             raise ExecCompError(
-                "QUERY_TOO_LARGE",
+                "QUERY_BUDGET_EXCEEDED",
                 f"query exceeded its {self.budget_s:g}s time budget{where}; "
-                "narrow the date range",
+                "retry later or narrow the date range",
             )

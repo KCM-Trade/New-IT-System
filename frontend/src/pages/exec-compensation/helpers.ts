@@ -216,10 +216,17 @@ export function signedClass(v: number | null | undefined): string {
 
 // ── errors ──────────────────────────────────────────────────────────────────
 
+// Appended to the backend message. QUERY_TOO_LARGE has none: its backend
+// message is already the full Chinese instruction (numbers + "联系 IT").
 const CODE_HINT: Partial<Record<ErrorCode, string>> = {
-  QUERY_TOO_LARGE: "请缩小日期范围，或改查单个 MT5 账户后再试。",
   BUSY: "查询繁忙，请稍后再试。",
   UPSTREAM_TIMEOUT: "数据库查询超时，请缩小日期范围后再试。",
+};
+
+// Shown instead of the backend message (which is English and technical).
+const CODE_MESSAGE: Partial<Record<ErrorCode, string>> = {
+  UPSTREAM_UNAVAILABLE: "数据库暂时不可用，请稍后再试",
+  QUERY_BUDGET_EXCEEDED: "查询超时（系统繁忙），请稍后再试或缩小日期范围",
 };
 
 /**
@@ -238,6 +245,8 @@ export function apiErrorMessage(status: number, body: unknown): { code: string |
   const err = pick(body);
   if (err && typeof err.message === "string") {
     const code = typeof err.code === "string" ? err.code : null;
+    const fixed = code ? CODE_MESSAGE[code as ErrorCode] : undefined;
+    if (fixed) return { code, message: fixed };
     const hint = code ? CODE_HINT[code as ErrorCode] : undefined;
     return { code, message: hint ? `${err.message}（${hint}）` : err.message };
   }

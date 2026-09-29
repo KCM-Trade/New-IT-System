@@ -248,6 +248,7 @@ def _no_redis(monkeypatch, tmp_path):
     monkeypatch.setenv("EXEC_COMP_QUERY_BUDGET_S", "60")
     monkeypatch.setenv("EXEC_COMP_MAX_CONCURRENT", "2")
     monkeypatch.setenv("EXEC_COMP_PAGE_SIZE_MAX", "1000")
+    monkeypatch.setenv("EXEC_COMP_READY_LAG_S", "0")
     monkeypatch.delenv("EXEC_COMP_CACHE_MAX_BYTES", raising=False)
 
 
@@ -620,7 +621,10 @@ def test_basis_on_every_response(src):
 def test_export_rows_matches_summary_and_all_view(src):
     s, rows = _run(Q.export_rows, q(), source=src)
     assert s.data.comp_net_usd == pytest.approx(14.0)
-    assert {r.deal_id for r in rows} == {r.deal_id for r in orders(src, view="all", page_size=500).data}
+    assert {r["deal_id"] for r in rows} == {r.deal_id for r in orders(src, view="all", page_size=500).data}
+    # plain row dicts (no 150k pydantic objects), sorted by fill time
+    assert all(isinstance(r, dict) for r in rows)
+    assert [r["fill_time_srv"] for r in rows] == sorted(r["fill_time_srv"] for r in rows)
 
 
 def test_status(src):
@@ -697,11 +701,12 @@ def test_deal_cap_at_exactly_the_limit_passes(monkeypatch):
     assert summ(FakeSource(FILLS)).data.deals == 5
 
 
-def test_time_budget_exhausted_is_query_too_large(monkeypatch):
+def test_time_budget_exhausted_is_query_budget_exceeded_503(monkeypatch):
+    """Load-dependent -> retryable 503, unlike the deterministic deal cap (422)."""
     _set_env(monkeypatch, EXEC_COMP_QUERY_BUDGET_S=0)
     fake = FakeSource(FILLS)
     e = _err(lambda: summ(fake))
-    assert e.code == "QUERY_TOO_LARGE" and e.status == 422
+    assert e.code == "QUERY_BUDGET_EXCEEDED" and e.status == 503
     assert fake.calls.get("fills", 0) == 0
 
 
@@ -882,3 +887,223 @@ def test_error_statuses_match_the_contract_map(monkeypatch, src):
     for case in cases:
         e = _err(case)
         assert e.status == ERROR_STATUS[e.code], (e.code, e.status)
+
+
+# ---------------------------------------------------------------------------
+# cold-review fixes (OPT-0068)
+# ---------------------------------------------------------------------------
+
+
+def test_deal_cap_message_names_both_numbers_in_chinese(monkeypatch):
+    _set_env(monkeypatch, EXEC_COMP_MAX_DEALS=3)
+    e = _err(lambda: summ(FakeSource(FILLS)))
+    n = len(FakeSource(FILLS).deal_ids([A_USD, B_CEN], T("2026-09-01"), T("2026-09-29")))
+    assert e.message == (
+        f"本次查询涉及 {n:,} 笔成交，超过单次上限 3 笔。"
+        "请缩小日期范围；如确需整段数据，请联系 IT 手动处理。"
+    )
+
+
+def test_default_deal_cap_is_150k(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.delenv("EXEC_COMP_MAX_DEALS", raising=False)
+    get_settings.cache_clear()
+    assert get_settings().EXEC_COMP_MAX_DEALS == 150_000
+
+
+def test_stepped_back_default_as_of_is_served_from_its_own_cache_key():
+    """#7: after MT midnight, before the replica passes it, the default as_of
+    steps back; the second request must hit the cache, not recompute."""
+    cache = FakeRedis()
+    head = T("2026-09-28T23:10:00")
+    first = summ(FakeSource(FILLS, head=head), cache=cache)
+    assert first.as_of == dt.date(2026, 9, 27) and first.statistics.from_cache is False
+    fake = FakeSource(FILLS, head=head)
+    second = summ(fake, cache=cache)
+    assert second.statistics.from_cache is True
+    assert second.as_of == dt.date(2026, 9, 27)
+    assert fake.calls.get("deal_ids", 0) == 0
+    assert second.data.model_dump() == first.data.model_dump()
+
+
+def test_quiet_replica_head_within_lag_counts_as_ready(monkeypatch):
+    """#8 (opt-in, off by default): no fill after MT midnight yet, but the
+    head is fresh (<= 900s)."""
+    _set_env(monkeypatch, EXEC_COMP_READY_LAG_S=900)
+    head = T("2026-09-28T23:58:00")
+    r = _run(Q.summary, q(), source=FakeSource(FILLS, head=head), now=T("2026-09-29T00:10:00"))
+    assert r.as_of == dt.date(2026, 9, 28)
+    assert r.coverage.complete is True and r.coverage.reason is None
+
+
+def test_stale_replica_head_still_steps_back(monkeypatch):
+    head = T("2026-09-28T23:40:00")        # 30 min behind "now"
+    r = _run(Q.summary, q(), source=FakeSource(FILLS, head=head), now=T("2026-09-29T00:10:00"))
+    assert r.as_of == dt.date(2026, 9, 27) and r.coverage.reason
+    # lag 0 disables the secondary rule
+    _set_env(monkeypatch, EXEC_COMP_READY_LAG_S=0)
+    head = T("2026-09-28T23:58:00")
+    r = _run(Q.summary, q(), source=FakeSource(FILLS, head=head), now=T("2026-09-29T00:10:00"))
+    assert r.as_of == dt.date(2026, 9, 27)
+
+
+def test_readiness_lag_rule_is_off_by_default():
+    """Default: a fresh head without a post-midnight fill does NOT count as
+    ready — it cannot tell a quiet replica from one still catching up."""
+    head = T("2026-09-28T23:58:00")
+    r = _run(Q.summary, q(), source=FakeSource(FILLS, head=head), now=T("2026-09-29T00:10:00"))
+    assert r.as_of == dt.date(2026, 9, 27)
+
+
+def test_status_uses_the_same_readiness_rule(monkeypatch):
+    _set_env(monkeypatch, EXEC_COMP_READY_LAG_S=900)
+    st = _run(Q.status, source=FakeSource(FILLS, head=T("2026-09-28T23:58:00")),
+              now=T("2026-09-29T00:10:00"))
+    assert st.data.ready_through_srv_date == dt.date(2026, 9, 28)
+
+
+def _summary_of(rows, logins, date_from, date_to, as_of="2026-09-28"):
+    return Q.build_summary(
+        rows,
+        logins=logins,
+        client_id=CLIENT,
+        login_sid=None,
+        date_from=dt.date.fromisoformat(date_from),
+        date_to=dt.date.fromisoformat(date_to),
+        date_to_requested=dt.date.fromisoformat(date_to),
+        as_of=dt.date.fromisoformat(as_of),
+    )
+
+
+def test_summary_of_two_chunks_equals_one_run_over_the_whole_range():
+    """The offline export sums date chunks: open-position status depends only
+    on as_of, so the concatenated chunk rows must give the one-run summary —
+    including delay percentiles (recomputed, never averaged), excluded_open
+    positions spanning both chunks and anomaly positions."""
+    whole = _run(Q.compute_uncached, q(as_of="2026-09-28"), source=FakeSource(FILLS))
+    a = _run(Q.compute_uncached, q("2026-09-01", "2026-09-13", as_of="2026-09-28"), source=FakeSource(FILLS))
+    b = _run(Q.compute_uncached, q("2026-09-14", "2026-09-28", as_of="2026-09-28"), source=FakeSource(FILLS))
+    assert a.rows and b.rows
+    logins = list(ACCOUNTS)
+    merged = _summary_of(a.rows + b.rows, logins, "2026-09-01", "2026-09-28")
+    assert merged == whole.summary
+    # the builder alone reproduces the core's summary
+    assert _summary_of(whole.rows, logins, "2026-09-01", "2026-09-28") == whole.summary
+    # chunk order does not matter (rows are summed in deal order)
+    assert _summary_of(b.rows + a.rows, logins, "2026-09-01", "2026-09-28") == whole.summary
+    assert a.coverage["unmatched_deals"] + b.coverage["unmatched_deals"] == whole.coverage["unmatched_deals"]
+
+
+def test_delay_percentiles_are_recomputed_over_all_rows():
+    fills = [
+        mk(200 + i, 7000 + i, f"2026-09-{2 + i:02d}T10:00:00", delay_ms=d)
+        for i, d in enumerate([10, 20, 30, 1000, 2000, 5000])
+    ] + [
+        mk(300 + i, 7000 + i, f"2026-09-{2 + i:02d}T11:00:00", entry=1, action=1, delay_ms=1)
+        for i in range(6)
+    ]
+    whole = _run(Q.compute_uncached, q("2026-09-01", "2026-09-10", as_of="2026-09-28"), source=FakeSource(fills))
+    a = _run(Q.compute_uncached, q("2026-09-01", "2026-09-04", as_of="2026-09-28"), source=FakeSource(fills))
+    b = _run(Q.compute_uncached, q("2026-09-05", "2026-09-10", as_of="2026-09-28"), source=FakeSource(fills))
+    merged = _summary_of(a.rows + b.rows, list(ACCOUNTS), "2026-09-01", "2026-09-10")
+    assert merged["delay"] == whole.summary["delay"]
+    assert merged["delay"]["median_ms"] != (a.summary["delay"]["median_ms"] + b.summary["delay"]["median_ms"]) / 2
+
+
+class _Cur:
+    def __init__(self, exc):
+        self._exc = exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, args):
+        raise self._exc
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        "OperationalError(2003, \"Can't connect to MySQL server\")",
+        "OperationalError(1045, 'Access denied')",
+        "InterfaceError(0, '')",
+    ],
+)
+def test_replica_source_maps_dead_links_to_upstream_unavailable(exc):
+    import pymysql
+
+    from app.core.config import get_settings
+    from app.services.exec_comp.source import ReplicaFillSource
+
+    err = eval("pymysql.err." + exc)  # noqa: S307 - literal test table
+    rs = ReplicaFillSource(get_settings())
+    rs._cursor = lambda: _Cur(err)  # type: ignore[method-assign]
+    with pytest.raises(ExecCompError) as ei:
+        rs.fills([1])
+    assert ei.value.code == "UPSTREAM_UNAVAILABLE" and ei.value.status == 503
+
+
+def test_replica_connect_failure_is_upstream_unavailable(monkeypatch):
+    """The connect itself (connect_readonly) failing is a dead link too."""
+    import pymysql
+
+    from app.core.config import get_settings
+    from app.services.exec_comp import source as source_mod
+
+    def refuse(*a, **k):
+        raise pymysql.err.OperationalError(2003, "Can't connect to MySQL server on 'x'")
+
+    monkeypatch.setattr(source_mod, "connect_readonly", refuse)
+    with pytest.raises(ExecCompError) as ei:
+        source_mod.ReplicaFillSource(get_settings()).replica_head()
+    assert ei.value.code == "UPSTREAM_UNAVAILABLE"
+
+
+def test_deal_id_query_forces_the_covering_index():
+    from app.core.config import get_settings
+    from app.services.exec_comp.source import ReplicaFillSource
+
+    seen: list[str] = []
+    rs = ReplicaFillSource(get_settings())
+    rs._locate = lambda srv: 1  # type: ignore[method-assign]
+
+    def run(sql, args=()):
+        seen.append(sql)
+        return []
+
+    rs._run = run  # type: ignore[method-assign]
+    rs.deal_ids([60000001], T("2026-09-01"), T("2026-09-02"))
+    assert seen and all("FORCE INDEX (IDX_POSITION)" in s for s in seen)
+    assert ReplicaFillSource._LOCATE_MARGIN == dt.timedelta(hours=3)
+
+
+def test_models_are_slotted():
+    for cls in (Account, RawFill, PositionLeg, ReplicaHead):
+        assert "__slots__" in cls.__dict__ and not hasattr(FILLS[0], "__dict__")
+
+
+def test_offline_export_script_chunks_add_up_to_the_online_summary():
+    import importlib.util
+    from pathlib import Path
+
+    from app.core.config import get_settings
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "exec_comp_offline_export.py"
+    spec = importlib.util.spec_from_file_location("exec_comp_offline_export", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    whole = summ(FakeSource(FILLS), q(as_of="2026-09-28"))
+    resp, rows, _ = mod.run(
+        client_id=CLIENT, login_sid=None, date_from=dt.date(2026, 9, 1), date_to=dt.date(2026, 9, 28),
+        as_of=dt.date(2026, 9, 28), chunk_days=5, settings=mod.offline_settings(),
+        source_factory=lambda: FakeSource(FILLS), clock=srv_clock(NOW_0929), log=lambda *a: None,
+    )
+    assert resp.data.model_dump() == whole.data.model_dump()
+    assert resp.coverage.model_dump() == whole.coverage.model_dump()
+    assert get_settings().EXEC_COMP_MAX_DEALS == 500000   # the override is a copy
+    assert [r["fill_time_srv"] for r in rows] == sorted(r["fill_time_srv"] for r in rows)

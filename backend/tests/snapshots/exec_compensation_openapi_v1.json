@@ -109,7 +109,7 @@
                 }
               }
             },
-            "description": "Invalid parameters / QUERY_TOO_LARGE"
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
           },
           "500": {
             "content": {
@@ -129,7 +129,7 @@
                 }
               }
             },
-            "description": "BUSY — all query slots taken"
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
           },
           "504": {
             "content": {
@@ -329,7 +329,7 @@
                 }
               }
             },
-            "description": "Invalid parameters / QUERY_TOO_LARGE"
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
           },
           "500": {
             "content": {
@@ -349,7 +349,7 @@
                 }
               }
             },
-            "description": "BUSY — all query slots taken"
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
           },
           "504": {
             "content": {
@@ -400,7 +400,7 @@
                 }
               }
             },
-            "description": "Invalid parameters / QUERY_TOO_LARGE"
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
           },
           "500": {
             "content": {
@@ -420,7 +420,7 @@
                 }
               }
             },
-            "description": "BUSY — all query slots taken"
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
           },
           "504": {
             "content": {
@@ -552,7 +552,7 @@
                 }
               }
             },
-            "description": "Invalid parameters / QUERY_TOO_LARGE"
+            "description": "Invalid parameters / QUERY_TOO_LARGE (deal cap)"
           },
           "500": {
             "content": {
@@ -572,7 +572,7 @@
                 }
               }
             },
-            "description": "BUSY — all query slots taken"
+            "description": "BUSY (all query slots taken) / UPSTREAM_UNAVAILABLE (replica unreachable) / QUERY_BUDGET_EXCEEDED (time budget ran out under load); carries Retry-After"
           },
           "504": {
             "content": {
@@ -818,7 +818,9 @@
             "QUERY_TOO_LARGE",
             "BUSY",
             "UNKNOWN_CURRENCY",
-            "UPSTREAM_TIMEOUT"
+            "UPSTREAM_TIMEOUT",
+            "UPSTREAM_UNAVAILABLE",
+            "QUERY_BUDGET_EXCEEDED"
           ],
           "title": "Code",
           "type": "string"

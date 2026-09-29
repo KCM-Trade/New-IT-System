@@ -99,6 +99,8 @@ class ReplicaFillSource:
         return self._conn.cursor()
 
     def _run(self, sql: str, args: Sequence = ()) -> list[dict]:
+        # The connect happens inside the try: a refused / unauthorised connect
+        # (2003, 1045) is UPSTREAM_UNAVAILABLE like any other dead link.
         try:
             with self._cursor() as cur:
                 cur.execute(sql, args)
@@ -111,6 +113,13 @@ class ReplicaFillSource:
                     "UPSTREAM_TIMEOUT",
                     "the MT5 replica did not answer in time; narrow the date range or retry later",
                     status=504,
+                ) from exc
+            if isinstance(exc, (pymysql.err.OperationalError, pymysql.err.InterfaceError)):
+                self.close()
+                logger.warning("exec_comp replica unavailable: %s", exc)
+                raise ExecCompError(
+                    "UPSTREAM_UNAVAILABLE",
+                    "the MT5 replica is unavailable right now; retry later",
                 ) from exc
             raise
 
@@ -164,9 +173,11 @@ class ReplicaFillSource:
         return int(rows[0]["d"] or 0) + 1
 
     # Deal numbers are located by Timestamp, whose order matches Deal order
-    # only up to ties / same-millisecond writes. Widen the window a little;
-    # the query core filters every fill by its own server time anyway.
-    _LOCATE_MARGIN = dt.timedelta(minutes=10)
+    # only roughly (ties, same-millisecond writes, late-written deals). Widen
+    # the window generously — it only costs covering-index entries; the query
+    # core filters every fill by its own server time (TimeMsc) anyway, so the
+    # margin never decides membership.
+    _LOCATE_MARGIN = dt.timedelta(hours=3)
 
     def deal_ids(
         self, logins: Sequence[int], srv_from: dt.datetime, srv_to: dt.datetime
@@ -179,7 +190,10 @@ class ReplicaFillSource:
         for login in logins:
             self._check("deal ids")
             rows = self._run(
-                "SELECT Deal FROM mt5_live.mt5_deals WHERE Login = %s AND Deal >= %s AND Deal < %s",
+                # FORCE: covering (Login, PositionID) index, never a PK range
+                # scan reading table rows (index name verified 2026-09-29).
+                "SELECT Deal FROM mt5_live.mt5_deals FORCE INDEX (IDX_POSITION) "
+                "WHERE Login = %s AND Deal >= %s AND Deal < %s",
                 (int(login), lo, hi),
             )
             out.extend(int(r["Deal"]) for r in rows)

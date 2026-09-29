@@ -67,21 +67,27 @@ ErrorCode = Literal[
     "AS_OF_TOO_LATE",         # as_of later than the default (yesterday)
     "SORT_NOT_ALLOWED",
     "VALIDATION_ERROR",       # any other malformed parameter
-    "QUERY_TOO_LARGE",        # over the deal cap / time budget (01 D21)
+    "QUERY_TOO_LARGE",        # over the deal cap (01 D21) — deterministic, narrow the range
     "BUSY",                   # all server-wide query slots taken (01 D21)
     "UNKNOWN_CURRENCY",       # account currency outside {CEN, USD}: fail closed
     "UPSTREAM_TIMEOUT",       # replica statement killed by MAX_EXECUTION_TIME
+    "UPSTREAM_UNAVAILABLE",   # replica unreachable / refused (connect, auth, dropped link)
+    "QUERY_BUDGET_EXCEEDED",  # per-query time budget ran out — load-dependent, retry later
 ]
 
 # HTTP status per error code — part of the contract (callers must not retry
-# 4xx; 503/504 are retryable later, not immediately).
+# 4xx; 503/504 are retryable later, not immediately — BUSY,
+# UPSTREAM_UNAVAILABLE and QUERY_BUDGET_EXCEEDED carry a Retry-After header).
 ERROR_STATUS: dict[str, int] = {
     "SUBJECT_REQUIRED": 422, "SUBJECT_AMBIGUOUS": 422, "INVALID_LOGIN_SID": 422,
     "SUBJECT_NOT_FOUND": 404, "RANGE_INVALID": 422, "RANGE_BEFORE_COVERAGE": 422,
     "AS_OF_TOO_LATE": 422, "SORT_NOT_ALLOWED": 422, "VALIDATION_ERROR": 422,
     "QUERY_TOO_LARGE": 422, "BUSY": 503, "UNKNOWN_CURRENCY": 500,
-    "UPSTREAM_TIMEOUT": 504,
+    "UPSTREAM_TIMEOUT": 504, "UPSTREAM_UNAVAILABLE": 503, "QUERY_BUDGET_EXCEEDED": 503,
 }
+
+# Seconds a client should wait before retrying these codes (Retry-After).
+RETRY_AFTER_S: dict[str, int] = {"BUSY": 30, "UPSTREAM_UNAVAILABLE": 30, "QUERY_BUDGET_EXCEEDED": 30}
 
 
 # --- shared blocks ---------------------------------------------------------

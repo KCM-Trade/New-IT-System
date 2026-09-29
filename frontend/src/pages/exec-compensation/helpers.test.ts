@@ -119,13 +119,25 @@ describe("formatting", () => {
 });
 
 describe("apiErrorMessage", () => {
-  it("reads the contract error envelope and adds a hint for QUERY_TOO_LARGE", () => {
-    const r = apiErrorMessage(422, {
-      error: { code: "QUERY_TOO_LARGE", message: "too many deals" },
-    });
+  it("shows the QUERY_TOO_LARGE backend message as-is", () => {
+    const msg =
+      "本次查询涉及 180,000 笔成交，超过单次上限 150,000 笔。请缩小日期范围；如确需整段数据，请联系 IT 手动处理。";
+    const r = apiErrorMessage(422, { error: { code: "QUERY_TOO_LARGE", message: msg } });
     expect(r.code).toBe("QUERY_TOO_LARGE");
-    expect(r.message).toContain("too many deals");
-    expect(r.message).toContain("缩小日期范围");
+    expect(r.message).toBe(msg);
+  });
+  it("replaces the backend message for UPSTREAM_UNAVAILABLE and QUERY_BUDGET_EXCEEDED", () => {
+    const a = apiErrorMessage(503, {
+      error: { code: "UPSTREAM_UNAVAILABLE", message: "the MT5 replica is unavailable right now" },
+    });
+    expect(a).toEqual({ code: "UPSTREAM_UNAVAILABLE", message: "数据库暂时不可用，请稍后再试" });
+    const b = apiErrorMessage(503, {
+      error: { code: "QUERY_BUDGET_EXCEEDED", message: "query exceeded its 60s time budget" },
+    });
+    expect(b).toEqual({
+      code: "QUERY_BUDGET_EXCEEDED",
+      message: "查询超时（系统繁忙），请稍后再试或缩小日期范围",
+    });
   });
   it("accepts the envelope nested under FastAPI detail", () => {
     const r = apiErrorMessage(503, { detail: { error: { code: "BUSY", message: "busy" } } });

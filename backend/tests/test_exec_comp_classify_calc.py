@@ -416,3 +416,54 @@ def test_time_formatting():
 
 def test_entry_kind_map():
     assert calc.ENTRY_KIND == {0: "open", 1: "close", 2: "inout", 3: "close_by"}
+
+
+# --- CALC_VERSION guard (OPT-0068 cold review) -------------------------------
+#
+# Cached results are keyed by CALC_VERSION: a rule change that forgets to bump
+# it serves stale numbers for a whole cache TTL, and API callers cannot tell
+# which rules produced a figure. The hash covers the code of classify.py and
+# calc.py (every top-level constant and function, as an AST with docstrings
+# stripped — comment / docstring edits do not trip it; rule edits do).
+
+PINNED_CALC_HASH = {
+    1: "31a2e66ad2f315790304ee9561eef4b01b98cf1717b59e7a561047bc7d8c24d8",
+}
+
+
+def _rules_fingerprint() -> str:
+    import ast
+    import hashlib
+    import inspect
+
+    from app.services.exec_comp import calc as calc_mod
+    from app.services.exec_comp import classify as classify_mod
+
+    h = hashlib.sha256()
+    for mod in (classify_mod, calc_mod):
+        tree = ast.parse(inspect.getsource(mod))
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant):
+                continue   # module docstring
+            for sub in ast.walk(node):
+                body = getattr(sub, "body", None)
+                if (
+                    isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    sub.body = body[1:] or [ast.Pass()]
+            h.update(ast.dump(node, annotate_fields=False, include_attributes=False).encode())
+    return h.hexdigest()
+
+
+def test_calc_version_is_bumped_when_the_rules_change():
+    from app.schemas.exec_compensation import CALC_VERSION
+
+    assert PINNED_CALC_HASH.get(CALC_VERSION) == _rules_fingerprint(), (
+        "classification/calc changed: bump schemas.CALC_VERSION and update the pinned hash"
+    )

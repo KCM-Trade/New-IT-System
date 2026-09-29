@@ -12,14 +12,14 @@ from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Account:
     login: int
     ccy: str        # mt4_users.CURRENCY; only CEN / USD are valid (02 §4)
     group: str      # mt4_users.GROUP, e.g. "KCMC\\5c_L10"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RawFill:
     """One mt5_deals row (Action in {0,1}) LEFT JOIN mt5_orders_history."""
 
@@ -49,7 +49,7 @@ class RawFill:
     time_setup_msc: Optional[dt.datetime] = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PositionLeg:
     """One lifecycle deal of a position, for the fully-closed test (02 §6.1)."""
 
@@ -61,7 +61,7 @@ class PositionLeg:
     time_msc: dt.datetime
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ReplicaHead:
     deal_id: int
     time_srv: dt.datetime

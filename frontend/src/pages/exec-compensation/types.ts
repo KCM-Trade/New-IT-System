@@ -47,7 +47,9 @@ export type ErrorCode =
   | "QUERY_TOO_LARGE"
   | "BUSY"
   | "UNKNOWN_CURRENCY"
-  | "UPSTREAM_TIMEOUT";
+  | "UPSTREAM_TIMEOUT"
+  | "UPSTREAM_UNAVAILABLE"
+  | "QUERY_BUDGET_EXCEEDED";
 
 export interface Basis {
   reference: "request_price";

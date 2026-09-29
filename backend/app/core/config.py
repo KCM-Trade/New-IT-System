@@ -183,6 +183,7 @@ class Settings:
     EXEC_COMP_STATEMENT_TIMEOUT_MS: int
     EXEC_COMP_QUERY_BUDGET_S: int
     EXEC_COMP_MAX_DEALS: int
+    EXEC_COMP_READY_LAG_S: int
     EXEC_COMP_MAX_CONCURRENT: int
     EXEC_COMP_CACHE_TTL_S: int
     EXEC_COMP_CACHE_MAX_BYTES: int
@@ -706,7 +707,17 @@ class Settings:
             os.environ.get("EXEC_COMP_STATEMENT_TIMEOUT_MS", "10000")
         )
         self.EXEC_COMP_QUERY_BUDGET_S = int(os.environ.get("EXEC_COMP_QUERY_BUDGET_S", "60"))
-        self.EXEC_COMP_MAX_DEALS = int(os.environ.get("EXEC_COMP_MAX_DEALS", "500000"))
+        # 100k fills measured ~610 MB peak RSS on the export path and a 2.85 MB
+        # compressed row blob; at 150k every allowed result stays cacheable
+        # under EXEC_COMP_CACHE_MAX_BYTES. Larger ranges: IT runs
+        # backend/scripts/exec_comp_offline_export.py off-peak.
+        self.EXEC_COMP_MAX_DEALS = int(os.environ.get("EXEC_COMP_MAX_DEALS", "150000"))
+        # Secondary readiness rule (as_of also ready when the replica head is at
+        # most this many seconds behind "now"). Off by default: MT5 trades
+        # crypto 24/7, so a fill after MT midnight always arrives, and the head's
+        # age cannot tell "quiet" from "replica not caught up yet" — enabling it
+        # risks caching a result that misses the last pre-midnight fills.
+        self.EXEC_COMP_READY_LAG_S = int(os.environ.get("EXEC_COMP_READY_LAG_S", "0"))
         # Server-wide (all uvicorn worker processes) via flock slot files. The
         # slot dir must be container-local (/tmp), never under backend/data:
         # that bind mount is shared by dev and prod, which would share slots.
