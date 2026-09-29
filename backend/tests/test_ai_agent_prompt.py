@@ -127,3 +127,22 @@ def test_net_deposit_wording_allows_a_labelled_sum_and_routes_profit_to_net_gain
     assert "Do not add them\n  back together" not in p
     assert "legacy net deposit (incl. IB withdrawal)" in p
     assert "net_gain question, not a net-deposit question" in p
+
+
+def test_schema_card_names_the_indexed_open_order_sentinel():
+    """2026-09-29: the card said "open orders have CLOSE_TIME = '1970-01-01'",
+    the model wrote exactly that, and the unindexed scan timed out twice. The
+    card must name closeDate as the sentinel and never present CLOSE_TIME as one."""
+    from app.ai_agent.prompt import RUN_SQL_SCHEMA_BLOCK as card
+
+    assert "`closeDate = '1970-01-01'`" in card
+    assert "open orders have CLOSE_TIME" not in card
+    assert "CLOSE_TIME (MT server wall clock, NOT indexed)" in card
+    assert "never add an openDate range" in " ".join(card.split())
+    assert "rank_open_positions" in card
+
+
+def test_prompt_routes_open_exposure_questions_to_rank_open_positions():
+    assert "rank_open_positions" in ANALYST_SYSTEM_PROMPT
+    assert "NET lots" in ANALYST_SYSTEM_PROMPT
+    assert "rank_open_positions" in TOOL_DOCSTRINGS
