@@ -1,0 +1,23 @@
+# News-event AB scan schedule — read daily by scripts/run_event_ab_scheduled.py.
+# event_mt = release moment in MT server time. MT follows the US DST calendar
+# (UTC+3 summer / UTC+2 winter), so US 08:30 ET data is 15:30 MT all year and
+# FOMC 14:00 ET is 21:00 MT all year. Only the HK display offset changes
+# (5 until 2026-11-01, 6 after) — the runner derives it from the date.
+# enabled=yes -> scanned and mailed. enabled=no -> candidate only: on the run day
+# of the LAST enabled event the runner mails kieran a reminder listing the next
+# month's candidates, so a human decides whether to enable them (user 2026-09-29).
+# Sources: bls.gov/schedule/2026, bea.gov/news/schedule, federalreserve.gov FOMC calendar
+# (checked 2026-09-29). Re-check before each quarter; dates can slip.
+event_mt,enabled,label
+2026-09-30 15:30,yes,US PCE 个人消费支出物价指数（8 月）
+2026-10-02 15:30,yes,US NFP 非农就业
+2026-10-14 15:30,yes,US CPI 消费者物价指数
+2026-10-28 21:00,yes,FOMC 议息
+2026-10-29 15:30,yes,US GDP 第三季初值 + PCE（9 月）
+2026-11-06 15:30,no,US NFP 非农就业
+2026-11-10 15:30,no,US CPI 消费者物价指数
+2026-11-25 15:30,no,US GDP 第三季修正值 + PCE（10 月）
+2026-12-04 15:30,no,US NFP 非农就业
+2026-12-09 21:00,no,FOMC 议息
+2026-12-10 15:30,no,US CPI 消费者物价指数
+2026-12-23 15:30,no,US GDP 第三季终值 + PCE（11 月）

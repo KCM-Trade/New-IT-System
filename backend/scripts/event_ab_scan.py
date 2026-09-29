@@ -33,7 +33,9 @@ Standard invocations (run from backend/ with .venv activated):
   python scripts/event_ab_scan.py --event-mt "2026-09-16 21:00" --label "FOMC 议息" \
       --mail-to risk@kcmtrade.com --mail-cc kieran.xiang@kohleservices.com
 
-Times are MT server time (UTC+3), same as blowup_audit_window.py.
+Times are MT server time: UTC+3 in summer, UTC+2 in winter (MT follows the US
+DST calendar). Pass --hk-offset-hours 6 in winter; the email footer derives the
+MT UTC offset from it (8 - hk_offset).
 """
 
 from __future__ import annotations
@@ -406,7 +408,7 @@ def build_email(args, start_mt, end_mt, df, cases, linked, n_shape_cc) -> tuple[
 附件 1：案例明细 CSV（全部同客户案例）。附件 2：跨客户 IP 关联对 CSV（含逐日 IP 证据）。
 </p>
 <p style="font-size:11px;color:#95a5a6;border-top:1px solid #eee;padding-top:8px">
-数据来源：fxbackoffice.mt4_trades（从库）+ 每日登录 IP 快照。未注明处时间均为 MT（UTC+3）。自动生成，请勿回复。
+数据来源：fxbackoffice.mt4_trades（从库）+ 每日登录 IP 快照。未注明处时间均为 MT（UTC+{8 - args.hk_offset_hours}）。自动生成，请勿回复。
 </p>
 </div>
 """
