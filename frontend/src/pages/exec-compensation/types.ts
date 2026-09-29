@@ -245,3 +245,11 @@ export const VIEW_OPTIONS: { value: OrdersView; label: string }[] = [
   { value: "excluded_open", label: "未计入（未平仓）" },
   { value: "all", label: "全部" },
 ];
+
+// Tooltip next to the view selector — what each view contains.
+export const VIEW_HELP = [
+  "计入：真正算进补偿金额的成交，汇总卡片的数字就是这些行的合计。须同时满足：客户主动市价单（手机 / 网页 / 客户端 / EA 开仓或平仓）、成交日在所选日期范围内、所属仓位在数据截止日前已完全平仓。",
+  "未计入（未平仓）：合格的市价单，但所属仓位截至数据截止日仍未完全平仓，整笔先不算（即第 ③ 条说明剔除的部分）。仓位平仓后再查询会自动移到「计入」。",
+  "全部：日期范围内的所有成交，另含止损、止盈、挂单触发、强平、close-by 等不属于补偿范围的类型；每行带「是否计入」与「不计入原因」，用于逐笔核对。",
+  "另：从库查不到订单记录的成交不在任何视图里，只以笔数提示。",
+].join("\n\n");

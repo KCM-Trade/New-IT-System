@@ -25,6 +25,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Info,
   Loader2,
   Search,
 } from "lucide-react";
@@ -41,7 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InfoHeader } from "@/components/ui/info-header";
 import { ColumnVisibilityMenu } from "@/components/ColumnVisibilityMenu";
 import { GRID_STORAGE_KEYS, useGridColumnPersist } from "@/hooks/useGridColumnPersist";
@@ -94,6 +95,7 @@ import {
   OUTCOME_LABELS,
   REASON_LABELS,
   SIDE_LABELS,
+  VIEW_HELP,
   VIEW_OPTIONS,
 } from "./exec-compensation/types";
 
@@ -766,27 +768,40 @@ export default function ExecCompensation() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <h3 className="text-base font-semibold">逐笔成交</h3>
-            <ToggleGroup
-              type="single"
-              value={view}
-              onValueChange={(v) => {
-                if (!v) return;
-                setView(v as OrdersView);
-                setPage(1);
-              }}
-              className="inline-flex items-center rounded-full bg-muted p-0.5"
-              aria-label="逐笔视图"
-            >
-              {VIEW_OPTIONS.map((o) => (
-                <ToggleGroupItem
-                  key={o.value}
-                  value={o.value}
-                  className="rounded-full px-3 py-1 text-center text-sm text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow"
+            <div className="flex items-center gap-1.5">
+              <Select
+                value={view}
+                onValueChange={(v) => {
+                  setView(v as OrdersView);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="h-8 w-[160px]" aria-label="逐笔视图">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VIEW_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info
+                    className="h-4 w-4 shrink-0 cursor-help text-muted-foreground opacity-70 hover:opacity-100"
+                    aria-label="视图说明"
+                  />
+                </TooltipTrigger>
+                <TooltipContent
+                  side="bottom"
+                  className="max-w-sm whitespace-pre-line text-left text-xs leading-relaxed"
                 >
-                  {o.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+                  {VIEW_HELP}
+                </TooltipContent>
+              </Tooltip>
+            </div>
             {committed && (
               <span className="text-xs text-muted-foreground tabular-nums">共 {fmtInt(total)} 笔</span>
             )}
