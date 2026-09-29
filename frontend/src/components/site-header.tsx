@@ -32,6 +32,7 @@ const routeToKeyMap: Record<string, string> = {
   "/window-scan": "pages.windowScan",
   "/swap-free-control": "pages.swapFreeControl",
   "/hold-bucket-report": "pages.holdBucketReport",
+  "/exec-compensation": "pages.execCompensation",
   "/ib-financial-monitor": "pages.ibFinancialMonitor",
   "/customer-pnl-monitor": "pages.customerPnLMonitor",
   "/customer-pnl-monitor-v2": "pages.customerPnLMonitorV2",

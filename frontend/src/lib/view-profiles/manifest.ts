@@ -50,6 +50,10 @@ export const FILTER_STATE_KEYS: readonly string[] = [
   // clients / shared-exit toggle+threshold / same-client toggle. The custom
   // absolute range is investigation context and is never persisted.
   "LOGIN_IP_TRADE_PROFIT_FILTERS_V1",
+  // Execution compensation (OPT-0068): orders view + page size only. The
+  // client / account input and the absolute date range are investigation
+  // context and stay in React state.
+  "EXEC_COMP_FILTERS_V1",
 ];
 
 /**
