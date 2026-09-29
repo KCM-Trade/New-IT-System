@@ -73,6 +73,16 @@ ErrorCode = Literal[
     "UPSTREAM_TIMEOUT",       # replica statement killed by MAX_EXECUTION_TIME
 ]
 
+# HTTP status per error code — part of the contract (callers must not retry
+# 4xx; 503/504 are retryable later, not immediately).
+ERROR_STATUS: dict[str, int] = {
+    "SUBJECT_REQUIRED": 422, "SUBJECT_AMBIGUOUS": 422, "INVALID_LOGIN_SID": 422,
+    "SUBJECT_NOT_FOUND": 404, "RANGE_INVALID": 422, "RANGE_BEFORE_COVERAGE": 422,
+    "AS_OF_TOO_LATE": 422, "SORT_NOT_ALLOWED": 422, "VALIDATION_ERROR": 422,
+    "QUERY_TOO_LARGE": 422, "BUSY": 503, "UNKNOWN_CURRENCY": 500,
+    "UPSTREAM_TIMEOUT": 504,
+}
+
 
 # --- shared blocks ---------------------------------------------------------
 
@@ -150,6 +160,8 @@ class OutcomeCounts(BaseModel):
 
 
 class DelayStats(BaseModel):
+    """Over counted fills only."""
+
     n: int = 0
     median_ms: Optional[float] = None
     p95_ms: Optional[float] = None
@@ -175,7 +187,7 @@ class SummaryData(Totals):
     query: QueryEcho
     outcomes: OutcomeCounts
     delay: DelayStats
-    max_single_comp_usd: Optional[float] = None
+    max_single_comp_usd: Optional[float] = Field(None, description="Largest comp_usd among counted fills")
     by_account: List[GroupRow] = Field(default_factory=list, description="key = login_sid")
     by_symbol: List[GroupRow] = Field(default_factory=list)
     by_entry: List[GroupRow] = Field(default_factory=list, description="key = open | close")
@@ -207,11 +219,17 @@ class RawCodes(BaseModel):
 
 
 class OrderRow(BaseModel):
+    """One in-range fill that has its order row. Fills whose order row is
+    missing are not rows; they only appear as ``coverage.unmatched_deals``."""
+
     deal_id: int
     order_id: int
     position_id: int
     login: int
     login_sid: str
+    account_group: Optional[str] = Field(
+        None, description="mt4_users.GROUP; explains plugin_passthrough rows (01 D20)"
+    )
     ccy: Literal["CEN", "USD"]
     symbol: str
     side: Side
@@ -222,6 +240,7 @@ class OrderRow(BaseModel):
     not_counted_reason: Optional[NotCountedReason] = None
     lots: float
     req_time_utc: Optional[str] = None
+    req_time_srv: Optional[str] = Field(None, description="MT server wall clock of the request")
     fill_time_utc: str
     fill_time_srv: str = Field(..., description="MT server wall clock, 'YYYY-MM-DD HH:MM:SS.fff'")
     srv_date: date
