@@ -309,7 +309,8 @@ def build_intraday_return_digest_email(
 <p>Dear Risk Team,</p>
 <p>{n} account(s) crossed the intraday-return threshold on the current MT
 trading day (same-day return on initial equity = prev-day EOD equity +
-deposits + credit; overnight positions count only the part newly gained in
+deposits + credit, minus withdrawals / credit out made before the first
+trade of the day; overnight positions count only the part newly gained in
 the profit zone today). Subscription: {html.escape(str(subscription.get('name') or ''))}.</p>
 {''.join(sections)}
 <p style="margin-top:20px;">Review on the Risk Monitor page:
