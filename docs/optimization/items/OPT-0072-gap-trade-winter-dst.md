@@ -1,7 +1,7 @@
 ---
 id: OPT-0072
 title: Gap Trade 扫描冬令时漏扫 —— cron 按 HKT 固定 07:20、now_mt 固定 +3，11 月起早于 MT 窗口结束
-status: ready
+status: wip
 priority: P0
 area: backend
 effort: S
