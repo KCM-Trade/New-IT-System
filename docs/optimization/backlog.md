@@ -23,6 +23,7 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
+| [OPT-0072](./items/OPT-0072-gap-trade-winter-dst.md) | **P0** | backend | S | Gap Trade 冬令时漏扫：cron 固定 HKT 07:20 + now_mt 固定 +3，11 月起早于 MT 窗口结束 40 分钟、漏扫 + 漏打出金标签；**deadline 2026-10-31** |
 | [OPT-0069](./items/OPT-0069-ai-agent-skills.md) | P1 | backend | M | AI agent 接入 Agent Skills（MAF SkillsProvider）：按需加载的领域知识目录替代单一 system prompt；11 个 skill 草稿在 docs/ai-agent/skills-draft/ 待审 |
 | [OPT-0070](./items/OPT-0070-ai-agent-attachments.md) | P2 | mixed | M | AI 助手上传附件：图片/PDF/文本原生，docx/xlsx 服务端转换（Azure 不原生支持），大表设上限 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，25s 工具超时后线程仍跑完）+ 老工具「每轮 2 次」从 prompt 升为 harness 硬性 |
