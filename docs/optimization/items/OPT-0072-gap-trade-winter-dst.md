@@ -75,4 +75,53 @@ Gap Trade（rule 71–80 SO+AB · 81–90 缺口超额盈利）扫描 MT 当日 
 
 ## 结果
 
-（待实施）
+实施 2026-09-30，分支 `opt/gap-trade-winter-dst`，commit `247a9e4`（调度）+ `2128e33`（AI prompt 事实）。**未 merge / 未部署**。
+
+### 采用的方案：首选方案（cron 直接挂 MT 时钟），没有走备选 A/B
+
+**APScheduler × `_MTServerTZ` 兼容性结论：兼容，可直接用。** 本机 venv APScheduler 3.11.2、prod 容器 3.11.3（Python 3.11.13）。
+3.11 已不走 pytz：`util.astimezone()` 对非 `ZoneInfo`、无 `.zone` 属性的 tzinfo **原样透传**；`localize()` 只在 tz 有 `localize` 方法时才调，
+否则 `replace(tzinfo=)` + `fromtimestamp` 归一；`CronTrigger.get_next_fire_time` 全程是 aware datetime 运算，只用到 `utcoffset/dst/fromutc`。
+实测 `CronTrigger(day_of_week="mon-sat", hour=2, minute=20, timezone=MT_SERVER_TZ)`：10-30 23:20Z（Sat 10-31 夏令）→ 11-02 00:20Z（Mon 冬令，HKT 08:20）→ 每天 00:20Z；
+2027-03-13 00:20Z（Sat 冬令）→ 03-14 23:20Z（Mon 03-15 夏令）。⚠ 已知限制：①`requirements.txt` 里 apscheduler **未钉版本**，升到 4.x 会整套 API 变——`test_gap_trade_dst.py` 的 trigger 测试会红，就是护栏；
+②`_MTServerTZ` 按「本地日期」整天切换（不是凌晨 2 点），切换发生在周日，而 cron 周日不跑，所以无影响；③只用 MemoryJobStore，自定义 tz 不需要 pickle。
+
+### 逐条 AC
+
+- [x] **冬 / 夏冻结时钟单测**（`tests/test_gap_trade_dst.py`）：夏 2026-10-05 23:20Z → MT 10-06 02:20，扫 10-06 00:00–02:00，label `final MT 02:20 (HKT 07:20)`；
+      冬 2026-11-02 23:20Z（HKT 07:20 = MT 01:20）→ **拒扫**（不 detect、不写 alert_events、不打 CRM tag）；冬 2026-11-03 00:20Z（HKT 08:20）→ 扫满窗口，label `final MT 02:20 (HKT 08:20)`。
+      另：trigger 在冬令 HKT 07:20 求下一次触发 = HKT 08:20。
+- [x] **DST 切换日边界**：`_mt_now` 六个时刻（含 10-31 / 11-02 / 2027-03-13 / 03-15）+ trigger 精确触发时刻两段（2026-10-30→11-03、2027-03-12→03-15）+ 首个冬令周一 11-02 整扫。
+- [x] **intraday 守卫按 MT**：常量改为 `GAP_TRADE_INTRADAY_START_MT=(0,55)` / `END_MT=(2,5)`，函数 `_in_intraday_window_mt`；cron 粗框放宽为 HKT 5–8（**故意不挂 MT tz**，作为独立于 MT tz 逻辑的第二层）。
+      冻结时钟 10 个参数：夏 HKT 05:54✗ 05:55✓ 07:05✓(end 夹到 02:00) 07:06✗；冬 HKT 05:55✗(MT 周一 23:55) 06:54✗ 06:55✓ 07:30✓ 08:05✓ 08:06✗。另测 HKT 粗框在两季都完整覆盖 MT 00:55…02:05 共 15 个 tick、且都落在同一 MT 日。
+      原 `test_gap_trade_crm_tag.py` 的边界测试同步改成 MT 分钟。
+- [x] **每个 MT 交易日恰好一次**：首选方案下由 cron 本身保证（不需要幂等标记）；测试枚举 2026-10-25→11-15、2027-03-07→03-21 的全部触发：每次都是 MT 02:20、每个 MT 周一–周六恰一次、周日零次。
+- [x] APScheduler 兼容性结论：见上。
+- [x] 现有 gap-trade 测试全绿（`test_gap_trade_crm_tag` / `test_rule_gap_trade_gap_service` / `test_rule_gap_trade_so_service` / `test_scheduler_tiers` / `test_alert_mail_subject` + 新文件 = 115 passed）；
+      `./verify.sh` **PASS**：pytest 2748 passed / 1 deselected（slow）· tsc 0 · vitest 339 passed（eslint advisory 316 problems 为既有，不阻塞）。
+- [ ] 部署前打回滚标签 `pre-gap-dst-<date>`；2026-10-31 前上 prod —— **待主会话**。
+- [ ] 11-02（周一）早上人工确认 scan_history 一行、窗口 MT 11-02 00:00–02:00、执行时刻 ≥ MT 02:00（= HKT 08:20 之后）—— **待上线后**。
+- [x] 文档 / prompt：`docs/features/risk-monitor.md` §3.4 调度段、盘中 tier 段、架构框图、时区约定表都改了（⚠ 该文件被 gitignore，只落在本机磁盘，不在 commit 里）；
+      `prompt.py` RISK_CONTROL_BLOCK 与 `risk_alerts.py` caveat 改为「MT 02:20（HKT 07:20 夏 / 08:20 冬）扫**同一** MT 日 00:00–02:00」——原文「次日 05:20 HKT 扫前一 MT 日 / scanned_at 比 window_date 晚一天」本来就是错的（现行代码夏令也是同日扫），一并更正。
+      原先**没有**测试钉这条事实，新增 `test_ai_agent_prompt.py::test_gap_trade_scan_time_fact_matches_the_scheduler`（对齐 scheduler 常量 `GAP_TRADE_FINAL_HOUR_MT/MINUTE_MT`）。
+
+### 其他改动
+
+- `_run_gap_trade_scan` 新增守卫：MT 窗口未收盘就 WARNING 拒扫（防手动触发 / 时区 bug 把半截窗口写成当日权威记录）。**例外**：UI 配置把 `window_end_hour_mt` 拉到 02:20 之后（schema 允许 1–24）时，保持旧行为照扫部分窗口 + WARNING，避免变成天天拒扫。
+- scan_label 变为动态：`final MT 02:20 (HKT 07:20|08:20)` / `intraday MT hh:mm (HKT hh:mm)`（邮件标题里能看出季节）。
+- 顺手改掉陈旧注释：`routes/risk_monitor.py` 三处「HKT 05:20 扫 MT 昨天」、`gap_trade_crm_tag_service.py` / `rule_gap_trade_so_service.py` 的「07:20」。
+- **未动**存储约定：`broker_time_to_utc_iso`、`rule_gap_trade_*` 的 `timedelta(hours=3)`、`stored_alert_time_to_mt` 原样。
+
+### 其他固定 +3 位置评估（未改）
+
+- `services/exec_comp/source.py:180` `_LOCATE_MARGIN = 3h`：**不受 DST 影响**——它是按 Timestamp 定位成交号的安全边距而非时区偏移，真正换算走 `calc.srv_to_utc_calendar`（已用 `MT_SERVER_TZ`），且逐笔按自身 `TimeMsc` 过滤。
+- `api/v1/routes/honeypot.py:62` `_MT_TZ = UTC+3`：**受影响但仅是展示**——告警邮件里「Time (MT UTC+3)」冬令会比真 MT 快 1 小时，不影响任何判定；要改就换 `MT_SERVER_TZ` 并把标签改成「MT」，低优先级。
+- `services/rule_rebate_arb_service.py:196` `_mt_now()` 固定 +3：**受影响但已退役**（`REBATE_ARB_SCAN_ENABLED=false`）——冬令时交易日 key 会早 1 小时翻日；若将来复活必须改成 `MT_SERVER_TZ`。
+
+### Follow-ups
+
+1. 部署（回滚标签 `pre-gap-dst-<date>`，deadline 10-31）+ 11-02 早上人工核对（注意：冬令首扫在 **HKT 08:20**，08:20 前 scan_history 没有当日行是正常的）。
+2. 冬令时 CRM digest 邮件 / 分析师「早上看 gap」的时间点推迟 1 小时（HKT 08:20），需要告知 risk / CS。
+3. 页面按固定 UTC+3 显示的 1h 偏差（存储约定）另开单，本单未碰。
+4. `honeypot.py` 展示时区可顺手换 `MT_SERVER_TZ`（见上）。
+5. 考虑在 `requirements.txt` 钉 `apscheduler<4`。
