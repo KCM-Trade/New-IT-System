@@ -138,7 +138,7 @@ def summary(
     settings: Optional[Settings] = None,
 ) -> SummaryResponse:
     started = time.perf_counter()
-    res = _result(q, source, cache, clock, settings or get_settings(), need_rows=False)
+    res = _result(q, source, cache, clock, settings or get_settings(), need_rows=False, op="summary")
     return SummaryResponse(
         data=SummaryData.model_validate(res.summary),
         basis=Basis(),
@@ -175,7 +175,7 @@ def orders(
     if not isinstance(page, int) or page < 1:
         raise ExecCompError("VALIDATION_ERROR", "page must be >= 1")
 
-    res = _result(q, source, cache, clock, settings, need_rows=True)
+    res = _result(q, source, cache, clock, settings, need_rows=True, op="orders")
     rows = _select(res.rows, view)
     rows = _sorted(rows, sort_by, sort_dir)
     total = len(rows)
@@ -207,7 +207,7 @@ def export_rows(
     internal ``_``-prefixed keys), sorted by fill time — not 150k pydantic
     objects: ``export.build_xlsx`` writes straight from them."""
     started = time.perf_counter()
-    res = _result(q, source, cache, clock, settings or get_settings(), need_rows=True)
+    res = _result(q, source, cache, clock, settings or get_settings(), need_rows=True, op="export")
     resp = summary_response(res.summary, res.as_of, res.coverage, from_cache=res.from_cache, started=started)
     # A new list of the same dicts (8 bytes a row). Never clear ``res.rows``:
     # SingleFlight hands the same result object to concurrent waiters.
@@ -345,6 +345,10 @@ class ComputeResult:
     from_cache: bool
     date_to_eff: Optional[dt.date] = None
     ids: int = 0                    # deal numbers located for the range
+    # Query log (one INFO line per query): per-phase wall time in ms, the
+    # server-wide slot wait, and the position lookup size.
+    timings: dict[str, int] = field(default_factory=dict)
+    positions: int = 0
     # 02 §4.1 unit self-check over in-range close fills (04 §1.4).
     unit_checked: int = 0
     unit_mismatches: dict[str, int] = field(default_factory=dict)  # by symbol
@@ -479,12 +483,16 @@ def _run_bounded(
     now_utc: dt.datetime, head: Any = None,
 ) -> ComputeResult:
     """One replica run inside a server-wide slot and the time budget."""
+    waited = time.perf_counter()
     with QuerySlot(settings.EXEC_COMP_SLOT_DIR, settings.EXEC_COMP_MAX_CONCURRENT):
+        slot_wait_ms = _ms(waited)
         deadline = Deadline(settings.EXEC_COMP_QUERY_BUDGET_S)
         bind = getattr(source, "with_deadline", None)
         src = bind(deadline) if callable(bind) else source
         try:
-            return _compute(q, subject, src, settings, deadline, default_as_of, now_utc, head)
+            res = _compute(q, subject, src, settings, deadline, default_as_of, now_utc, head)
+            res.timings["slot_wait"] = slot_wait_ms
+            return res
         finally:
             _close(src)
             if src is not source:
@@ -515,7 +523,31 @@ def compute_uncached(
 
 
 def _result(
-    q: Query, source: FillSource, cache, clock: Clock, settings: Settings, *, need_rows: bool
+    q: Query, source: FillSource, cache, clock: Clock, settings: Settings, *, need_rows: bool,
+    op: str = "summary",
+) -> ComputeResult:
+    """Cached result of one query, with exactly one ``exec_comp query`` log
+    line per call (logging-system.md §2.2.1: user-driven, one line per action,
+    like the AI assistant's ``AI turn`` line). The user and trace_id are added
+    by the log format itself; this module never reads the caller's identity."""
+    started = time.perf_counter()
+    ran = {"compute": False}
+    try:
+        res = _result_inner(q, source, cache, clock, settings, need_rows=need_rows, ran=ran)
+    except ExecCompError as exc:
+        _log_query(op, q, None, started, "error", exc.code, exc.status)
+        raise
+    except Exception as exc:  # noqa: BLE001 - logged and re-raised unchanged
+        _log_query(op, q, None, started, "error", type(exc).__name__, 500)
+        raise
+    cache_state = "miss" if ran["compute"] else ("hit" if res.from_cache else "coalesced")
+    _log_query(op, q, res, started, cache_state, "ok", 200)
+    return res
+
+
+def _result_inner(
+    q: Query, source: FillSource, cache, clock: Clock, settings: Settings, *, need_rows: bool,
+    ran: dict,
 ) -> ComputeResult:
     subject, default_as_of = _validate(q, clock)
     now_utc = _now_utc(clock)
@@ -547,6 +579,7 @@ def _result(
                 return hit
 
     def compute() -> ComputeResult:
+        ran["compute"] = True
         res = _run_bounded(q, subject, source, settings, default_as_of, now_utc, head)
         # Only complete results are reproducible (deals are write-once); a
         # partial one must be recomputed once the replica catches up.
@@ -580,6 +613,58 @@ def _stats(from_cache: bool, started: float) -> Statistics:
     return Statistics(from_cache=from_cache, query_time_ms=int((time.perf_counter() - started) * 1000))
 
 
+def _ms(since: float) -> int:
+    return int((time.perf_counter() - since) * 1000)
+
+
+# Codes that are an expected answer to the request (bad input, over the cap,
+# server busy) stay INFO; a replica / data failure is WARNING
+# (logging-system.md §2.2.1 rule 3: expected rejections are not failures).
+_EXPECTED_REJECTIONS = frozenset({
+    "SUBJECT_REQUIRED", "SUBJECT_AMBIGUOUS", "INVALID_LOGIN_SID", "SUBJECT_NOT_FOUND",
+    "RANGE_INVALID", "RANGE_BEFORE_COVERAGE", "AS_OF_TOO_LATE", "SORT_NOT_ALLOWED",
+    "VALIDATION_ERROR", "QUERY_TOO_LARGE", "BUSY",
+})
+_PHASES = ("slot_wait", "accounts", "ids", "fills", "rows", "legs", "summary")
+
+
+def _log_query(
+    op: str, q: Query, res: Optional[ComputeResult], started: float, cache_state: str,
+    outcome: str, status: int,
+) -> None:
+    """``exec_comp query:`` — one line per query call; grep this token to see
+    who queried what and where the time went. Subject and dates are logged
+    (they are the investigation record); no money figures."""
+    subject = (
+        f"client:{q.client_id}" if q.client_id is not None else f"login:{(q.login_sid or '').strip()}"
+    )
+    parts = [
+        f"op={op}",
+        f"subject={subject}",
+        f"range={q.date_from.isoformat()}..{q.date_to.isoformat()}",
+        f"as_of={res.as_of.isoformat() if res else (q.as_of.isoformat() if q.as_of else 'default')}",
+        f"cache={cache_state}",
+        f"outcome={outcome}",
+        f"total_ms={_ms(started)}",
+    ]
+    if res is not None:
+        parts.append(f"rows={len(res.rows) if res.rows else res.summary.get('deals', 0)}")
+        if cache_state == "miss":
+            s = res.summary
+            parts += [
+                f"logins={len(s.get('subject', {}).get('logins', []))}",
+                f"deal_ids={res.ids}",
+                f"counted={s.get('deals', 0)}",
+                f"positions={res.positions}",
+                f"complete={res.coverage.get('complete')}",
+            ]
+            parts += [f"{k}_ms={res.timings[k]}" for k in _PHASES if k in res.timings]
+    level = logging.INFO
+    if outcome != "ok" and outcome not in _EXPECTED_REJECTIONS:
+        level = logging.WARNING
+    logger.log(level, "exec_comp query: %s", " ".join(parts))
+
+
 # --- the computation -------------------------------------------------------
 
 
@@ -602,9 +687,12 @@ def _compute(
     now_utc: dt.datetime,
     head: Any = None,
 ) -> ComputeResult:
+    timings: dict[str, int] = {}
+    t = time.perf_counter()
     accounts = _resolve_accounts(subject, source)
     if head is None:
         head = source.replica_head()
+    timings["accounts"] = _ms(t)
     ready = _ready_through(head, default_as_of, now_utc, settings)
 
     # as_of + readiness (01 D14, 04 §4).
@@ -633,7 +721,9 @@ def _compute(
     acct_by_login = {a.login: a for a in accounts}
 
     deadline.check("accounts")
+    t = time.perf_counter()
     ids = source.deal_ids(sorted(acct_by_login), srv_from, srv_to) if accounts else []
+    timings["ids"] = _ms(t)
     max_deals = int(settings.EXEC_COMP_MAX_DEALS)
     n_ids = len(ids)
     if n_ids > max_deals:
@@ -643,9 +733,12 @@ def _compute(
             "请缩小日期范围；如确需整段数据，请联系 IT 手动处理。",
         )
     deadline.check("deal ids")
+    t = time.perf_counter()
     fills = source.fills(ids) if ids else []
+    timings["fills"] = _ms(t)
     del ids
     deadline.check("fills")
+    t = time.perf_counter()
     fills.sort(key=lambda x: x.deal_id)
 
     rows: list[dict] = []
@@ -678,6 +771,7 @@ def _compute(
     # The RawFill list is the largest object of a run; the rows carry
     # everything from here on, so let it go before position legs / summary.
     del fills
+    timings["rows"] = _ms(t)
 
     # One aggregated line per query, never per row (CLAUDE.md log rule).
     if unit_bad:
@@ -695,8 +789,11 @@ def _compute(
 
     # 02 §6.1: fully closed by as_of? Lifecycle legs strictly before the cutoff.
     lookup = sorted(p for p in positions if p[1] != 0)
+    t = time.perf_counter()
     legs = source.position_legs(lookup) if lookup else []
+    timings["legs"] = _ms(t)
     deadline.check("position legs")
+    t = time.perf_counter()
     remaining: dict[tuple[int, int], int] = defaultdict(int)
     seen: set[tuple[int, int]] = set()
     anomalies: set[tuple[int, int]] = {p for p in positions if p[1] == 0}
@@ -745,6 +842,7 @@ def _compute(
         unmatched_deals=unmatched,
         replica_latest_fill_utc=calc.iso_z(head.time_utc) if head else None,
     ).model_dump(mode="json")
+    timings["summary"] = _ms(t)
     logger.debug(
         "exec_comp computed subject=%s %s..%s as_of=%s ids=%d rows=%d counted=%d unmatched=%d",
         subject.key, q.date_from, date_to, as_of, n_ids, len(rows),
@@ -760,6 +858,8 @@ def _compute(
         ids=n_ids,
         unit_checked=unit_checked,
         unit_mismatches=dict(unit_bad),
+        timings=timings,
+        positions=len(positions),
     )
 
 

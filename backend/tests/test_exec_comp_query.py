@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+import logging
 from typing import Optional, Sequence
 
 import pytest
@@ -1107,3 +1108,53 @@ def test_offline_export_script_chunks_add_up_to_the_online_summary():
     assert resp.coverage.model_dump() == whole.coverage.model_dump()
     assert get_settings().EXEC_COMP_MAX_DEALS == 500000   # the override is a copy
     assert [r["fill_time_srv"] for r in rows] == sorted(r["fill_time_srv"] for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Query log: one "exec_comp query:" line per call (logging-system.md §2.2.1)
+# ---------------------------------------------------------------------------
+
+
+def _query_lines(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage().startswith("exec_comp query:")]
+
+
+def test_query_log_miss_then_hit_one_line_each(caplog):
+    caplog.set_level(logging.INFO, logger="app.services.exec_comp.query")
+    cache = FakeRedis()
+    _run(Q.summary, q(), source=FakeSource(FILLS), cache=cache)
+    _run(Q.orders, q(), source=FakeSource(FILLS), cache=cache)
+    lines = _query_lines(caplog)
+    assert len(lines) == 2
+    miss, hit = (r.getMessage() for r in lines)
+    assert "op=summary" in miss and "cache=miss" in miss and "outcome=ok" in miss
+    # the miss line says where the time went and how big the query was
+    for token in ("subject=client:", "range=", "as_of=", "deal_ids=", "counted=",
+                  "positions=", "slot_wait_ms=", "ids_ms=", "fills_ms=", "legs_ms=", "total_ms="):
+        assert token in miss, token
+    assert "op=orders" in hit and "cache=hit" in hit
+    assert "fills_ms=" not in hit          # no phases on a cache hit
+    assert all(r.levelno == logging.INFO for r in lines)
+
+
+def test_query_log_expected_rejection_is_info(caplog):
+    caplog.set_level(logging.INFO, logger="app.services.exec_comp.query")
+    with pytest.raises(ExecCompError):
+        _run(Q.summary, q(client_id=None, login_sid="1-123"), source=FakeSource(FILLS))
+    (line,) = _query_lines(caplog)
+    assert "outcome=INVALID_LOGIN_SID" in line.getMessage()
+    assert line.levelno == logging.INFO
+
+
+def test_query_log_replica_failure_is_warning(caplog):
+    caplog.set_level(logging.INFO, logger="app.services.exec_comp.query")
+
+    class Broken(FakeSource):
+        def deal_ids(self, *a, **k):
+            raise ExecCompError("UPSTREAM_UNAVAILABLE", "replica down")
+
+    with pytest.raises(ExecCompError):
+        _run(Q.summary, q(), source=Broken(FILLS))
+    (line,) = _query_lines(caplog)
+    assert "outcome=UPSTREAM_UNAVAILABLE" in line.getMessage()
+    assert line.levelno == logging.WARNING
