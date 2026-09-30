@@ -285,7 +285,11 @@ MASK = "***"
 
 UNCERTIFIED_SUMMARY = "Ad-hoc SQL written by the model; NOT a certified 口径"
 FIXED_CAVEATS = [
-    "CEN 未换算 — cent accounts (mt4_users.CURRENCY = 'CEN') and .cent/.kcmc symbols store money (and lots) ×100; nothing here divided them.",
+    # Lots are ×100 because of the SYMBOL, not the account (OPT-0069 data check
+    # 2026-09-30: CEN accounts trade only .cent/.kcmc symbols, so the two
+    # coincide in practice; a non-CEN account holding a cent symbol exists).
+    "CEN 未换算 — money is ×100 on CEN accounts (mt4_users.CURRENCY = 'CEN') and on .cent/.kcmc symbols; "
+    "lots are ×100 on .cent/.kcmc symbols only (XAUUSD.c is not cent); nothing here divided them.",
     "demo/员工未排除 — demo/test groups and employee clients (users.isEmployee) are in the rows unless the SQL excluded them.",
     "sid=5 CMD 未归一化 — MT5 (sid 5) closed rows store the EXIT side in CMD; direction is inverted for those rows.",
     "日界按 SQL 原样 — closeDate/openDate are MT server days (UTC+3 summer / UTC+2 winter); *_TIME columns are MT wall clock, not UTC.",

@@ -44,6 +44,9 @@ async def _lifespan(_: FastAPI):
             "AI_AGENT_INTERNAL_TOKEN is missing or shorter than %d characters; every /v1/turn will answer 503.",
             MIN_TOKEN_LEN,
         )
+    # OPT-0069: skills on disk vs the visibility table. Logs CRITICAL on a
+    # mismatch and keeps serving — see harness.skills_self_check for why.
+    await harness.skills_self_check()
     yield
 
 
@@ -99,6 +102,7 @@ async def turn(
     async def gen() -> AsyncIterator[bytes]:
         started = time.monotonic()
         tools_called: list[str] = []
+        skills_loaded: list[str] = []
         usage: dict[str, Any] = {}
         reason = "error"
         state_turns: Any = None
@@ -132,6 +136,10 @@ async def turn(
                 event, data = item
                 if event == "tool_use":
                     tools_called.append(str(data.get("name")))
+                elif event == "skill_loaded":
+                    name = str(data.get("skill"))
+                    if name not in skills_loaded:
+                        skills_loaded.append(name)
                 elif event == "usage":
                     usage = data
                 elif event == "done":
@@ -144,11 +152,12 @@ async def turn(
             if not task.done():
                 task.cancel()
             logger.info(
-                "AI agent turn: user=%s model=%s tools=%s in=%s out=%s reason=%s "
+                "AI agent turn: user=%s model=%s tools=%s skills=%s in=%s out=%s reason=%s "
                 "resumed=%s turns=%s %.1fs trace=%s",
                 ctx.user_id,
                 body.model,
                 ",".join(tools_called) or "-",
+                ",".join(skills_loaded) or "-",
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 reason,

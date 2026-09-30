@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, Optional
 
 # typing_extensions, not typing: pydantic (which MAF uses to build the tool
@@ -50,8 +52,13 @@ from typing_extensions import TypedDict
 from agent_framework import (
     Agent,
     AgentSession,
+    CachingSkillsSource,
     CompactionProvider,
+    FileSkillsSource,
+    FilteringSkillsSource,
     InMemoryHistoryProvider,
+    Skill,
+    SkillsProvider,
     SlidingWindowStrategy,
     SummarizationStrategy,
     TokenBudgetComposedStrategy,
@@ -65,7 +72,7 @@ from app.core.logging_config import get_logger
 from .prompt import TOOL_DOCSTRINGS, system_prompt
 from .tools import RISK_TOOL_NAMES, TOOL_IMPLS, CallerCtx
 from .tools.client_overview import MAX_SUBJECTS as OVERVIEW_MAX_SUBJECTS
-from .tools.common import risk_tools_enabled
+from .tools.common import has_module, risk_tools_enabled
 from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
 from .tools.run_sql import run_sql as run_sql_impl
 
@@ -398,6 +405,191 @@ def db_choices_match_impl() -> bool:
     return set(RUN_SQL_DATABASES) == {"fxbackoffice", "risk_cases"}
 
 
+# ── Agent Skills (OPT-0069) ──────────────────────────────────────────────────
+#
+# Domain knowledge the system prompt does not carry lives in
+# app/ai_agent/skills/<name>/{SKILL.md, references/*.md}. MAF's SkillsProvider
+# advertises only each skill's name + description per turn; the model pulls the
+# body with `load_skill` and a reference file with `read_skill_resource`.
+#
+# Posture, each pinned by tests/test_ai_agent_skills.py:
+#   * No `run_skill_script`. The framework always builds it next to the two
+#     read tools; SkillsProvider below drops it, script discovery is off
+#     (script_extensions=()) and no script_runner exists.
+#   * The two read tools run without approval (approval_mode never_require).
+#     The plain Agent has no ToolApprovalMiddleware: an "always_require" tool
+#     would end the turn with an approval request nobody can answer.
+#   * Resources are an ALLOWLIST: only `references/<file>.md` directly under a
+#     skill. SOURCES.md (fact -> provenance, open business questions) and any
+#     other file next to SKILL.md are for reviewers and never readable.
+#   * Visibility is a per-audience predicate over the caller context (modules,
+#     scope and the same run_sql / Risk-control gates as the tools). The table
+#     lives here in code, not in SKILL.md front matter, so a skill file cannot
+#     widen its own audience. A skill missing from SKILL_VISIBILITY is hidden
+#     (fail closed); the ai-agent logs CRITICAL at startup on any mismatch.
+
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+Audience = Literal["all", "run_sql", "risk"]
+
+# Who may see a skill, as a predicate over the caller (cold review 2026-09-30:
+# module-aware, not two loose booleans).
+#   all     — any caller holding the `ai` module (restricted scope included);
+#             an "all" skill must therefore carry nothing that only a gated
+#             audience may know (rule ids / thresholds / SQL — tested).
+#   run_sql — exactly the callers run_sql is registered for (scope is None).
+#   risk    — exactly the callers the Risk control tools are registered for
+#             (`ai` + `risk`, scope is None).
+AUDIENCES: dict[Audience, Callable[[CallerCtx], bool]] = {
+    "all": lambda ctx: has_module(ctx, "ai"),
+    "run_sql": lambda ctx: has_module(ctx, "ai") and run_sql_enabled(ctx),
+    "risk": lambda ctx: has_module(ctx, "ai") and risk_tools_enabled(ctx),
+}
+
+SKILL_VISIBILITY: dict[str, Audience] = {
+    "kcm-metrics-definitions": "all",
+    "ib-and-rebate": "all",
+    "trading-patterns-and-events": "all",
+    "system-pages-guide": "all",
+    "margin-and-stopout": "all",
+    "fxbackoffice-schema": "run_sql",
+    "risk-monitor-rules": "risk",
+}
+
+# The only resource shape the model may read: references/<file>.md, one level
+# deep (MAF's default search depth). Everything else under a skill directory
+# is private to reviewers.
+_RESOURCE_RE = re.compile(r"^references/[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
+
+# Replaces the framework's default template: that one always carries the
+# `run_skill_script` instructions, even when the tool does not exist.
+SKILLS_INSTRUCTION_TEMPLATE = """## Skills (house knowledge you can load)
+Skills hold the house definitions, table notes, rule explanations and page map that these
+instructions only summarise. They are background knowledge, not data about any client.
+
+<available_skills>
+{skills}
+</available_skills>
+
+- When a question touches a skill's domain, call `load_skill` with its name BEFORE you answer
+  (for SQL: before you write it). Load only what the question needs.
+{resource_instructions}- A skill never replaces a tool call: every client, account or group figure still comes from a
+  tool (rule 1). If a skill and these instructions ever differ, these instructions win."""
+
+
+def skill_visible(name: str, ctx: CallerCtx) -> bool:
+    """Whether a skill is advertised to this caller. Unknown skill: hidden."""
+    audience = SKILL_VISIBILITY.get(name)
+    predicate = AUDIENCES.get(audience) if audience is not None else None
+    return bool(predicate is not None and predicate(ctx))
+
+
+def visible_skill_names(ctx: CallerCtx) -> frozenset[str]:
+    """Decided once per turn, like the tool list and the prompt blocks."""
+    return frozenset(name for name in SKILL_VISIBILITY if skill_visible(name, ctx))
+
+
+def skill_resource_allowed(skill_name: str, relative_path: str) -> bool:
+    return bool(_RESOURCE_RE.match(PurePosixPath(relative_path.replace("\\", "/")).as_posix()))
+
+
+def _file_source() -> FileSkillsSource:
+    return FileSkillsSource(
+        SKILLS_DIR,
+        resource_extensions=(".md",),
+        script_extensions=(),
+        resource_filter=skill_resource_allowed,
+    )
+
+
+# Context-independent leaf, discovered once per process and cached; the per
+# caller filter sits ABOVE the cache, so one caller's view never leaks into
+# another's (FilteringSkillsSource runs on every get_skills call).
+_skill_files = CachingSkillsSource(_file_source())
+
+
+async def skills_self_check() -> tuple[frozenset[str], frozenset[str]]:
+    """Discover the skill directory once and compare with SKILL_VISIBILITY.
+
+    Returns ``(missing, extra)``: table entries with no loadable skill (a
+    deleted directory, or a SKILL.md MAF skipped for bad YAML — it only logs),
+    and discovered skills the table does not list (hidden by fail-closed).
+    Logs CRITICAL naming both. It does NOT stop the process: both failure
+    modes already fail closed (an extra skill is invisible, a missing one is
+    simply unavailable), while refusing to start would put the container
+    (restart: unless-stopped, no healthcheck) into a restart loop and take the
+    whole assistant down over a knowledge file.
+    """
+    from agent_framework import SkillsSourceContext
+
+    try:
+        skills = await _file_source().get_skills(SkillsSourceContext(agent=None))  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 — a broken skill dir must not kill startup
+        logger.critical("AI agent skills: discovery failed under %s; no skill will be available", SKILLS_DIR, exc_info=True)
+        return frozenset(SKILL_VISIBILITY), frozenset()
+    found = frozenset(s.frontmatter.name for s in skills)
+    missing = frozenset(SKILL_VISIBILITY) - found
+    extra = found - frozenset(SKILL_VISIBILITY)
+    if missing or extra:
+        logger.critical(
+            "AI agent skills mismatch: missing=%s (in SKILL_VISIBILITY but not loadable — bad front matter or "
+            "deleted dir) extra=%s (on disk but not in SKILL_VISIBILITY — hidden from everyone)",
+            sorted(missing) or "-",
+            sorted(extra) or "-",
+        )
+    else:
+        logger.info("AI agent skills: %d loaded, table matches", len(found))
+    return missing, extra
+
+
+SkillEvent = Callable[[str, Optional[str]], Awaitable[None]]
+
+
+class KcmSkillsProvider(SkillsProvider):
+    """SkillsProvider without `run_skill_script` that reports what was read.
+
+    ``on_use(skill, resource)`` fires after a successful ``load_skill``
+    (resource None) or ``read_skill_resource``; the harness turns it into a
+    ``skill_loaded`` event so the audit row can list the skills a turn used.
+    """
+
+    def __init__(self, source: Any, on_use: Optional[SkillEvent] = None) -> None:
+        super().__init__(
+            source,
+            instruction_template=SKILLS_INSTRUCTION_TEMPLATE,
+            disable_load_skill_approval=True,
+            disable_read_skill_resource_approval=True,
+        )
+        self._on_use = on_use
+
+    def _create_tools(self, skills: Any) -> list:
+        return [t for t in super()._create_tools(skills) if t.name != self.RUN_SKILL_SCRIPT_TOOL_NAME]
+
+    async def _load_skill(self, skills: Any, skill_name: str) -> str:
+        content = await super()._load_skill(skills, skill_name)
+        found = self._find_skill(skills, skill_name or "") if (skill_name or "").strip() else None
+        if found is not None and self._on_use is not None:
+            await self._on_use(found.frontmatter.name, None)
+        return content
+
+    async def _read_skill_resource(self, skills: Any, skill_name: str, resource_name: str, **kwargs: Any) -> Any:
+        content = await super()._read_skill_resource(skills, skill_name, resource_name, **kwargs)
+        found = self._find_skill(skills, skill_name or "") if (skill_name or "").strip() else None
+        if found is not None and self._on_use is not None and (resource_name or "").strip():
+            if await found.get_resource(resource_name) is not None:
+                await self._on_use(found.frontmatter.name, resource_name)
+        return content
+
+
+def build_skills_provider(ctx: CallerCtx, on_use: Optional[SkillEvent] = None) -> KcmSkillsProvider:
+    """Per-turn provider over the shared file source, filtered for this caller."""
+    visible = visible_skill_names(ctx)
+
+    def _keep(skill: Skill, _context: Any) -> bool:
+        return skill.frontmatter.name in visible
+
+    return KcmSkillsProvider(FilteringSkillsSource(_skill_files, _keep), on_use=on_use)
+
 
 # ── session memory + compaction (02 §8.5) ────────────────────────────────────
 
@@ -578,16 +770,26 @@ async def run_turn(
     # Decided ONCE per turn: the prompt's Risk control block and the three
     # tools must appear together or not at all.
     risk_tools = risk_tools_enabled(ctx)
+    run_sql = run_sql_enabled(ctx)
     # Instructions travel as a per-call option, not as a stored message:
     # the "## Today" tail changes daily and must not accumulate in the blob.
-    instructions = system_prompt(risk_tools=risk_tools, run_sql=run_sql_enabled(ctx))
+    instructions = system_prompt(risk_tools=risk_tools, run_sql=run_sql)
+
+    async def on_skill(skill: str, resource: Optional[str]) -> None:
+        # Not forwarded to the browser by the main API; it only feeds the
+        # audit row's skills_loaded (OPT-0069).
+        await emit("skill_loaded", {"skill": skill, "resource": resource})
+
     agent = Agent(
         client=get_client(model),
         name="risk-analyst",
         instructions=instructions,
         tools=build_tools(ctx, emit, risk_tools=risk_tools),
         default_options=dict(SESSION_CHAT_OPTIONS),
-        context_providers=build_context_providers(),
+        context_providers=[
+            *build_context_providers(),
+            build_skills_provider(ctx, on_use=on_skill),
+        ],
     )
     session, rehydrated = restore_session(session_blob, ctx.trace_id)
     started = time.monotonic()

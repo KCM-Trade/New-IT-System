@@ -301,6 +301,8 @@ async def turn(
     async def _run_turn() -> None:
         # ── per-turn accounting, all of it lands in the audit row ────────────
         tools_called: list[str] = []
+        # Skills the model loaded this turn (OPT-0069), unique, in order.
+        skills_loaded: list[str] = []
         subjects: list[str] = []
         scope_denied = 0
         input_tokens = 0
@@ -455,6 +457,14 @@ async def turn(
                             sql_text = (data.get("input") or {}).get("sql") if isinstance(data.get("input"), dict) else None
                             if isinstance(sql_text, str) and sql_text.strip():
                                 sql_texts.append(sql_text[:AUDIT_SQL_CHARS])
+                    elif event == "skill_loaded" and isinstance(data, dict):
+                        # Audit-only (OPT-0069): which skill bodies / reference
+                        # files the model read. Not forwarded — the browser has
+                        # no UI for it and the event is internal to the hop.
+                        skill = data.get("skill")
+                        if isinstance(skill, str) and skill and skill not in skills_loaded:
+                            skills_loaded.append(skill[:64])
+                        continue
                     elif event == "session_state" and isinstance(data, dict):
                         # Consumed here, never forwarded (02 §8.3): the blob
                         # is the framework's private format and carries raw
@@ -561,6 +571,7 @@ async def turn(
                     "question": body.message[:AUDIT_QUESTION_CHARS],
                     "model": body.model,
                     "tools_called": tools_called,
+                    "skills_loaded": skills_loaded,
                     "subjects": subjects,
                     "terminal_reason": terminal_reason,
                     "input_tokens": input_tokens,

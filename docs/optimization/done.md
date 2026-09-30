@@ -10,6 +10,7 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | Commit | 标题 |
 |------|----|--------|------|
+| 2026-09-30 | [OPT-0069](./items/OPT-0069-ai-agent-skills.md) | — | AI agent 接入 Agent Skills：7 个 skill 按受众（all/run_sql/risk）过滤，资源白名单 + 启动自检；execution-and-slippage 等 4 个暂缓 |
 | 2026-09-29 | [OPT-0068](./items/OPT-0068-exec-compensation-mt5-v1.md) | — | 成交价差补偿 MT5 v1：Data Query 页面 + `/api/v1/exec-compensation/*`，按需读从库（不预计算），153034 对账 42/42 |
 | 2026-09-28 | [OPT-0066](./items/OPT-0066-ai-agent-slice3.md) | — | AI 分析 agent 第三刀：Risk control 页面群接入（`get_risk_alerts` / `get_alert_orders` / `get_window_scan`，需 `ai`+`risk` 且不受限才注册，每轮各 ≤2 次）+ window-scan DST/15s 超时前置；冷审 🔴 冬令时下钻全空等 8 条当场修，#8 立 OPT-0067 |
 | 2026-09-28 | [OPT-0065](./items/OPT-0065-ai-agent-slice2.md) | — | AI 分析 agent 第二刀：会话记忆（MAF session blob 主 API 落库 + compaction）· `ai` 进数据范围 · `run_sql` 未认证逃生口（sqlglot AST 七道门槛）· `rank_accounts` + 经济日历（FRED + Fed）；冷审 10 条全复现、8 条当场修（版本注释绕过 AST / Stop 丢记忆 / 并发 409 / 刷新 resume）；prod 09-28 00:27 `d499ec8` |

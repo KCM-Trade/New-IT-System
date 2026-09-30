@@ -451,7 +451,31 @@ def test_every_turn_leaves_exactly_one_audit_row_with_the_contract_fields(
     assert value["output_tokens"] == 200
     assert value["cost_usd"] == pytest.approx(0.0046)
     assert value["scope_denied_count"] == 1
+    assert value["skills_loaded"] == []  # OPT-0069: always present, empty when none loaded
     assert "error_code" not in value
+
+
+def test_skill_loaded_events_feed_the_audit_row_and_never_reach_the_browser(
+    make_client, scripted_agent, tmp_path
+):
+    """OPT-0069: the agent reports each load_skill / read_skill_resource as a
+    `skill_loaded` event. The main API folds them into ai.query.submit's
+    new_value.skills_loaded (unique, in order) and does not forward them."""
+    scripted_agent["script"]["events"] = [
+        ("skill_loaded", {"skill": "margin-and-stopout", "resource": None}),
+        ("skill_loaded", {"skill": "fxbackoffice-schema", "resource": None}),
+        ("skill_loaded", {"skill": "fxbackoffice-schema", "resource": "references/mt4_users.md"}),
+        ("skill_loaded", {"skill": 42, "resource": None}),  # malformed: ignored
+        *SCRIPTED_OK,
+    ]
+    client = make_client()
+    sid = _mint(STAFF, allowed_modules='["ai"]')
+    r = _turn(client, sid, session_id="sess-skills")
+    assert r.status_code == 200
+    assert "skill_loaded" not in [event for event, _ in _parse(r.text)]
+    value = json.loads(_audit_rows(tmp_path)[0]["new_value"])
+    assert value["skills_loaded"] == ["margin-and-stopout", "fxbackoffice-schema"]
+    assert value["tools_called"] == ["get_client_overview", "get_risk_signals"]
 
 
 def test_a_scope_denied_tool_call_is_recorded_as_an_auth_event_by_the_main_api(

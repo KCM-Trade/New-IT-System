@@ -18,7 +18,6 @@
 | [OPT-0064](./items/OPT-0064-ai-agent-slice1.md) | main（原 feat/ai-agent-slice1） | 2026-09-27 | AI 分析 agent 第一刀 **已上 prod 09-27**（`ac21437`，回滚 `pre-ai-slice1-20260927`）；UI 二轮 + prompt 日期 + PG `ai_agent_ro` **09-27 15:44 已上**（回滚 `pre-ai-ui2-20260927`）；MySQL `ai_agent_ro` 用户拍板不建（run_sql 时重议）；第二刀已另 file 为 OPT-0065 |
 | [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | main（原 opt/trade-ip-profit-attribution） | 2026-09-22 | Phase 1–3 + 定点查找（2026-09-24 `78882c0`…`16cc5d3`）均在 main/prod。列表固定「同 IP ≥5 客户」；lookup = Client/账户/开仓 IP → peers + 琥珀色共用 IP。剩 cs-only 抽查 + Phase 1 时间项（可选） |
 | [OPT-0072](./items/OPT-0072-gap-trade-winter-dst.md) | opt/gap-trade-winter-dst | 2026-09-30 | P0，deadline 2026-10-31；调度锚 MT 时钟，不改告警存储 +03:00 |
-| [OPT-0069](./items/OPT-0069-ai-agent-skills.md) | opt/ai-agent-skills | 2026-09-30 | 先做接线/过滤/测试 + 无 TODO 的 skill；草稿待用户审，未审前不部署；worktree ../New-IT-System-wt-0069 |
 ## ✅ 待领取（Ready）
 
 > AC 已经在 item 文件里定义好了。按 priority + effort + 你的当前心智状态挑一个。
