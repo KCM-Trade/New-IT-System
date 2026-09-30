@@ -146,3 +146,23 @@ def test_prompt_routes_open_exposure_questions_to_rank_open_positions():
     assert "rank_open_positions" in ANALYST_SYSTEM_PROMPT
     assert "NET lots" in ANALYST_SYSTEM_PROMPT
     assert "rank_open_positions" in TOOL_DOCSTRINGS
+
+
+def test_gap_trade_scan_time_fact_matches_the_scheduler():
+    """OPT-0072: prompt + tool caveat state the gap-trade scan time; pin it to
+    the scheduler's MT-clock constants so a reschedule can't drift the fact."""
+    import inspect
+
+    from app.ai_agent.prompt import RISK_CONTROL_BLOCK
+    from app.ai_agent.tools import risk_alerts
+    from app.core.burst_open_scheduler import (
+        GAP_TRADE_FINAL_HOUR_MT,
+        GAP_TRADE_FINAL_MINUTE_MT,
+    )
+
+    fact = f"MT {GAP_TRADE_FINAL_HOUR_MT:02d}:{GAP_TRADE_FINAL_MINUTE_MT:02d}"
+    tool_src = inspect.getsource(risk_alerts)
+    for text in (RISK_CONTROL_BLOCK, tool_src):
+        assert fact in text
+        assert "HKT 07:20 summer / 08:20 winter" in text
+        assert "05:20 HKT" not in text
