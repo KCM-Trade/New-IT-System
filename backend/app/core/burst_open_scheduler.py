@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 import redis
@@ -950,20 +950,61 @@ def trigger_scan_now() -> dict[str, Any] | None:
     return _latest_result
 
 
-def trigger_gap_trade_scan_now() -> None:
-    """Trigger an immediate Gap Trade scan (cron path, no UI button).
+def validate_gap_trade_backfill_day(window_day: date, now_utc: datetime) -> None:
+    """Raise ValueError unless ``window_day`` (an MT date) can be scanned now.
+
+    Rejects future MT days, and today's MT day while its window is still open
+    (it would persist a partial window as the authoritative record).
+    """
+    from ..core.risk_monitor_db import load_gap_trade_config
+    from ..schemas.risk_monitor import GapTradeConfig
+
+    now_mt = _mt_now(now_utc)
+    today_mt = now_mt.date()
+    if window_day > today_mt:
+        raise ValueError(f"window_day {window_day} is in the future (MT today {today_mt})")
+    if window_day == today_mt:
+        config = GapTradeConfig(**load_gap_trade_config())
+        end_mt = datetime.combine(window_day, datetime.min.time()) + timedelta(
+            hours=config.window_end_hour_mt
+        )
+        if now_mt < end_mt:
+            raise ValueError(
+                f"MT window for {window_day} is still open (ends MT {end_mt:%H:%M}, "
+                f"now MT {now_mt:%H:%M})"
+            )
+
+
+def trigger_gap_trade_scan_now(window_day: date | None = None) -> None:
+    """Trigger an immediate Gap Trade scan (debug shell / backfill; no route).
 
     Kept as a separate helper so a debug shell / unit test can fire one
     deterministic scan without nudging APScheduler. Does NOT return the
     alert list — Gap Trade results live in `alert_events`, not in a
     cached snapshot.
+
+    ``window_day`` (MT date, OPT-0072) backfills a past MT day's window, e.g.
+    a day the final scan missed. Validated first — see
+    ``validate_gap_trade_backfill_day``; raises ValueError on a bad day.
+    There is deliberately no HTTP route for this (no "scan now" button).
     """
+    if window_day is not None:
+        validate_gap_trade_backfill_day(window_day, datetime.now(timezone.utc))
     with _gap_trade_lock:
-        _run_gap_trade_scan()
+        _run_gap_trade_scan(
+            window_day=window_day,
+            run_kind="final" if window_day is None else "backfill",
+        )
 
 
-def _run_gap_trade_scan() -> None:
+def _run_gap_trade_scan(
+    window_day: date | None = None, run_kind: str = "final"
+) -> None:
     """Execute one Gap Trade daily scan (rules 71 + 81).
+
+    ``window_day`` (MT date) scans that day's window instead of today's —
+    backfill / catch-up (OPT-0072); ``run_kind`` only labels logs and the
+    CRM digest ("final" / "catch-up" / "backfill").
 
     Window = [today 00:00 MT, today 02:00 MT) inclusive of close_time.
     Runs Mon–Sat MT 02:20 via cron (HKT 07:20 summer / 08:20 winter) —
@@ -1004,9 +1045,12 @@ def _run_gap_trade_scan() -> None:
         # rule_gap_trade_so_service.
         now_utc = datetime.now(timezone.utc)
         now_mt = _mt_now(now_utc)
-        window_day = now_mt.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        if window_day is None:
+            window_day = now_mt.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            window_day = datetime.combine(window_day, datetime.min.time())
         # Only skip Sunday — Saturday MT 00-02 maps to Fri 21-23 UTC which
         # is still NY-Friday-afternoon active trading (the weekly close
         # period), and we want to catch any final-hour AB-arb there.
@@ -1027,25 +1071,18 @@ def _run_gap_trade_scan() -> None:
         # OPT-0072: never record a still-open window as the final daily
         # result (partial window → missed closes + missed rule-81 CRM tags,
         # silently — exactly the winter failure mode of the old HKT cron).
-        # Refused when the window should already be closed at the scheduled
-        # MT 02:20 but is not: a manual trigger or a trigger/tz bug. A window
-        # the UI config stretches past MT 02:20 keeps the pre-OPT-0072
-        # behaviour (partial scan) but says so.
+        # ERROR, not WARNING: at the scheduled MT 02:20 this can only mean a
+        # trigger/tz bug or a config whose window ends after MT 02:20 (the
+        # config route rejects that with 422) — the day goes unscanned
+        # until someone backfills it.
         if now_mt < end_mt:
-            scheduled_mt = window_day.replace(
-                hour=GAP_TRADE_FINAL_HOUR_MT, minute=GAP_TRADE_FINAL_MINUTE_MT
+            logger.error(
+                "Gap Trade %s scan refused: MT window %s ~ %s not closed yet "
+                "(now MT %s) — day NOT scanned; backfill with "
+                "trigger_gap_trade_scan_now(window_day=...) after it closes",
+                run_kind, start_mt, end_mt, now_mt,
             )
-            if end_mt <= scheduled_mt:
-                logger.warning(
-                    "Gap Trade scan refused: MT window %s ~ %s not closed yet "
-                    "(now MT %s)", start_mt, end_mt, now_mt,
-                )
-                return
-            logger.warning(
-                "Gap Trade scan: configured window end MT %s is after the "
-                "MT %02d:%02d final scan — scanning a partial window",
-                end_mt, GAP_TRADE_FINAL_HOUR_MT, GAP_TRADE_FINAL_MINUTE_MT,
-            )
+            return
 
         merged_alerts: list[dict[str, Any]] = []
         total_ms = 0
@@ -1109,6 +1146,9 @@ def _run_gap_trade_scan() -> None:
             "window MT %s ~ %s, %dms",
             len(merged_alerts), so_count, gp_count, start_mt, end_mt, total_ms,
         )
+        if run_kind != "final":
+            logger.info("Gap Trade %s scan done for MT day %s",
+                        run_kind, window_day.date())
 
         # OPT-0032: CRM risk-tag pipeline on the final rule-81 hit set.
         # Shares the audit-table dedup with the intraday tier, so clients
@@ -1140,8 +1180,9 @@ def _run_gap_trade_scan() -> None:
                 alerts=gp_alerts,
                 window_date=window_date,
                 scan_label=(
-                    f"final MT {now_mt:%H:%M} "
+                    f"{run_kind} MT {now_mt:%H:%M} "
                     f"(HKT {now_utc + timedelta(hours=8):%H:%M})"
+                    + ("" if run_kind == "final" else f" window {window_date}")
                 ),
                 crm_tag_config=config.crm_tag.model_dump(),
                 extra_note=note,
@@ -1161,7 +1202,7 @@ def _locked_gap_trade_scan() -> None:
 
     Blocking acquire with timeout (NOT the old non-blocking skip): the final
     scan is the authoritative daily record AND carries rule 71 SO+AB, so a
-    long intraday tick at 07:05 must delay it, never silently cancel it.
+    long intraday tick at MT 02:05 must delay it, never silently cancel it.
     """
     acquired = _gap_trade_lock.acquire(timeout=_GAP_TRADE_FINAL_LOCK_TIMEOUT_SEC)
     if not acquired:
@@ -1179,6 +1220,127 @@ def _locked_gap_trade_scan() -> None:
         _run_gap_trade_scan()
     finally:
         _gap_trade_lock.release()
+
+
+def _gap_trade_catchup_window_day(
+    now_utc: datetime,
+    window_end_hour_mt: int,
+    has_scan_row: Callable[[datetime], bool],
+    cron_fires_today: bool,
+) -> date | None:
+    """Pure decision for the startup catch-up (OPT-0072 cold review).
+
+    Returns today's MT date when a final scan is owed and nobody will run it,
+    else None. Owed = MT Mon–Sat, now past the scheduled MT 02:20 (which is
+    ``window end + 20 min`` for the default 2h window) and past the window
+    end, no gap-trade scan_history row for today's window yet, and the cron
+    trigger is NOT about to fire for today itself (a process started a few
+    seconds before MT 02:20 must not scan twice).
+    """
+    now_mt = _mt_now(now_utc)
+    if now_mt.weekday() == 6:
+        return None
+    window_day = now_mt.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_mt = window_day + timedelta(hours=window_end_hour_mt)
+    scheduled_mt = window_day.replace(
+        hour=GAP_TRADE_FINAL_HOUR_MT, minute=GAP_TRADE_FINAL_MINUTE_MT
+    )
+    if now_mt <= max(end_mt + timedelta(minutes=20), scheduled_mt):
+        return None
+    if cron_fires_today:
+        return None
+    if has_scan_row(window_day):
+        return None
+    return window_day.date()
+
+
+def _gap_trade_has_scan_row(window_day: datetime) -> bool:
+    """Was a gap-trade final scan persisted for this MT day's window?
+
+    scan_history has no rule column; a gap-trade batch is recognised by its
+    ``scan_interval_min`` (= window length in minutes, see _run_gap_trade_scan)
+    and a ``scanned_at`` between the window end and the next MT midnight.
+    """
+    from ..core.risk_monitor_db import has_scan_history_between, load_gap_trade_config
+    from ..schemas.risk_monitor import GapTradeConfig
+    from ..services.rule_intraday_return_service import MT_SERVER_TZ
+
+    config = GapTradeConfig(**load_gap_trade_config())
+    minutes = (config.window_end_hour_mt - config.window_start_hour_mt) * 60
+    end_mt = window_day + timedelta(hours=config.window_end_hour_mt)
+    next_day = window_day + timedelta(days=1)
+
+    def to_iso(mt_naive: datetime) -> str:
+        utc = mt_naive.replace(tzinfo=MT_SERVER_TZ).astimezone(timezone.utc)
+        return utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return has_scan_history_between(to_iso(end_mt), to_iso(next_day), minutes)
+
+
+def _run_gap_trade_catchup() -> None:
+    """Catch-up body: re-check under the gap lock, then scan once."""
+    from ..core.risk_monitor_db import load_gap_trade_config
+    from ..schemas.risk_monitor import GapTradeConfig
+
+    acquired = _gap_trade_lock.acquire(timeout=_GAP_TRADE_FINAL_LOCK_TIMEOUT_SEC)
+    if not acquired:
+        logger.error("Gap Trade catch-up could not acquire lock — skipped")
+        return
+    try:
+        config = GapTradeConfig(**load_gap_trade_config())
+        day = _gap_trade_catchup_window_day(
+            datetime.now(timezone.utc),
+            config.window_end_hour_mt,
+            _gap_trade_has_scan_row,
+            cron_fires_today=False,  # checked by the caller before spawning
+        )
+        if day is None:
+            return
+        logger.warning(
+            "Gap Trade final scan for MT day %s was missed (process started "
+            "after MT %02d:%02d) — running catch-up scan now",
+            day, GAP_TRADE_FINAL_HOUR_MT, GAP_TRADE_FINAL_MINUTE_MT,
+        )
+        _run_gap_trade_scan(window_day=day, run_kind="catch-up")
+    finally:
+        _gap_trade_lock.release()
+
+
+def _maybe_start_gap_trade_catchup() -> threading.Thread | None:
+    """Spawn one catch-up scan if today's final scan was missed.
+
+    Called only from start_burst_scheduler, i.e. only in the worker holding
+    the scheduler flock — so across the 4 uvicorn workers at most one
+    process evaluates this per start. Across restarts the scan_history row
+    written by the first run makes later evaluations no-ops, so a day gets
+    at most one catch-up.
+    """
+    try:
+        from ..core.risk_monitor_db import load_gap_trade_config
+        from ..schemas.risk_monitor import GapTradeConfig
+
+        now_utc = datetime.now(timezone.utc)
+        cron_fires_today = False
+        job = _scheduler.get_job(GAP_TRADE_JOB_ID) if _scheduler else None
+        if job is not None and job.next_run_time is not None:
+            cron_fires_today = (
+                _mt_now(job.next_run_time.astimezone(timezone.utc)).date()
+                == _mt_now(now_utc).date()
+            )
+        config = GapTradeConfig(**load_gap_trade_config())
+        day = _gap_trade_catchup_window_day(
+            now_utc, config.window_end_hour_mt,
+            _gap_trade_has_scan_row, cron_fires_today,
+        )
+    except Exception:
+        logger.error("Gap Trade catch-up check failed", exc_info=True)
+        return None
+    if day is None:
+        return None
+    t = threading.Thread(target=_run_gap_trade_catchup, daemon=True,
+                         name="gap-trade-catchup")
+    t.start()
+    return t
 
 
 def _run_gap_trade_intraday_scan() -> None:
@@ -1576,6 +1738,10 @@ def start_burst_scheduler() -> None:
             ir_interval,
         )
     _scheduler.start()
+    # OPT-0072: a restart/deploy across MT 02:20 used to lose the day's final
+    # scan (APScheduler never replays a cron time that passed before start).
+    if os.getenv("GAP_TRADE_SCAN_ENABLED", "true").lower() != "false":
+        _maybe_start_gap_trade_catchup()
     logger.info("Burst scanner started: every %d minutes", interval_min)
 
     # Run first scan immediately in a background thread so startup isn't blocked

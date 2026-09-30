@@ -2037,7 +2037,7 @@ def mark_crm_tag_rows_notified(row_ids: list[int], notified_at: str) -> None:
 
 
 def get_crm_tag_rows_for_window(window_date: str) -> list[dict[str, Any]]:
-    """All audit rows for one window — 07:20 reconciliation + ops queries."""
+    """All audit rows for one window — MT 02:20 final-scan reconciliation + ops queries."""
     with get_risk_monitor_db() as conn:
         rows = conn.execute(
             "SELECT * FROM gap_trade_crm_tag_log WHERE window_date = ? ORDER BY id",
@@ -2109,6 +2109,22 @@ def reset_scan_cursor(rule_type: str | None = None, server: str | None = None) -
 
 
 # ── Scan history + alert events (write path) ──────────────
+
+def has_scan_history_between(
+    since_iso: str, until_iso: str, scan_interval_min: int
+) -> bool:
+    """Any scan_history batch with this interval and ``scanned_at`` in
+    [since, until)? ISO 'YYYY-MM-DDTHH:MM:SSZ' strings compare lexically.
+    Used by the Gap Trade startup catch-up (OPT-0072) to tell whether
+    today's final scan already ran."""
+    with get_risk_monitor_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM scan_history WHERE scan_interval_min = ? "
+            "AND scanned_at >= ? AND scanned_at < ? LIMIT 1",
+            (int(scan_interval_min), since_iso, until_iso),
+        ).fetchone()
+    return row is not None
+
 
 def append_scan_and_events(
     scanned_at: str,

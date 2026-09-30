@@ -128,15 +128,35 @@ def test_final_scan_first_winter_monday(monkeypatch, calls):
     assert calls["gp"][0]["end_mt"] == datetime(2026, 11, 2, 2, 0)
 
 
-def test_final_scan_config_window_past_0220_still_scans(monkeypatch, calls):
-    # A UI-configured window ending after MT 02:20 keeps the old partial-scan
-    # behaviour (warned) instead of silently never scanning.
-    import app.core.risk_monitor_db as rmdb
-    monkeypatch.setattr(rmdb, "load_gap_trade_config",
-                        lambda: {"window_end_hour_mt": 3})
-    freeze(monkeypatch, datetime(2026, 11, 3, 0, 20, tzinfo=UTC))
-    bos._run_gap_trade_scan()
-    assert calls["gp"][0]["end_mt"] == datetime(2026, 11, 3, 3, 0)
+def test_final_scan_refusal_logs_error(monkeypatch, calls, caplog):
+    # A scheduled run that finds the window still open means a trigger/tz
+    # bug and an unscanned day — ERROR, not WARNING (cold review #4).
+    freeze(monkeypatch, datetime(2026, 11, 2, 23, 20, tzinfo=UTC))
+    with caplog.at_level("ERROR", logger=bos.logger.name):
+        bos._run_gap_trade_scan()
+    refused = [r for r in caplog.records if "refused" in r.getMessage()]
+    assert refused and all(r.levelname == "ERROR" for r in refused)
+
+
+def test_config_route_rejects_window_end_after_final_scan():
+    # The trigger is fixed at MT 02:20; a window ending later could never be
+    # closed at scan time → 422 at save time (cold review #3).
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from app.api.v1.routes.risk_monitor import gap_trade_update_config
+    from app.schemas.risk_monitor import GapTradeConfig
+
+    class _NoAudit:
+        def record_diff(self, *a, **kw):  # pragma: no cover - never reached
+            raise AssertionError("must reject before saving")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(gap_trade_update_config(
+            GapTradeConfig(window_end_hour_mt=3), audit=_NoAudit()))
+    assert exc.value.status_code == 422
+    assert "02:20" in exc.value.detail
 
 
 # ── Final trigger: fires exactly once per MT trading day at MT 02:20 ──
@@ -251,3 +271,173 @@ def test_intraday_fence_covers_mt_window_both_seasons(day):
         [(0, 55)] + [(1, m) for m in range(0, 60, 5)] + [(2, 0), (2, 5)]
     )
     assert {t.date() for t in mt_slots} == {day}
+
+
+# ── Startup catch-up (cold review #2) ─────────────────────────
+
+def _no_row(_day):
+    return False
+
+
+def _has_row(_day):
+    return True
+
+
+@pytest.mark.parametrize("instant,has_row,cron_today,expected", [
+    # Due: winter Tue MT 03:00 (HKT 09:00), no row, cron already passed.
+    (datetime(2026, 11, 3, 1, 0, tzinfo=UTC), _no_row, False, date(2026, 11, 3)),
+    # Due in summer: MT 02:21 (HKT 07:21).
+    (datetime(2026, 10, 5, 23, 21, tzinfo=UTC), _no_row, False, date(2026, 10, 6)),
+    # Already scanned today.
+    (datetime(2026, 11, 3, 1, 0, tzinfo=UTC), _has_row, False, None),
+    # Before the window closed / exactly at the scheduled minute.
+    (datetime(2026, 11, 2, 23, 50, tzinfo=UTC), _no_row, False, None),  # MT 01:50
+    (datetime(2026, 11, 3, 0, 20, tzinfo=UTC), _no_row, False, None),   # MT 02:20
+    # Sunday (MT 2026-11-08).
+    (datetime(2026, 11, 8, 3, 0, tzinfo=UTC), _no_row, False, None),
+    # The cron itself is about to fire for today → never double-scan.
+    (datetime(2026, 11, 3, 1, 0, tzinfo=UTC), _no_row, True, None),
+])
+def test_catchup_decision(instant, has_row, cron_today, expected):
+    assert bos._gap_trade_catchup_window_day(instant, 2, has_row, cron_today) == expected
+
+
+@pytest.fixture
+def temp_risk_db(tmp_path, monkeypatch):
+    import app.core.risk_monitor_db as rmdb
+    monkeypatch.setattr(rmdb, "_DB_PATH", tmp_path / "risk_monitor_test.db")
+    rmdb.init_risk_monitor_db()
+    return rmdb
+
+
+def _append(rmdb, scanned_at, interval):
+    rmdb.append_scan_and_events(
+        scanned_at=scanned_at, scan_interval_min=interval, accounts_scanned=0,
+        suspicious_count=0, scan_time_ms=0, alerts=[],
+    )
+
+
+def test_has_scan_row_identifies_gap_batch_by_interval_and_time(temp_risk_db):
+    day = datetime(2026, 11, 3)  # winter: window end MT 02:00 = 00:00Z
+    _append(temp_risk_db, "2026-11-03T00:30:00Z", 5)   # burst tick, not gap
+    assert bos._gap_trade_has_scan_row(day) is False
+    _append(temp_risk_db, "2026-11-02T23:59:00Z", 120)  # before window end
+    assert bos._gap_trade_has_scan_row(day) is False
+    _append(temp_risk_db, "2026-11-03T00:20:00Z", 120)  # the MT 02:20 run
+    assert bos._gap_trade_has_scan_row(day) is True
+    assert bos._gap_trade_has_scan_row(datetime(2026, 11, 4)) is False
+
+
+def test_catchup_runs_once_per_mt_day_across_restarts(monkeypatch, temp_risk_db):
+    """Two process starts after a missed MT 02:20 → exactly one catch-up.
+    (Across the 4 workers only the scheduler-flock owner ever reaches
+    start_burst_scheduler; across restarts the scan_history row is the
+    guard, re-checked under the gap lock.)"""
+    freeze(monkeypatch, datetime(2026, 11, 3, 1, 0, tzinfo=UTC))  # HKT 09:00
+    monkeypatch.setattr(bos, "_scheduler", None)
+    runs = []
+
+    def fake_scan(window_day=None, run_kind="final"):
+        runs.append((window_day, run_kind))
+        _append(temp_risk_db, "2026-11-03T01:00:05Z", 120)
+
+    monkeypatch.setattr(bos, "_run_gap_trade_scan", fake_scan)
+    for _ in range(2):
+        t = bos._maybe_start_gap_trade_catchup()
+        if t is not None:
+            t.join(timeout=10)
+    assert runs == [(date(2026, 11, 3), "catch-up")]
+
+
+def test_catchup_skipped_when_cron_fires_today(monkeypatch, temp_risk_db):
+    # Process started at MT 02:19:59 — the job's next_run_time is today's
+    # MT 02:20, so the cron owns today's scan.
+    freeze(monkeypatch, datetime(2026, 11, 3, 0, 21, tzinfo=UTC))
+
+    class _Job:
+        next_run_time = datetime(2026, 11, 3, 0, 20, tzinfo=UTC)
+
+    class _Sched:
+        def get_job(self, _id):
+            return _Job()
+
+    monkeypatch.setattr(bos, "_scheduler", _Sched())
+    monkeypatch.setattr(bos, "_run_gap_trade_scan",
+                        lambda **kw: pytest.fail("must not scan"))
+    assert bos._maybe_start_gap_trade_catchup() is None
+
+
+# ── Manual backfill (window_day) ──────────────────────────────
+
+def test_backfill_uses_the_given_mt_day_window(monkeypatch, calls):
+    freeze(monkeypatch, datetime(2026, 11, 5, 3, 0, tzinfo=UTC))
+    bos.trigger_gap_trade_scan_now(window_day=date(2026, 11, 2))
+    assert calls["so"][0]["start_mt"] == datetime(2026, 11, 2, 0, 0)
+    assert calls["so"][0]["end_mt"] == datetime(2026, 11, 2, 2, 0)
+    assert calls["crm"][0]["window_date"] == "2026-11-02"
+    assert calls["crm"][0]["scan_label"].startswith("backfill MT ")
+
+
+def test_backfill_today_after_close_is_allowed(monkeypatch, calls):
+    freeze(monkeypatch, datetime(2026, 11, 3, 0, 30, tzinfo=UTC))  # MT 02:30
+    bos.trigger_gap_trade_scan_now(window_day=date(2026, 11, 3))
+    assert calls["gp"][0]["end_mt"] == datetime(2026, 11, 3, 2, 0)
+
+
+@pytest.mark.parametrize("instant,day", [
+    (datetime(2026, 11, 3, 1, 0, tzinfo=UTC), date(2026, 11, 4)),   # future
+    (datetime(2026, 11, 2, 23, 30, tzinfo=UTC), date(2026, 11, 3)),  # MT 01:30, open
+])
+def test_backfill_rejects_future_and_open_window(monkeypatch, calls, instant, day):
+    freeze(monkeypatch, instant)
+    with pytest.raises(ValueError):
+        bos.trigger_gap_trade_scan_now(window_day=day)
+    assert calls["so"] == [] and calls["gp"] == []
+
+
+# ── Registration-level: the REAL start_burst_scheduler wiring ──
+
+def test_registered_final_job_runs_on_mt_clock(monkeypatch, temp_risk_db):
+    """Fails if registration goes back to an inline HKT trigger."""
+    import apscheduler.schedulers.base as aps_base
+
+    from app.services.rule_intraday_return_service import MT_SERVER_TZ
+
+    instant = datetime(2026, 11, 2, 23, 30, tzinfo=UTC)  # winter, HKT Tue 07:30
+
+    class FrozenAps(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant if tz is None else instant.astimezone(tz)
+
+    class PausedScheduler(bos.BackgroundScheduler):
+        def start(self, *a, **kw):
+            kw["paused"] = True
+            super().start(*a, **kw)
+
+    monkeypatch.setattr(aps_base, "datetime", FrozenAps)
+    monkeypatch.setattr(bos, "BackgroundScheduler", PausedScheduler)
+    monkeypatch.setattr(bos, "_scheduler", None)
+    monkeypatch.setattr(bos, "_startup_scan_thread", None)
+    monkeypatch.setattr(bos, "_run_scan", lambda **kw: None)
+    monkeypatch.setattr(bos, "_maybe_start_gap_trade_catchup", lambda: None)
+    for k, v in {"BURST_SCAN_ENABLED": "true", "GAP_TRADE_SCAN_ENABLED": "true",
+                 "GAP_TRADE_INTRADAY_ENABLED": "false",
+                 "REBATE_ARB_SCAN_ENABLED": "false",
+                 "INTRADAY_RETURN_SCAN_ENABLED": "false"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("BURST_FAST_TIER_ENABLED", raising=False)
+
+    bos.start_burst_scheduler()
+    try:
+        job = bos._scheduler.get_job(bos.GAP_TRADE_JOB_ID)
+        assert job is not None
+        assert job.trigger.timezone is MT_SERVER_TZ
+        # Winter: next run is MT 02:20 = 00:20Z (HKT 08:20), not HKT 07:20.
+        assert job.next_run_time.astimezone(UTC) == datetime(2026, 11, 3, 0, 20, tzinfo=UTC)
+    finally:
+        bos._scheduler.shutdown(wait=False)
+        t = bos._startup_scan_thread
+        if t is not None:
+            t.join(timeout=10)
+        bos._scheduler = None

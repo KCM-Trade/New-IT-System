@@ -42,6 +42,8 @@ from pydantic import BaseModel
 from ....core.alerts_pubsub import subscribe as sse_subscribe
 from ....core.audit import Auditor, get_auditor, history_author
 from ....core.burst_open_scheduler import (
+    GAP_TRADE_FINAL_HOUR_MT,
+    GAP_TRADE_FINAL_MINUTE_MT,
     get_latest_result,
     reschedule_burst,
     trigger_intraday_return_scan_now,
@@ -1572,6 +1574,18 @@ async def gap_trade_update_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="window_start_hour_mt must be < window_end_hour_mt.",
+        )
+    # OPT-0072: the final scan fires at a fixed MT 02:20; a window ending
+    # later would never be closed at scan time and every day would be
+    # refused (unscanned). Reject it here instead of failing daily at runtime.
+    if config.window_end_hour_mt > GAP_TRADE_FINAL_HOUR_MT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"window_end_hour_mt must be <= {GAP_TRADE_FINAL_HOUR_MT}: the "
+                f"final scan runs at a fixed MT {GAP_TRADE_FINAL_HOUR_MT:02d}:"
+                f"{GAP_TRADE_FINAL_MINUTE_MT:02d}."
+            ),
         )
     if not config.sid_list:
         raise HTTPException(
