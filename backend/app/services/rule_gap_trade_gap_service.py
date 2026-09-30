@@ -521,7 +521,10 @@ def detect_gap_trade_gap_profit(
 
 
 def _to_iso_z(value: Any) -> Optional[str]:
-    """Treat naive datetimes as MT (UTC+3) and convert to UTC ISO8601 Z."""
+    """Naive MT wall clock → UTC ISO8601 Z at the fixed +03:00 alert-table
+    storage convention (not the real MT offset — MT follows US DST, see
+    rule_intraday_return_service.MT_SERVER_TZ; read back via
+    alert_orders_service.stored_alert_time_to_mt). Do not change to DST."""
     if value is None:
         return None
     if isinstance(value, datetime):

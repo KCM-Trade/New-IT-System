@@ -349,15 +349,19 @@ def _query_so_ab_pairs(
 def _iso_z(value: Any) -> Optional[str]:
     """Best-effort UTC ISO8601 with Z suffix.
 
-    Window times are already MT (UTC+3, no DST) — we treat them as MT and
-    convert to UTC by subtracting 3h. Returning the MT-time-stamp untouched
-    would mis-order rows mixed with other rules' alerts (whose times are
-    proper UTC).
+    Naive values are MT wall-clock times. The fixed -3h is the alert-table
+    STORAGE convention (every detector stores times as MT at a fixed +03:00;
+    read back via alert_orders_service.stored_alert_time_to_mt), NOT the
+    real MT offset — MT itself follows the US DST calendar (UTC+3 summer /
+    UTC+2 winter, see rule_intraday_return_service.MT_SERVER_TZ). Do not
+    "fix" it to DST here: historical and new rows would then mix two
+    offsets. Returning the MT-time-stamp untouched would mis-order rows
+    mixed with other rules' alerts.
     """
     if value is None:
         return None
     if isinstance(value, datetime):
-        # Treat naive datetimes as MT broker time (UTC+3).
+        # Naive = MT wall clock, stored at the fixed +03:00 convention (see docstring).
         dt = value if value.tzinfo else (value - timedelta(hours=3)).replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     s = str(value)
