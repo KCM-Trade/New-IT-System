@@ -209,7 +209,7 @@ def _passes_dust_floor(alert: Dict[str, Any], min_l_loss_usd: float) -> bool:
     - **same client** (L and C legs belong to one userid) — deterministic
       identity evidence; a stranger's dust never pairs by accident when the
       userid must match. This bypass is also what makes the 2026-09-15
-      same-client scope actually surface at the 07:20 cron: mobile-carrier
+      same-client scope actually surface at the MT 02:20 cron: mobile-carrier
       IPs rotate daily, and the two legs may only share an IP on the gap
       day itself — whose login_ip file is not generated until 05:10 the
       NEXT day. Perfect Edafiogho (67043827/67043828, per-order loss
@@ -471,7 +471,7 @@ def detect_gap_trade_so(
             c_sid, c_login = _split_login_sid(r.get("C_loginSid"))
 
             # IP overlap — only the **open date** is checked, deliberately.
-            # Rationale: gap-trade cron fires HKT 07:20 (= MT 02:20) right
+            # Rationale: gap-trade cron fires MT 02:20 (HKT 07:20 summer / 08:20 winter) right
             # after today's MT 00-02 window closes. login_ip downloads each
             # day's file at HKT 05:10 NEXT day, so today MT's IP file isn't
             # available yet. Open dates are always in the past (open <=

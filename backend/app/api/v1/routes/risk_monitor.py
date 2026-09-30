@@ -1526,9 +1526,10 @@ async def quick_profit_floating_refresh(
 # ── Gap Trade endpoints ────────────────────────────────────
 # Daily scan window — frontend filter is day-based ("Today" default + 昨天 /
 # 3d / 7d / 30d / 自定义). Default lookback 24h matches the daily cron cadence;
-# filter runs on the default `scanned_at` column, so today's HKT 05:20 cron
-# output (which represents MT-yesterday's gap event) lands under the "Today"
-# preset from the HK analyst's "this morning's report" mental model.
+# filter runs on the default `scanned_at` column, so today's MT 02:20 cron
+# output (HKT 07:20 summer / 08:20 winter, covering today's MT 00:00-02:00 gap
+# window) lands under the "Today" preset from the HK analyst's "this morning's
+# report" mental model.
 _GAP_TRADE_DEFAULT_WINDOW = timedelta(days=1)
 
 
@@ -1564,7 +1565,8 @@ async def gap_trade_update_config(
     """Persist new Gap Trade config. Takes effect from the next cron tick.
 
     No scheduler reschedule call here because the cron firing time is fixed
-    (Tue-Sat 05:20 HKT); only the in-scan parameters change.
+    (Mon-Sat MT 02:20 on the MT clock, OPT-0072); only the in-scan parameters
+    change.
     """
     if config.window_start_hour_mt >= config.window_end_hour_mt:
         raise HTTPException(
@@ -1654,12 +1656,11 @@ async def gap_trade_alerts(
             sort_order=sort_order,
             # Gap-trade filter sticks with the default `scanned_at` so the
             # "今天" preset shows whatever the most recent cron run produced
-            # (HKT 05:20 today, scanning MT yesterday — from the analyst's HK
+            # (MT 02:20 today = HKT 07:20 summer / 08:20 winter, scanning
+            # today's MT 00:00-02:00 window — from the analyst's HK
             # perspective that's "this morning's report"). Filtering on
-            # `window_date` would technically be more correct calendar-wise
-            # (since the trades happened MT yesterday = HKT yesterday) but
-            # forces the analyst to flip to "昨天" every time they open the
-            # page, which doesn't match the daily-report mental model.
+            # `window_date` instead would change the semantics of every
+            # preset for no gain on the routine path.
             # Side effect: a manual backfill of an older window shows up
             # under "Today" too, since its scanned_at is today. Acceptable —
             # backfills are admin operations, not the routine path.

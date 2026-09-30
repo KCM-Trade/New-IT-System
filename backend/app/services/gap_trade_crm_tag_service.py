@@ -16,7 +16,7 @@ When either gate is closed the round runs in **log-only mode**: full dedup
 also the recommended first-morning posture for the intraday tier.
 
 Dedup contract — the audit table is the single source of truth shared by
-the intraday tier and the 07:20 final scan: a (window_date, client_userid)
+the intraday tier and the MT 02:20 final scan: a (window_date, client_userid)
 row with a terminal result is never auto-retried, even if the tag later
 disappears from CRM (a human removing the tag is a decision, not consent to
 re-tag). ``failed`` / ``dry_run`` rows ARE retried next round.
@@ -108,9 +108,9 @@ def process_gap_trade_crm_tags(
     """Run one round of the tagging pipeline. Never raises — a tagging
     failure must not break the detection scan that called us.
 
-    ``extra_note`` is prepended to the digest (e.g. the 07:20 reconciliation
+    ``extra_note`` is prepended to the digest (e.g. the MT 02:20 reconciliation
     diff). ``heartbeat=True`` forces a digest even with zero changes — the
-    07:20 final scan uses it as the daily proof-of-life email.
+    MT 02:20 final scan uses it as the daily proof-of-life email.
     """
     try:
         _process_round(
@@ -409,7 +409,7 @@ def _send_digest(settings: Settings, *, window_date: str, scan_label: str,
     """Send the per-round digest (this round's rows + outbox backlog).
 
     Email failure must never abort or roll back tag writes: any exception is
-    logged and the rows stay unnotified (retried next round / at 07:20).
+    logged and the rows stay unnotified (retried next round / at the MT 02:20 final scan).
     """
     try:
         rows = get_unnotified_crm_tag_rows()

@@ -31,16 +31,25 @@ JOB_ID = "burst_open_scan"
 BURST_FAST_JOB_ID = "burst_open_fast_tier"
 BURST_FAST_TIER_INTERVAL_SEC = 60
 GAP_TRADE_JOB_ID = "gap_trade_daily_scan"
-# OPT-0032: intraday gap-trade tier — ~5min scans inside the HKT market-open
+# OPT-0072: the final scan is anchored to the MT clock (MT 02:20, i.e. 20 min
+# after the MT 00:00-02:00 window closes). MT runs on the US DST calendar
+# (UTC+3 summer / UTC+2 winter), so this is HKT 07:20 in summer and HKT 08:20
+# in winter. Never express it as a fixed HKT time again.
+GAP_TRADE_FINAL_HOUR_MT = 2
+GAP_TRADE_FINAL_MINUTE_MT = 20
+# OPT-0032: intraday gap-trade tier — ~5min scans inside the MT market-open
 # window so excess-profit clients get CRM-tagged before their withdrawal
-# auto-approves, instead of waiting for the 07:20 final scan.
+# auto-approves, instead of waiting for the MT 02:20 final scan.
 GAP_TRADE_INTRADAY_JOB_ID = "gap_trade_intraday_scan"
-# Internal window guard (HKT, inclusive). The CronTrigger is bounded to
-# hour 5-7 as a first fence; this guard does minute precision. Two layers on
-# purpose — a trigger or timezone bug must not turn a money-impacting job
-# into an all-day loop.
-GAP_TRADE_INTRADAY_START_HKT = (5, 55)
-GAP_TRADE_INTRADAY_END_HKT = (7, 5)
+# Internal window guard (MT wall clock, inclusive; OPT-0072 moved it off HKT).
+# The CronTrigger is bounded to HKT hour 5-8 as a coarse first fence that
+# covers both seasons (summer MT 00:55-02:05 = HKT 05:55-07:05, winter =
+# HKT 06:55-08:05); this guard does minute precision on the MT clock. Two
+# layers on purpose — a trigger or timezone bug must not turn a
+# money-impacting job into an all-day loop.
+GAP_TRADE_INTRADAY_START_MT = (0, 55)
+GAP_TRADE_INTRADAY_END_MT = (2, 5)
+GAP_TRADE_INTRADAY_CRON_HOURS_HKT = "5-8"
 # OPT-0046: Rebate Arbitrage (rule 121-130) — 10-min interval job. The rule's
 # daily 30-day trades baseline is rebuilt lazily INSIDE the tick when the MT
 # trading day rolls over (rule_rebate_arb_service module cache), so one job
@@ -111,11 +120,11 @@ _EVENT_GATED_MAX_LOOKBACK_SEC = 1800
 # tick (or vice versa). They write to the same `alert_events` table but
 # touch different rule_id ranges, so concurrent runs are safe.
 # OPT-0032: the intraday tier shares THIS lock — intraday ticks skip when
-# held (non-blocking), the 07:20 final scan acquires it blocking-with-timeout
+# held (non-blocking), the MT 02:20 final scan acquires it blocking-with-timeout
 # so a long intraday tick can never silently cancel the authoritative daily
 # scan, and intraday/final CRM read-modify-writes never interleave.
 _gap_trade_lock = threading.Lock()
-# How long the 07:20 final scan waits for an in-flight intraday tick before
+# How long the MT 02:20 final scan waits for an in-flight intraday tick before
 # giving up with an ERROR (worst observed scan ≈ minutes; MySQL read_timeout
 # is 600s, so 300s covers everything but a truly hung query).
 _GAP_TRADE_FINAL_LOCK_TIMEOUT_SEC = 300
@@ -327,7 +336,7 @@ def _gap_trade_intraday_enabled() -> bool:
 
 
 def _gap_trade_crm_heartbeat_email() -> bool:
-    # Default OFF — the 07:20 final scan emails ONLY when the round produced
+    # Default OFF — the MT 02:20 final scan emails ONLY when the round produced
     # rows (tagged / failed / skipped), there is an outbox backlog, or a
     # write-cap warning. A quiet morning (no gap-trade clients) sends NOTHING.
     # Set GAP_TRADE_CRM_HEARTBEAT_EMAIL=true to restore the unconditional daily
@@ -336,10 +345,56 @@ def _gap_trade_crm_heartbeat_email() -> bool:
     return os.getenv("GAP_TRADE_CRM_HEARTBEAT_EMAIL", "false").lower() == "true"
 
 
-def _in_intraday_window_hkt(now_hkt_h: int, now_hkt_m: int) -> bool:
-    """Pure window check, unit-tested for the boundary minutes."""
-    hm = (now_hkt_h, now_hkt_m)
-    return GAP_TRADE_INTRADAY_START_HKT <= hm <= GAP_TRADE_INTRADAY_END_HKT
+def _mt_now(now_utc: datetime) -> datetime:
+    """Aware UTC instant → naive MT wall clock (DST-aware, second precision).
+
+    MT follows the US DST calendar (UTC+3 summer / UTC+2 winter) — see
+    ``rule_intraday_return_service.MT_SERVER_TZ``. The old ``+3h`` shortcut
+    was only right in summer (OPT-0072).
+    """
+    from ..services.rule_intraday_return_service import MT_SERVER_TZ
+
+    return now_utc.astimezone(MT_SERVER_TZ).replace(tzinfo=None, microsecond=0)
+
+
+def _in_intraday_window_mt(now_mt_h: int, now_mt_m: int) -> bool:
+    """Pure window check on the MT clock, unit-tested for the boundary minutes."""
+    hm = (now_mt_h, now_mt_m)
+    return GAP_TRADE_INTRADAY_START_MT <= hm <= GAP_TRADE_INTRADAY_END_MT
+
+
+def _gap_trade_final_trigger() -> CronTrigger:
+    """Final-scan trigger: Mon–Sat MT 02:20 on the MT clock itself.
+
+    APScheduler 3.11 accepts the custom ``_MTServerTZ`` tzinfo as-is (it has
+    no ``localize``; ``util.astimezone`` passes non-ZoneInfo tzinfos through
+    and CronTrigger does plain aware-datetime arithmetic), so the fire instant
+    shifts with MT DST automatically — probed 2026-09-30 across the
+    2026-11-01 and 2027-03-14 switches, pinned by tests/test_gap_trade_dst.py.
+    """
+    from ..services.rule_intraday_return_service import MT_SERVER_TZ
+
+    return CronTrigger(
+        day_of_week="mon-sat",
+        hour=GAP_TRADE_FINAL_HOUR_MT,
+        minute=GAP_TRADE_FINAL_MINUTE_MT,
+        timezone=MT_SERVER_TZ,
+    )
+
+
+def _gap_trade_intraday_trigger() -> CronTrigger:
+    """Intraday coarse fence: every 5 min in HKT 05:00–08:55, Mon–Sat.
+
+    Deliberately NOT on MT_SERVER_TZ: the fence is the independent second
+    layer if the MT tz logic were ever wrong. The MT minute-precision guard
+    lives in ``_run_gap_trade_intraday_scan``.
+    """
+    return CronTrigger(
+        day_of_week="mon-sat",
+        hour=GAP_TRADE_INTRADAY_CRON_HOURS_HKT,
+        minute="*/5",
+        timezone="Asia/Hong_Kong",
+    )
 
 
 def _build_quick_profit_prev_alerts(
@@ -911,8 +966,10 @@ def _run_gap_trade_scan() -> None:
     """Execute one Gap Trade daily scan (rules 71 + 81).
 
     Window = [today 00:00 MT, today 02:00 MT) inclusive of close_time.
-    Runs Mon–Sat 07:20 HKT via cron — 20 min after the MT window closes
-    (MT 02:00 = HKT 07:00) so we capture today's gap event in real time.
+    Runs Mon–Sat MT 02:20 via cron (HKT 07:20 summer / 08:20 winter) —
+    20 min after the MT window closes so we capture today's gap event in
+    real time. A run before the MT window has closed is refused (OPT-0072):
+    it would persist a partial window as the authoritative daily record.
     SO+AB IP enrichment only uses the **open date** of each L leg (which
     is always in the past for a closed position), so the close-day IP
     file not being ready yet doesn't block anything. Manual trigger on
@@ -937,15 +994,16 @@ def _run_gap_trade_scan() -> None:
         config = GapTradeConfig(**load_gap_trade_config())
         settings = get_settings()
 
-        # MT is UTC+3 with no DST. Compute "now in MT" and snap to today
-        # MT's [start, end) window — cron at HKT 07:20 = MT 02:20 sits
-        # 20 min after the window closes, so today MT's data is final.
-        # Real-time monitoring trumps the older "scan yesterday for full
-        # IP coverage" design because IP enrichment now uses open-date
-        # files (always available) — see rule_gap_trade_so_service.
-        now_mt = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(
-            tzinfo=None, microsecond=0
-        )
+        # MT runs on the US DST calendar (UTC+3 summer / UTC+2 winter —
+        # OPT-0072; the old fixed +3h missed MT 01:20-02:00 all winter).
+        # Compute "now in MT" and snap to today MT's [start, end) window —
+        # cron at MT 02:20 sits 20 min after the window closes, so today
+        # MT's data is final. Real-time monitoring trumps the older "scan
+        # yesterday for full IP coverage" design because IP enrichment now
+        # uses open-date files (always available) — see
+        # rule_gap_trade_so_service.
+        now_utc = datetime.now(timezone.utc)
+        now_mt = _mt_now(now_utc)
         window_day = now_mt.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -966,6 +1024,28 @@ def _run_gap_trade_scan() -> None:
                 "Gap Trade invalid window: start_mt=%s end_mt=%s", start_mt, end_mt
             )
             return
+        # OPT-0072: never record a still-open window as the final daily
+        # result (partial window → missed closes + missed rule-81 CRM tags,
+        # silently — exactly the winter failure mode of the old HKT cron).
+        # Refused when the window should already be closed at the scheduled
+        # MT 02:20 but is not: a manual trigger or a trigger/tz bug. A window
+        # the UI config stretches past MT 02:20 keeps the pre-OPT-0072
+        # behaviour (partial scan) but says so.
+        if now_mt < end_mt:
+            scheduled_mt = window_day.replace(
+                hour=GAP_TRADE_FINAL_HOUR_MT, minute=GAP_TRADE_FINAL_MINUTE_MT
+            )
+            if end_mt <= scheduled_mt:
+                logger.warning(
+                    "Gap Trade scan refused: MT window %s ~ %s not closed yet "
+                    "(now MT %s)", start_mt, end_mt, now_mt,
+                )
+                return
+            logger.warning(
+                "Gap Trade scan: configured window end MT %s is after the "
+                "MT %02d:%02d final scan — scanning a partial window",
+                end_mt, GAP_TRADE_FINAL_HOUR_MT, GAP_TRADE_FINAL_MINUTE_MT,
+            )
 
         merged_alerts: list[dict[str, Any]] = []
         total_ms = 0
@@ -1051,7 +1131,7 @@ def _run_gap_trade_scan() -> None:
             diverged = sorted({int(r["client_userid"]) for r in tagged_rows}
                               - final_uids)
             note = (
-                f"⚠ Tagged intraday but NOT confirmed by the 07:20 final scan "
+                f"⚠ Tagged intraday but NOT confirmed by the MT 02:20 final scan "
                 f"(review / untag manually): {', '.join(map(str, diverged))}"
                 if diverged else ""
             )
@@ -1059,7 +1139,10 @@ def _run_gap_trade_scan() -> None:
                 settings,
                 alerts=gp_alerts,
                 window_date=window_date,
-                scan_label="final 07:20 HKT",
+                scan_label=(
+                    f"final MT {now_mt:%H:%M} "
+                    f"(HKT {now_utc + timedelta(hours=8):%H:%M})"
+                ),
                 crm_tag_config=config.crm_tag.model_dump(),
                 extra_note=note,
                 heartbeat=_gap_trade_crm_heartbeat_email(),
@@ -1074,7 +1157,7 @@ def _run_gap_trade_scan() -> None:
 
 
 def _locked_gap_trade_scan() -> None:
-    """07:20 final scan — waits for an in-flight intraday tick.
+    """MT 02:20 final scan — waits for an in-flight intraday tick.
 
     Blocking acquire with timeout (NOT the old non-blocking skip): the final
     scan is the authoritative daily record AND carries rule 71 SO+AB, so a
@@ -1101,11 +1184,11 @@ def _locked_gap_trade_scan() -> None:
 def _run_gap_trade_intraday_scan() -> None:
     """One intraday tick (OPT-0032): growing-window rule-81 detect → CRM tag.
 
-    Differences vs the 07:20 final scan, all deliberate:
+    Differences vs the MT 02:20 final scan, all deliberate:
     - ``end_mt`` is clamped to min(now, window end) — a growing window.
     - Only the gap-profit detector runs (rule 71 SO+AB needs closed pairs
       and IP files; it stays daily-only).
-    - Alerts are NOT persisted to alert_events — the 07:20 final scan is
+    - Alerts are NOT persisted to alert_events — the MT 02:20 final scan is
       the authoritative dashboard record; persisting partial-window hits
       every 5 min would spam the UI with duplicates. The CRM tag audit
       table is this tick's only durable output.
@@ -1121,7 +1204,9 @@ def _run_gap_trade_intraday_scan() -> None:
     try:
         now_utc = datetime.now(timezone.utc)
         now_hkt = now_utc + timedelta(hours=8)
-        if not _in_intraday_window_hkt(now_hkt.hour, now_hkt.minute):
+        # OPT-0072: guard on the MT clock (US DST), not HKT.
+        now_mt = _mt_now(now_utc)
+        if not _in_intraday_window_mt(now_mt.hour, now_mt.minute):
             return
 
         config = GapTradeConfig(**load_gap_trade_config())
@@ -1129,7 +1214,6 @@ def _run_gap_trade_intraday_scan() -> None:
             return
         settings = get_settings()
 
-        now_mt = (now_utc + timedelta(hours=3)).replace(tzinfo=None, microsecond=0)
         window_day = now_mt.replace(hour=0, minute=0, second=0, microsecond=0)
         # Same Sunday skip as the final scan (no trading on MT Sunday).
         if config.weekdays_only and window_day.weekday() == 6:
@@ -1137,7 +1221,7 @@ def _run_gap_trade_intraday_scan() -> None:
 
         start_mt = window_day.replace(hour=config.window_start_hour_mt)
         window_end_mt = window_day + timedelta(hours=config.window_end_hour_mt)
-        # Clamp: at HKT 07:05 now_mt is 02:05, past the MT 02:00 window end —
+        # Clamp: at the MT 02:05 tick now_mt is past the MT 02:00 window end —
         # keep parity with the final scan's window instead of overrunning it.
         end_mt = min(now_mt, window_end_mt)
         if start_mt >= end_mt:
@@ -1158,7 +1242,7 @@ def _run_gap_trade_intraday_scan() -> None:
             alerts=gp_result["alerts"],
             window_date=start_mt.date().isoformat(),
             # Email content is English-only (user requirement 2026-06-05).
-            scan_label=f"intraday {now_hkt:%H:%M} HKT",
+            scan_label=f"intraday MT {now_mt:%H:%M} (HKT {now_hkt:%H:%M})",
             crm_tag_config=config.crm_tag.model_dump(),
         )
     except Exception:
@@ -1405,48 +1489,40 @@ def start_burst_scheduler() -> None:
             "slow tier skips them)",
             BURST_FAST_TIER_INTERVAL_SEC,
         )
-    # Gap Trade: Mon–Sat at 07:20 HKT (Asia/Hong_Kong). Cron fires
-    # 20 min after the MT window closes (MT 02:00 = HKT 07:00), giving
-    # real-time visibility on today's gap event (gold opens MT 01:00 =
-    # HKT 06:00, so MT 01-02 is the active gap hour). IP enrichment uses
-    # open-date files only (always available) — see SO service.
+    # Gap Trade: Mon–Sat at MT 02:20 on the MT clock (OPT-0072; HKT 07:20
+    # summer / 08:20 winter). Cron fires 20 min after the MT window closes,
+    # giving real-time visibility on today's gap event (gold opens MT 01:00,
+    # so MT 01-02 is the active gap hour). IP enrichment uses open-date
+    # files only (always available) — see SO service.
     if os.getenv("GAP_TRADE_SCAN_ENABLED", "true").lower() != "false":
         _scheduler.add_job(
             _locked_gap_trade_scan,
-            CronTrigger(
-                day_of_week="mon-sat",
-                hour=7,
-                minute=20,
-                timezone="Asia/Hong_Kong",
-            ),
+            _gap_trade_final_trigger(),
             id=GAP_TRADE_JOB_ID,
             replace_existing=True,
             # APScheduler's default misfire_grace_time (~1s) silently skips
             # a once-a-day cron whenever the executor is briefly busy at
-            # 07:20:00 — explicit kwargs match core/scheduler.py's pattern.
+            # MT 02:20:00 — explicit kwargs match core/scheduler.py's pattern.
             misfire_grace_time=300,
             coalesce=True,
             max_instances=1,
         )
         logger.info(
-            "Gap Trade scanner started: Mon–Sat 07:20 HKT "
-            "(scans current MT day 00:00–02:00 window, real-time after gap close)"
+            "Gap Trade scanner started: Mon–Sat MT 02:20 (HKT 07:20 summer / "
+            "08:20 winter; scans current MT day 00:00–02:00 window, real-time "
+            "after gap close)"
         )
-        # OPT-0032 intraday tier: every 5 min inside HKT 05:55–07:05 (gold
-        # opens MT 01:00 = HKT 06:00; the window brackets the active gap
-        # hour). Trigger bounded to hour 5-7 as the first fence; the
-        # in-function `_in_intraday_window_hkt` guard does minute precision.
+        # OPT-0032 intraday tier: every 5 min inside MT 00:55–02:05 (gold
+        # opens MT 01:00; the window brackets the active gap hour). Trigger
+        # bounded to HKT hour 5-8 as the first fence (covers both DST
+        # seasons); the in-function `_in_intraday_window_mt` guard does
+        # minute precision on the MT clock (OPT-0072).
         # Registration is gated on the FINAL-scan flag too: intraday without
         # the authoritative daily scan would tag with no reconciliation.
         if _gap_trade_intraday_enabled():
             _scheduler.add_job(
                 _locked_gap_trade_intraday_scan,
-                CronTrigger(
-                    day_of_week="mon-sat",
-                    hour="5-7",
-                    minute="*/5",
-                    timezone="Asia/Hong_Kong",
-                ),
+                _gap_trade_intraday_trigger(),
                 id=GAP_TRADE_INTRADAY_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=60,
@@ -1454,10 +1530,10 @@ def start_burst_scheduler() -> None:
                 max_instances=1,
             )
             logger.info(
-                "Gap Trade INTRADAY tier started: Mon–Sat HKT %02d:%02d–%02d:%02d "
+                "Gap Trade INTRADAY tier started: Mon–Sat MT %02d:%02d–%02d:%02d "
                 "every 5 min (growing window, CRM tag pipeline; live writes "
                 "gated by GAP_TRADE_CRM_WRITE_ENABLED + crm_tag.write_enabled)",
-                *GAP_TRADE_INTRADAY_START_HKT, *GAP_TRADE_INTRADAY_END_HKT,
+                *GAP_TRADE_INTRADAY_START_MT, *GAP_TRADE_INTRADAY_END_MT,
             )
     # OPT-0046 Rebate Arbitrage: 10-min interval job (rule 121). Opt-out env
     # gate mirrors GAP_TRADE_SCAN_ENABLED (dev containers disable the whole
