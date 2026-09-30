@@ -25,7 +25,6 @@
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
 | [OPT-0073](./items/OPT-0073-ai-agent-skills-hardening.md) | P2 | backend | M | AI agent Skills hardening（OPT-0069 冷审 #5–#11）：token 上限/压缩、审计粒度、sqlglot 测试、MAF 锁定、skill 审核、事件白名单 |
-| [OPT-0070](./items/OPT-0070-ai-agent-attachments.md) | P2 | mixed | M | AI 助手上传附件：图片/PDF/文本原生，docx/xlsx 服务端转换（Azure 不原生支持），大表设上限 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，25s 工具超时后线程仍跑完）+ 老工具「每轮 2 次」从 prompt 升为 harness 硬性 |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |

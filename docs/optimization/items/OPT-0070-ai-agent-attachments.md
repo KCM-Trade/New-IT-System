@@ -1,7 +1,7 @@
 ---
 id: OPT-0070
 title: AI 助手聊天框支持上传附件（图片 / PDF / 文本 / 小型 Excel·Word）
-status: ready
+status: dropped
 priority: P2
 area: mixed
 effort: M
@@ -63,4 +63,10 @@ related: [[OPT-0069]] [[OPT-0071]]
 
 ## 结果
 
-（待实施）
+**2026-09-30 放弃**：用户决定暂时不加上传附件功能。
+
+若将来重开，放弃前评估发现的三个坑（原方案未覆盖）：
+1. `frontend/nginx.conf` 未设 `client_max_body_size` → nginx 默认 1MB，10MB 上传会在 nginx 层 413，后端日志查不到；改了要 rebuild web 镜像。
+2. 会话历史预算 `harness.SESSION_TOKEN_BUDGET = 32_000`（3 字符/token 估算）；50k 字符的表 ≈ 17k tokens，第二轮 compaction 会把附件原文压成摘要 → 追问时静默丢数据。需决定附件只在上传那轮有效，或放在会话历史外按需重读。
+3. 图片 / PDF 若以 base64 进 MAF 会话 blob，会加重已知的会话存储只增不减问题（09-30 39 个会话 3.8MB）。
+另需实测：`gpt-5.6-terra` 部署是否支持 vision / `input_file`；MAF 1.19.0 向 Azure Responses 传图片/文件的写法。
