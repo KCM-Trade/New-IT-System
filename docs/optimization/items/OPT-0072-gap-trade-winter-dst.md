@@ -125,3 +125,17 @@ Gap Trade（rule 71–80 SO+AB · 81–90 缺口超额盈利）扫描 MT 当日 
 3. 页面按固定 UTC+3 显示的 1h 偏差（存储约定）另开单，本单未碰。
 4. `honeypot.py` 展示时区可顺手换 `MT_SERVER_TZ`（见上）。
 5. 考虑在 `requirements.txt` 钉 `apscheduler<4`。
+
+### 冷审处理（2026-09-30，同分支）
+
+commit `9148ecf`（catch-up / backfill / 422 / 版本钉）+ `bb35d85`（陈旧文案）；morning-digest 仓库 `6951e14`。`./verify.sh` **PASS**：pytest 2764 passed / 1 deselected · tsc 0 · vitest 339 passed（eslint advisory 316，与改前相同）。
+
+1. **morning-digest 冬令误报**（`/opt/myproject/morning-digest`，独立 git 仓库，单独 commit `6951e14`）：新增 `gap_scan_schedule()`（stdlib 复刻 `MT_SERVER_TZ` 的美国 DST 规则），按 MT 时钟判断今天的终扫是否已到点（MT 02:20 + 10 分钟宽限）；未到点 → 邮件写「Scan pending (runs 08:20 HKT)」，**不报错**；周日判断也改成 MT 日历。夏令逻辑不变（没扫到仍 amber 告警）。**crontab 未动**（仍 08:00）——代价是冬令期间早报里没有 gap 结果、只显示 pending；若要看到结果需把 cron 挪到 08:30，待用户拍板。测试 `test_gap_schedule.py`（`python3 test_gap_schedule.py`，8 个时刻 + 冬令端到端 pending + 夏令缺扫告警保留，全 PASS）。07:20 注释 / SKILL.md / README 同改。⚠ 该仓库 `digest.py` 里另有一行别人未提交的改动（viewport meta），**没有**一起提交。
+2. **启动补扫 + 手动回补**：`start_burst_scheduler` 在 `_scheduler.start()` 之后调 `_maybe_start_gap_trade_catchup()`——只有持 scheduler flock 的 worker 会走到这里（4 worker 里至多一个）；条件 = MT 周一–周六 + 已过 `max(end_mt+20min, MT 02:20)` + 今天窗口在 `scan_history` 无 gap 批次 + gap job 的 `next_run_time` 不在今天（防「02:19:59 启动」时 cron 和补扫各跑一次）→ WARNING + 后台线程补扫，线程内拿 gap 锁后**复查**一次（重启多次也只补一次）。gap 批次识别：`scan_history` 没有规则列，用 `scan_interval_min = 窗口分钟数` + `scanned_at ∈ [窗口结束, 次日 MT 0 点)`（新函数 `risk_monitor_db.has_scan_history_between`；burst ≤60 / rebate 10 / 即日高收益 5，默认 120 不撞）。`trigger_gap_trade_scan_now(window_day=date)` 回补过去某 MT 日，校验「不能是未来、今天须窗口已收盘」否则 ValueError。⚠ **仓库里本来就没有手动扫描的 HTTP 路由**（文档写明「没有立即扫描按钮」），所以只加了函数参数、没新增路由（新增写接口要过审计 / 模块闸，超出本单）。测试：补扫决策 7 例（到期夏/冬、已扫、窗口未收、正好 02:20、周日、cron 今天会触发）+ 真 SQLite 识别 gap 批次 + 两次启动只补一次 + cron 今天会触发时不补 + 回补窗口正确 / 今天已收盘可补 / 未来与未收盘拒绝。
+3. **配置 422**：`POST /gap-trade/config` 对 `window_end_hour_mt > 2` 返回 422（触发时刻固定 MT 02:20）；前端输入框 `max` 同步改为 2。运行时原先「配置超过 02:20 时照扫部分窗口 + WARNING」的例外**删除**（结果段「其他改动」第一条那句作废），窗口未收盘一律拒扫。原测试 `test_final_scan_config_window_past_0220_still_scans` 换成 422 测试。live 配置是默认值 2，不受影响。
+4. **拒扫日志级别**：WARNING → **ERROR**（文案带「day NOT scanned；用 window_day 回补」），有测试。
+5. **版本钉**：`requirements.txt` `apscheduler>=3.11,<4`（prod 3.11.3）。结果段 follow-up 5 已完成。
+6. **注册层测试** `test_registered_final_job_runs_on_mt_clock`：走真实 `start_burst_scheduler`（paused scheduler、冻结 APScheduler 的 now 于冬令 2026-11-02 23:30Z），断言 gap 终扫 job 的 `trigger.timezone is MT_SERVER_TZ`、`next_run_time = 2026-11-03 00:20Z`（HKT 08:20）。已做变异验证：把注册改回内联 HKT 07:20 trigger，该测试变红。
+7. **陈旧文案**：`burst_open_scheduler.py` 的「07:05」、`risk_monitor_db.py` 的「07:20 reconciliation」、`RiskMonitor.tsx` 四处（顶部注释、过滤注释、轮询注释、**页面上给用户看的说明文字**「每天 HKT 05:20 自动扫描前一个 MT 交易日」→「每天 MT 02:20（夏令 HKT 07:20 / 冬令 HKT 08:20）自动扫描当日 MT …」）、`rule_gap_trade_so_service._iso_z` 与 `rule_gap_trade_gap_service._to_iso_z` 的「MT (UTC+3, no DST)」改成「-3h 是告警表固定 +03:00 存储约定，MT 本身走美国 DST，别改成 DST」——转换代码未动。`docs/features/risk-monitor.md` 同步写入补扫 / 回补 / 422（gitignored，仅本机）。
+
+**不在本单**（转 hardening OPT）：`_MTServerTZ.fromutc`、挪到 `core/mt_clock.py`、alert_events 重复行去重、heartbeat 邮件默认值。
