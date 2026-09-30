@@ -16,7 +16,11 @@ Per MT trading day D, per candidate account:
     dep_in         = real deposits today   (Action=2 / CMD=6, Profit>0,
                                             Comment not in the adjustment denylist)
     cred_in        = credit / bonus in today (Action=3 / CMD=7, Profit>0)
-    initial_equity = prev_eq + dep_in + cred_in   (include_deposits_in_base=false → prev_eq)
+    pre_trade_out  = real withdrawals + credit out booked BEFORE the account's
+                     first trading activity today (0 when an overnight position
+                     is carried into today — the money was already at risk)
+    initial_equity = prev_eq + dep_in + cred_in − pre_trade_out
+                     (include_deposits_in_base=false → prev_eq, no deduction)
 
     Positions split by open time < today's day start:
       same_day_pnl = positions opened TODAY: realized (PROFIT+SWAPS+COMMISSION)
@@ -45,6 +49,13 @@ numerator counted an overnight loss recovering (−62k → −40k) as +22k profi
 "same-day positions only" misses "$50 opened yesterday, +$500 floating today".
 The account-level clip at zero handles all three without per-position
 day-start prices (which do not exist in the MT tables).
+
+Why pre_trade_out (2026-09-30, 5-67044754): "pull principal + profit out in
+the morning, leave one stake in, win it again" doubled the denominator
+(1,558.5 vs 508.5 actually at risk → 33.7% instead of 103%) — exactly the
+client the rule exists to catch. Only money that left BEFORE the first trade
+is deducted: a withdrawal after trading is profit-taking, and deducting it
+would shrink the base and inflate the ratio.
 
 CEN: ratios are currency-immune; every USD threshold and lots are ÷100 using
 the account currency from fxbackoffice.mt4_users (resolved BEFORE detection).
@@ -304,7 +315,7 @@ def compute_account_metrics(
     """Formula v3 on one account's raw (broker-unit) inputs → USD metrics.
 
     ``raw`` keys (missing → 0): prev_eq, prev_bal, prev_credit, dep_in,
-    cred_in, withdrawals_out, adj_excluded, same_day_pnl, carried_now,
+    cred_in, withdrawals_out, adj_excluded, pre_trade_out, same_day_pnl, carried_now,
     realized_7d, floating_all_now, balance_now, credit_now.
 
     ``divisor`` is 100 for CEN accounts (money in cents), 1 otherwise.
@@ -322,6 +333,7 @@ def compute_account_metrics(
     cred_in = g("cred_in")
     withdrawals_out = g("withdrawals_out")
     adj_excluded = g("adj_excluded")
+    pre_trade_out = g("pre_trade_out")
     same_day_pnl = g("same_day_pnl")
     carried_now = g("carried_now")
     realized_7d = g("realized_7d")
@@ -330,7 +342,9 @@ def compute_account_metrics(
     credit_now = g("credit_now")
 
     carried_float0 = prev_eq - prev_bal - prev_credit
-    initial_equity = prev_eq + ((dep_in + cred_in) if include_deposits_in_base else 0.0)
+    initial_equity = prev_eq + (
+        (dep_in + cred_in - pre_trade_out) if include_deposits_in_base else 0.0
+    )
     carried_gain = max(carried_now, 0.0) - max(carried_float0, 0.0)
     intraday_profit = same_day_pnl + carried_gain
     equity_now = balance_now + credit_now + floating_all_now
@@ -347,6 +361,7 @@ def compute_account_metrics(
         "credit_in": r2(cred_in),
         "withdrawals_out": r2(withdrawals_out),
         "adj_excluded": r2(adj_excluded),
+        "pre_trade_out": r2(pre_trade_out),
         "initial_equity": r2(initial_equity),
         "equity_now": r2(equity_now),
         "same_day_pnl": r2(same_day_pnl),
@@ -856,10 +871,45 @@ def _empty_raw() -> Dict[str, float]:
     return {
         "prev_eq": 0.0, "prev_bal": 0.0, "prev_credit": 0.0,
         "dep_in": 0.0, "cred_in": 0.0, "withdrawals_out": 0.0, "adj_excluded": 0.0,
+        "pre_trade_out": 0.0,
         "same_day_pnl": 0.0, "carried_now": 0.0,
         "realized_today": 0.0, "floating_all_now": 0.0,
         "balance_now": 0.0, "credit_now": 0.0,
     }
+
+
+def _outflow_amount(*, is_balance_op: bool, profit: float, comment: Any) -> float:
+    """Money leaving the base on one balance/credit row (positive), else 0.
+
+    Real withdrawals (denylisted ops adjustments excluded) and credit out —
+    the mirror of what _apply_flow adds to the base as dep_in / cred_in."""
+    if profit >= 0:
+        return 0.0
+    if is_balance_op and not is_real_flow(comment):
+        return 0.0
+    return -profit
+
+
+def apply_pre_trade_outflows(
+    raw: Dict[str, float],
+    flows: List[Tuple[datetime, float]],
+    *,
+    first_activity: Optional[datetime],
+    carried: bool,
+) -> None:
+    """Set raw["pre_trade_out"] = outflows booked before the first trade.
+
+    ``flows`` = [(time_local, outflow_amount)]. ``carried`` (an overnight
+    position was held into today) → the base was already at risk from the
+    day start, nothing is deducted. No trading activity today → every
+    outflow counts (profit is 0 anyway, the base is only informative)."""
+    if carried:
+        raw["pre_trade_out"] = 0.0
+        return
+    raw["pre_trade_out"] = sum(
+        amt for t, amt in flows
+        if amt > 0 and (first_activity is None or t < first_activity)
+    )
 
 
 def _apply_flow(raw: Dict[str, float], *, is_balance_op: bool, profit: float, comment: Any) -> None:
@@ -875,6 +925,18 @@ def _apply_flow(raw: Dict[str, float], *, is_balance_op: bool, profit: float, co
     else:
         if profit > 0:
             raw["cred_in"] += profit
+
+
+def _note_activity(s: Dict[str, Any], t: datetime) -> None:
+    if s["_first"] is None or t < s["_first"]:
+        s["_first"] = t
+
+
+def _finish_pre_trade(s: Dict[str, Any]) -> None:
+    apply_pre_trade_outflows(
+        s["raw"], s.pop("_flows"), first_activity=s.pop("_first"),
+        carried=s.pop("_carried"),
+    )
 
 
 def assemble_mt5_accounts(
@@ -895,7 +957,8 @@ def assemble_mt5_accounts(
     def slot(login: int) -> Dict[str, Any]:
         s = accounts.get(login)
         if s is None:
-            s = {"raw": _empty_raw(), "positions": [], "_open_meta": {}}
+            s = {"raw": _empty_raw(), "positions": [], "_open_meta": {},
+                 "_flows": [], "_first": None, "_carried": False}
             accounts[login] = s
         return s
 
@@ -916,9 +979,13 @@ def assemble_mt5_accounts(
         action = int(d["action"])
         profit = float(d["profit"] or 0.0)
         if action in (2, 3):
-            _apply_flow(slot(login)["raw"], is_balance_op=(action == 2),
+            s = slot(login)
+            _apply_flow(s["raw"], is_balance_op=(action == 2),
                         profit=profit, comment=d.get("comment"))
+            s["_flows"].append((d["time_local"], _outflow_amount(
+                is_balance_op=(action == 2), profit=profit, comment=d.get("comment"))))
             continue
+        _note_activity(slot(login), d["time_local"])
         if int(d["entry"]) not in (1, 2, 3):
             continue
         pnl = profit + float(d["storage"] or 0.0) + float(d["commission"] or 0.0)
@@ -929,6 +996,7 @@ def assemble_mt5_accounts(
             raw["same_day_pnl"] += pnl
         else:
             raw["carried_now"] += pnl
+            slot(login)["_carried"] = True
         meta = closes_by_pos.setdefault(pos_key, {
             "symbol": d["symbol"],
             "direction": "S" if action == 0 else "B",  # closing deal is opposite side
@@ -947,8 +1015,10 @@ def assemble_mt5_accounts(
         open_time = p["open_time_local"]
         if open_time >= day_start:
             s["raw"]["same_day_pnl"] += floating
+            _note_activity(s, open_time)
         else:
             s["raw"]["carried_now"] += floating
+            s["_carried"] = True
         open_pos_ids.add((login, int(p["position_id"])))
         s["positions"].append({
             "symbol": p["symbol"],
@@ -990,6 +1060,7 @@ def assemble_mt5_accounts(
                 continue
             s["positions"].append({**om, "close_time": None})
         del s["_open_meta"]
+        _finish_pre_trade(s)
     return accounts
 
 
@@ -1006,7 +1077,8 @@ def assemble_mt4_accounts(
     def slot(login: int) -> Dict[str, Any]:
         s = accounts.get(login)
         if s is None:
-            s = {"raw": _empty_raw(), "positions": []}
+            s = {"raw": _empty_raw(), "positions": [],
+                 "_flows": [], "_first": None, "_carried": False}
             accounts[login] = s
         return s
 
@@ -1015,16 +1087,21 @@ def assemble_mt4_accounts(
         cmd = int(t["cmd"])
         profit = float(t["profit"] or 0.0)
         if cmd in (6, 7):
-            _apply_flow(slot(login)["raw"], is_balance_op=(cmd == 6),
+            s = slot(login)
+            _apply_flow(s["raw"], is_balance_op=(cmd == 6),
                         profit=profit, comment=t.get("comment"))
+            s["_flows"].append((t["close_time_local"], _outflow_amount(
+                is_balance_op=(cmd == 6), profit=profit, comment=t.get("comment"))))
             continue
         pnl = profit + float(t["storage"] or 0.0) + float(t["commission"] or 0.0)
         s = slot(login)
         s["raw"]["realized_today"] += pnl
         if t["open_time_local"] >= day_start:
             s["raw"]["same_day_pnl"] += pnl
+            _note_activity(s, t["open_time_local"])
         else:
             s["raw"]["carried_now"] += pnl
+            s["_carried"] = True
         s["positions"].append({
             "symbol": t["symbol"], "direction": "B" if cmd == 0 else "S",
             "lots": float(t["lots"] or 0.0), "open_time": t["open_time_local"],
@@ -1037,13 +1114,17 @@ def assemble_mt4_accounts(
         s["raw"]["floating_all_now"] += floating
         if p["open_time_local"] >= day_start:
             s["raw"]["same_day_pnl"] += floating
+            _note_activity(s, p["open_time_local"])
         else:
             s["raw"]["carried_now"] += floating
+            s["_carried"] = True
         s["positions"].append({
             "symbol": p["symbol"], "direction": "B" if int(p["cmd"]) == 0 else "S",
             "lots": float(p["lots"] or 0.0), "open_time": p["open_time_local"],
             "close_time": None,
         })
+    for s in accounts.values():
+        _finish_pre_trade(s)
     return accounts
 
 

@@ -596,3 +596,108 @@ def test_mt5_prev_day_queries_yesterday_first_and_prefers_it():
     assert stamps[0] == stamp(yesterday_end)
     assert len(stamps) == svc._PREV_DAY_LOOKBACK_DAYS
     assert out[1] == (2271.82, 2271.82, 0.0, yesterday_end)
+
+
+# ── 13. pre-trade outflows leave the base (2026-09-30, 5-67044754) ─────
+
+def _bal(L, deal, action, profit, comment, minute):
+    return {"login": L, "deal": deal, "position_id": 0, "action": action, "entry": 0,
+            "symbol": "", "lots": 0.0, "profit": profit, "storage": 0.0,
+            "commission": 0.0, "comment": comment, "time_local": _t(minute)}
+
+
+def _trade(L, deal, pid, action, entry, profit, minute):
+    return {"login": L, "deal": deal, "position_id": pid, "action": action, "entry": entry,
+            "symbol": "XAUUSD", "lots": 0.5, "profit": profit, "storage": 0.0,
+            "commission": 0.0, "comment": "", "time_local": _t(minute)}
+
+
+def test_pre_trade_out_shrinks_base_only_with_deposits_in_base():
+    raw = _raw(prev_eq=1058.5, prev_bal=1008.5, prev_credit=50.0, dep_in=500.0,
+               withdrawals_out=1000.0, pre_trade_out=1050.0, same_day_pnl=525.5)
+    m = compute_account_metrics(raw)
+    assert m["pre_trade_out"] == 1050.0
+    assert m["initial_equity"] == 508.5
+    assert m["return_pct"] == pytest.approx(103.34, abs=0.01)
+    # Base toggle off: prev_eq alone, no asymmetric deduction.
+    off = compute_account_metrics(raw, include_deposits_in_base=False)
+    assert off["initial_equity"] == 1058.5
+
+
+def test_replay_67044754_morning_withdrawals_then_win_hits_100_tier():
+    """Real prod sequence 2026-09-29: pulled 1,050 (incl. bonus out), put 500
+    back, then won 525.5 — was 33.7% on a 1,558.5 base, is 103% on 508.5."""
+    L = 67044754
+    deals = [
+        _bal(L, 1, 2, -500.0, "IT-W 67044754", 333),
+        _bal(L, 2, 3, -50.0, "Bonus Out", 333),
+        _bal(L, 3, 2, -500.0, "W- Korapay (Bank Transfers)NGN", 358),
+        _bal(L, 4, 2, 500.0, "IT-D 919779", 362),
+        _trade(L, 5, 1, 1, 0, 0.0, 939),
+        _trade(L, 6, 1, 0, 1, -22.5, 946),
+        _trade(L, 7, 2, 0, 0, 0.0, 1021),
+        _trade(L, 8, 2, 1, 1, 548.0, 1041),
+    ]
+    out = assemble_mt5_accounts(deals=deals, positions=[], day_start=DAY_START,
+                                now_local=DAY_START + timedelta(hours=18))
+    raw = out[L]["raw"]
+    assert raw["pre_trade_out"] == 1050.0
+    assert raw["withdrawals_out"] == 1000.0 and raw["dep_in"] == 500.0
+    assert not any(k.startswith("_") for k in out[L])
+    raw.update(prev_eq=1058.5, prev_bal=1008.5, prev_credit=50.0)
+    acct = _account(L, raw=raw, positions=out[L]["positions"])
+    alerts, _ = _detect([acct], _rules(100, 300))
+    assert [a["rule_id"] for a in alerts] == [INTRADAY_RETURN_RULE_ID_BASE]
+    assert alerts[0]["initial_equity"] == 508.5
+
+
+def test_withdrawal_after_first_trade_is_profit_taking_not_deducted():
+    L = 60000001
+    deals = [
+        _bal(L, 1, 2, 100.0, "D-1", 10),
+        _trade(L, 2, 1, 0, 0, 0.0, 60),
+        _trade(L, 3, 1, 1, 1, 400.0, 90),
+        _bal(L, 4, 2, -450.0, "W-1", 120),   # pulls the win out afterwards
+    ]
+    raw = assemble_mt5_accounts(deals=deals, positions=[], day_start=DAY_START,
+                                now_local=NOW_LOCAL)[L]["raw"]
+    assert raw["pre_trade_out"] == 0.0
+    assert compute_account_metrics(raw)["initial_equity"] == 100.0
+
+
+def test_carried_position_means_no_pre_trade_deduction():
+    L = 60000002
+    deals = [
+        _bal(L, 1, 2, -300.0, "W-1", 10),
+        _trade(L, 2, 1, 0, 0, 0.0, 60),
+    ]
+    carried = [{"login": L, "position_id": 9, "symbol": "XAUUSD", "action": 0, "lots": 1.0,
+                "profit": 5.0, "storage": 0.0, "open_time_local": _t(-600)}]
+    raw = assemble_mt5_accounts(deals=deals, positions=carried, day_start=DAY_START,
+                                now_local=NOW_LOCAL)[L]["raw"]
+    assert raw["pre_trade_out"] == 0.0
+    # Same day without the overnight position → the 300 left before trading.
+    raw2 = assemble_mt5_accounts(deals=deals, positions=[], day_start=DAY_START,
+                                 now_local=NOW_LOCAL)[L]["raw"]
+    assert raw2["pre_trade_out"] == 300.0
+
+
+def test_mt4_pre_trade_outflows_and_denylist():
+    L = 8500001
+    def row(ticket, cmd, profit, comment, minute, open_min=None):
+        return {"login": L, "ticket": ticket, "cmd": cmd, "symbol": "" if cmd > 1 else "XAUUSD",
+                "lots": 0.0 if cmd > 1 else 0.1,
+                "open_time_local": _t(minute if open_min is None else open_min),
+                "close_time_local": _t(minute), "profit": profit, "storage": 0.0,
+                "commission": 0.0, "comment": comment}
+    rows = [
+        row(1, 6, -200.0, "W-1", 5),
+        row(2, 6, -999.0, "Adjustment - fix", 6),   # ops adjustment, never deducted
+        row(3, 7, -20.0, "Credit Out", 7),
+        row(4, 0, 300.0, "", 90, open_min=60),
+        row(5, 6, -100.0, "W-2", 120),              # after the first trade
+    ]
+    raw = assemble_mt4_accounts(today_rows=rows, positions=[], day_start=DAY_START,
+                                now_local=NOW_LOCAL)[L]["raw"]
+    assert raw["pre_trade_out"] == 220.0
+    assert raw["withdrawals_out"] == 300.0

@@ -82,7 +82,10 @@ prev_bal       = 昨日日終餘額；prev_credit = 昨日日終 credit
 carried_float0 = prev_eq − prev_bal − prev_credit        （隔夜倉在昨日日終的總浮動，可正可負）
 dep_in         = D 內真入金（Action=2/CMD=6，Profit>0，Comment 不在黑名單）
 cred_in        = D 內 credit/bonus 入（Action=3/CMD=7，Profit>0）
-initial_equity = prev_eq + dep_in + cred_in              （include_deposits_in_base=false 時 = prev_eq）
+pre_trade_out  = D 內「首筆交易之前」的真出金 + credit 轉出（有隔夜倉帶入今天時 = 0）
+initial_equity = prev_eq + dep_in + cred_in − pre_trade_out   （include_deposits_in_base=false 時 = prev_eq，也不扣出金）
+  ↑ 2026-09-30 加：5-67044754「早上把本金+利潤提走、只留一份本金再做一輪」分母被放大一倍（1,558.5 vs 實際在風險中的 508.5 → 33.7% 而非 103%）。
+    只扣首筆交易「之前」的出金：交易後出金是提利潤，扣了會反過來縮分母、虛高收益率。
 
 倉位分兩類（按開倉時間 < 今日日初 判定）：
   same_day_pnl   = 當天開的倉：已平（PROFIT+SWAPS+COMMISSION）+ 仍持有的當前浮動（PROFIT+SWAPS），全算

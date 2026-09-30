@@ -312,7 +312,7 @@ interface AlertEvent {
   credit_in?: number | null;
   withdrawals_out?: number | null;
   adj_excluded?: number | null;
-  /** prev_day_equity + deposits_in + credit_in (the denominator). */
+  /** prev_day_equity + deposits_in + credit_in − outflows before the first trade (the denominator). */
   initial_equity?: number | null;
   equity_now?: number | null;
   /** Positions opened today: realized + floating, counted in full. */
@@ -9486,7 +9486,7 @@ function IntradayReturnTab({ active }: { active: boolean }) {
         "初始權益",
         "initial_equity",
         110,
-        "昨日日終權益 + 當日真入金 + 當日 credit/bonus（規則可關掉入金部分）。運維調帳（Balance Adjustment / Initial balance）不算入金。",
+        "昨日日終權益 + 當日真入金 + 當日 credit/bonus − 當日首筆交易前的出金與 credit 轉出（規則可關掉入金部分，關掉時也不扣出金）。有隔夜倉帶入當日時不扣（本金從日初就在風險中）；首筆交易後的出金視為提利潤，不扣。運維調帳（Balance Adjustment / Initial balance）不算入金。",
       ),
       money("昨日日終", "prev_day_equity", 110, "昨日（週末往前找最近一天）日終權益。"),
       money("当日入金", "deposits_in", 100),
