@@ -83,6 +83,31 @@ AI 分析助手（`/ai/assistant`，`backend/app/ai_agent/`）的全部领域知
   客户回复的合规红线）—— 找 Sammy / dealing / CS 确认。
 - 起草时发现的工具缺口（如 `rank_open_positions` 是否带 margin level、单边持仓筛选）是否另开 OPT 补工具。
 
+## 起草期发现（2026-09-30，三个起草 agent 汇总，主线程已核实标 ✅）
+
+**现有 prompt / 工具说明里的错误（与 skill 上线无关，应先修）**
+- ✅ `prompt.py:216` + `tools/risk_alerts.py:547` caveat 写 gap-trade「次日 05:20 HKT 扫前一 MT 日」；实际
+  `core/burst_open_scheduler.py:914` 是 **Mon–Sat 07:20 HKT 扫当日 MT 00:00–02:00 窗口**。
+- ✅ `tools/run_sql.py:288` FIXED_CAVEATS 称 CEN 账户「金额和手数」都 ×100；受信工具 `trade_activity.py:90`
+  只对 .cent/.kcmc 品种除手数、CEN 账户只除金额。需用真实数据判定哪个对。
+- schema card 缺 `mt4_users.MARGIN` / `MARGIN_FREE`；未说明 `rebate_all` 是「客户自身交易产生的全链返佣」而非其作为 IB 的收入。
+- 规则 1「每个数字必须来自本轮工具」字面上禁止引用 skill 里的文档样本数字 —— 需加例外（标注 documented）。
+
+**疑似线上问题（另行处理，不属本单）**
+- 🔴 冬令时（2026-11-01 起）07:20 HKT = MT 01:20，gap-trade 扫描早于 00:00–02:00 窗口结束 → 01:20–02:00 的单漏扫。
+- Risk Rule Alerts 页面时间固定按 UTC+3 显示，11 月起与 MT 墙钟差 1h。
+
+**文档过期**：risk-monitor.md rule 81 门槛写 $1,000（代码 $100）；rules-catalog 称 martingale tab 隐藏（已可见）；
+blowup / news-event 文档仍写「代码尚未落地」；news-event 文档日界锚 Europe/Athens；ib-financial-monitor 归属写错。
+
+**工具缺口（建议另开 OPT）**：`rank_open_positions` 加 margin_level + 在 top_n 之前做 exclude_cent / 单边 / margin 过滤
+（Sammy 快 SO 系列提问直接受益）；exec-compensation 摘要工具；Client Return Rate 指标工具；`get_ib_chain`。
+
+**去重**：`margin-and-stopout` 与 `fxbackoffice-schema` 的单边黄金 / margin level 部分重叠，上线前合并到一处。
+
+**SQL 模式**：`fxbackoffice-schema` P1/P2/P4/P5 与 `margin-and-stopout` §D 均**未 EXPLAIN、未实跑**，上线前必须验证
+（含守卫是否接受 HAVING 别名、`` `GROUP` ``、`SUM(CMD = 1)`）。
+
 ## 结果
 
 （待实施）
