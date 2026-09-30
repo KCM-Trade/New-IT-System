@@ -23,6 +23,8 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
+| [OPT-0069](./items/OPT-0069-ai-agent-skills.md) | P1 | backend | M | AI agent 接入 Agent Skills（MAF SkillsProvider）：按需加载的领域知识目录替代单一 system prompt；11 个 skill 草稿在 docs/ai-agent/skills-draft/ 待审 |
+| [OPT-0070](./items/OPT-0070-ai-agent-attachments.md) | P2 | mixed | M | AI 助手上传附件：图片/PDF/文本原生，docx/xlsx 服务端转换（Azure 不原生支持），大表设上限 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，25s 工具超时后线程仍跑完）+ 老工具「每轮 2 次」从 prompt 升为 harness 硬性 |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
@@ -39,6 +41,7 @@
 
 | ID | 区域 | 标题 | 备注 |
 |----|------|------|------|
+| [OPT-0071](./items/OPT-0071-ai-agent-web-search.md) | backend | AI 助手联网搜索（受控 search_web 工具） | 阻塞：Bing 查询词出境、DPA 不适用，需合规/老板拍板 |
 | [OPT-0004](./items/OPT-0004-risk-monitor-arch.md) | mixed | Risk-monitor 架构/框架重构 | 太宽，需要先拆 3~5 个子任务（路由分层 / service 抽象 / 配置集中 / 任务调度 …） |
 | [OPT-0018](./items/OPT-0018-cache-layer-audit.md) | mixed | 全链路缓存审计与硬化（HTTP / 应用 / Redis / DB） | 已扫描出 5 条真问题（Redis 无 maxmemory、匿名 volume、PnL/IB hit rate 异常等），audit 完成后拆 3-5 个子 OPT |
 | [OPT-0020](./items/OPT-0020-client-return-rate-risk-signals.md) | mixed | Client Return Rate 加 4 个风控判断列（过夜 / ~~USDT~~ / Sharpe / Consistency） | 剩余 7 列分两 Drop 上线（USDT 已拆到 OPT-0022），复用 OPT-0006 的夜间预计算 SQLite 模式；claim 前需用户审 AC、回答 4 个开放问题 + 先跑过夜 SQL 的预飞行实测 |
