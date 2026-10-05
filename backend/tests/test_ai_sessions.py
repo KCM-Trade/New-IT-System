@@ -267,7 +267,7 @@ def test_detail_returns_the_transcript_but_never_the_blob(make_client, scripted_
     assert msgs[1]["error_code"] is None
     assert msgs[1]["usage"] == {
         "input_tokens": 1000, "output_tokens": 200,
-        "cache_read_input_tokens": 400, "cost_usd": pytest.approx(0.0046),
+        "cache_read_input_tokens": 400, "cost_usd": pytest.approx(0.00368),
     }
     tools = msgs[1]["tools"]
     assert [t["name"] for t in tools] == ["get_client_overview", "get_risk_signals"]

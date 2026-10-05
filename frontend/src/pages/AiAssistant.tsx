@@ -306,6 +306,9 @@ export default function AiAssistantPage() {
             <SelectItem value="gpt-5.6-sol" className="items-start py-2">
               <ModelOption label={t("ai.modelDeep")} desc={t("ai.modelDeepDesc")} />
             </SelectItem>
+            <SelectItem value="gpt-6.1-sol" className="items-start py-2">
+              <ModelOption label={t("ai.modelFrontier")} desc={t("ai.modelFrontierDesc")} />
+            </SelectItem>
           </SelectContent>
         </Select>
         </div>

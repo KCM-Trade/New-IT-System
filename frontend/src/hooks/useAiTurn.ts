@@ -25,9 +25,9 @@ import { mapSessionMessages, type AiSessionDetail } from "@/lib/ai-session";
 import { apiFetch } from "@/lib/fetch";
 import { SseParser, parseFrameJson } from "@/lib/sse-parser";
 
-export type AiModel = "gpt-5.6-terra" | "gpt-5.6-sol";
+export type AiModel = "gpt-5.6-terra" | "gpt-5.6-sol" | "gpt-6.1-sol";
 
-export const AI_MODELS: readonly AiModel[] = ["gpt-5.6-terra", "gpt-5.6-sol"];
+export const AI_MODELS: readonly AiModel[] = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol"];
 export const DEFAULT_AI_MODEL: AiModel = "gpt-5.6-terra";
 
 export interface ToolSource {

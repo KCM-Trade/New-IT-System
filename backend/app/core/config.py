@@ -23,12 +23,20 @@ BREAK_GLASS_SECRET_MIN_LEN = 32
 # somebody forgot to replace, and the safe reading of a placeholder is "off".
 AI_INTERNAL_TOKEN_MIN_LEN = 32
 
-# Defaults for AI_MODEL_PRICES, USD per MTok [input, output] — the three
-# GPT-5.6 deployments on kcm-ai-agent-east-us (docs/ai-agent/04 §0.1.1).
+# Defaults for AI_MODEL_PRICES, USD per MTok [input, output] — the
+# deployments on kcm-ai-agent-east-us (docs/ai-agent/04 §0.1.1). Values are the
+# Azure retail price API's Global Standard short-context meters as read on
+# 2026-10-05 (prices.azure.com, meter "<model> ShortCo Inp/Opt Std Gl"); the
+# earlier 2.5/15, 5/30, 1/6 were list prices from the launch post and ran
+# 20-80% above what Azure bills. Long-context and cache-write surcharges are
+# not modelled.
 _DEFAULT_MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "gpt-5.6-terra": (2.5, 15.0),
-    "gpt-5.6-sol": (5.0, 30.0),
-    "gpt-5.6-luna": (1.0, 6.0),
+    "gpt-5.6-terra": (2.0, 12.0),
+    "gpt-5.6-sol": (4.0, 20.0),
+    "gpt-5.6-luna": (0.2, 1.2),
+    # Provisional: the Azure retail price API had no gpt-6.1-sol meter on
+    # 2026-10-05, so this is gpt-6-sol's Global Standard price. Re-check.
+    "gpt-6.1-sol": (2.0, 10.0),
 }
 
 

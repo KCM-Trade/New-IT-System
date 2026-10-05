@@ -109,6 +109,13 @@ def deep_model() -> str:
     return os.environ.get("AI_AGENT_MODEL_DEEP", "gpt-5.6-sol")
 
 
+def frontier_model() -> str:
+    """Newest-generation deployment offered as a third picker option
+    (``gpt-6.1-sol``, deployed 2026-10-05). Additive: the default and deep
+    deployments stay as they are, so existing sessions keep their model."""
+    return os.environ.get("AI_AGENT_MODEL_FRONTIER", "gpt-6.1-sol")
+
+
 def summary_model() -> str:
     """Deployment used for compaction summaries (02 §8.5: ``gpt-5.6-luna``).
 
@@ -125,7 +132,7 @@ def summary_model() -> str:
 
 
 def allowed_models() -> tuple[str, ...]:
-    return tuple(dict.fromkeys((default_model(), deep_model())))
+    return tuple(dict.fromkeys((default_model(), deep_model(), frontier_model())))
 
 
 _clients: dict[str, OpenAIChatClient] = {}
