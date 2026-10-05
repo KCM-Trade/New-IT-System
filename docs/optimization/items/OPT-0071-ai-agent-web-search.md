@@ -1,7 +1,7 @@
 ---
 id: OPT-0071
 title: AI 助手联网搜索 —— 受控的 search_web 工具（查询词出境需合规拍板）
-status: idea
+status: dropped
 priority: P3
 area: backend
 effort: M
@@ -51,4 +51,7 @@ related: [[OPT-0069]] [[OPT-0070]]
 
 ## 结果
 
-（待拍板）
+**2026-10-05 放弃**（用户决定），依据 2026-09-30 评估：
+1. **需求为零**：audit_log 截至 09-30 共 111 条 `ai.query.submit` 提问，按新闻/央行/美联储/非农/金价/行情/关税等关键词筛，真实命中 0 条；提问全是内部数据。数据发布日程已由 `get_economic_calendar`（Fed + FRED）覆盖。
+2. **合规成本高、守卫不牢**：Grounding with Bing 数据出境且 Microsoft DPA 不适用；查询词守卫挡得住 login / 邮箱 / 数字 ID，挡不住客户姓名（需对约 7 万客户名模糊匹配，漏一个即出境）。
+3. **将来若真有需求的替代方案**：另开新 OPT 做 `get_market_news`——只读固定公开来源（Fed / ECB 新闻稿、官方统计 RSS），不向外发送任何查询词，无数据出境问题，路子同 `get_economic_calendar`，effort S。

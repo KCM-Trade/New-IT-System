@@ -63,5 +63,6 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | 标题 | 原因 |
 |------|----|------|------|
+| 2026-10-05 | [OPT-0071](./items/OPT-0071-ai-agent-web-search.md) | AI 助手联网搜索（受控 search_web 工具） | 用户决定放弃：111 条真实提问零新闻类需求 + Bing 出境挡不住客户姓名；将来需要改做只读固定来源的 get_market_news |
 | 2026-09-30 | [OPT-0070](./items/OPT-0070-ai-agent-attachments.md) | AI 助手上传附件（图片/PDF/文本/Excel·Word） | 用户决定暂时不加该功能；重开前先看结果段三个坑（nginx 1MB / 会话预算 / blob 膨胀） |
 | 2026-06-04 | [OPT-0029](./items/OPT-0029-risk-monitor-view-presets.md) | Risk-monitor 视图模板服务端化（团队共享 view presets + 自报身份） | 被 [[OPT-0035]] 取代——用户选了相反的产品形态（per-身份静默同步 + 排他认领 + 观摩）并放大到全页面 |
