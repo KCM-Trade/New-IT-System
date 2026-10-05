@@ -97,6 +97,8 @@ export const enUS = {
     modelDeep: "Deep analysis",
     modelStandardDesc: "GPT-5.6 Terra · everyday questions, fast and cheap",
     modelDeepDesc: "GPT-5.6 Sol · flagship, steadier on complex multi-step analysis, about 2× the cost",
+    modelFrontier: "GPT-6.1",
+    modelFrontierDesc: "GPT-6.1 Sol · newest generation, newly added — compare its answers with the other two",
     thinking: "Thinking…",
     querying: "Querying {tool}…",
     stopped: "Stopped.",

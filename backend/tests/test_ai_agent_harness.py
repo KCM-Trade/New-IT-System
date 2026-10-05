@@ -224,3 +224,19 @@ def test_history_provider_skips_excluded_messages(fake_agent):
     provider = fake_agent.last_kwargs["context_providers"][0]
     assert isinstance(provider, InMemoryHistoryProvider)
     assert provider.skip_excluded is True
+
+
+def test_selectable_models_agree_across_layers(monkeypatch):
+    """The page schema, the agent's allow-list and the price table must name
+    the same deployments: a model the schema accepts but the agent rejects is
+    a 400 mid-stream, and one without a price bills at $0 against the quota."""
+    from typing import get_args
+
+    from app.core.config import _DEFAULT_MODEL_PRICES
+    from app.schemas.ai import AiModel
+
+    for name in ("AZURE_OPENAI_CHAT_MODEL", "AI_AGENT_MODEL_DEEP", "AI_AGENT_MODEL_FRONTIER"):
+        monkeypatch.delenv(name, raising=False)
+    assert set(harness.allowed_models()) == set(get_args(AiModel))
+    assert "gpt-6.1-sol" in harness.allowed_models()
+    assert set(get_args(AiModel)) <= set(_DEFAULT_MODEL_PRICES)

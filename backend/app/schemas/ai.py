@@ -10,11 +10,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from typing import Any
 
-# The two deployments the UI may pick between. Values are Azure OpenAI
+# The deployments the UI may pick between. Values are Azure OpenAI
 # DEPLOYMENT names on kcm-ai-agent-east-us, not model families: `terra` is the
-# default analyst, `sol` is the "deep analysis" toggle (01 C13). `luna` exists
-# for background jobs and is deliberately not selectable from the page.
-AiModel = Literal["gpt-5.6-terra", "gpt-5.6-sol"]
+# default analyst, `sol` is the "deep analysis" toggle (01 C13), `gpt-6.1-sol`
+# is the newest-generation option (added 2026-10-05). `luna` exists for
+# background jobs and is deliberately not selectable from the page.
+# Keep in sync with ai_agent.harness.allowed_models() and the frontend AI_MODELS.
+AiModel = Literal["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol"]
 
 DEFAULT_MODEL: AiModel = "gpt-5.6-terra"
 

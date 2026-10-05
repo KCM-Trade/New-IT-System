@@ -106,6 +106,8 @@ export const zhCN = {
     modelDeep: "深度分析",
     modelStandardDesc: "GPT-5.6 Terra · 日常查询，快、便宜",
     modelDeepDesc: "GPT-5.6 Sol · 旗舰模型，复杂多步分析更稳，费用约 2 倍",
+    modelFrontier: "GPT-6.1",
+    modelFrontierDesc: "GPT-6.1 Sol · 最新一代模型，刚接入，可与另外两个对比效果",
     thinking: "思考中…",
     querying: "正在查 {tool}…",
     stopped: "已停止。",
