@@ -3,7 +3,7 @@
 "Who opened (or closed) positions within ±N minutes of this moment, and who
 made money on it?" — the ``/window-scan`` page's own query
 (``window_scan_service.query_window_scan``), run with the agent's read-only
-MySQL connection (``connect=``: MAX_EXECUTION_TIME 15s / read / connect
+MySQL connection (``connect=``: MAX_EXECUTION_TIME 30s / read / connect
 timeouts). The page and this tool therefore answer the same question the same
 way: the service picks the rows, rolls them up per client, keeps clients whose
 CLOSED rollup is > 0 and enriches them with lifetime money legs from PG.
