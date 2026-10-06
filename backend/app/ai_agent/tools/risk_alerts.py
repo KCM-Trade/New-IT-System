@@ -543,8 +543,9 @@ async def get_risk_alerts(
         "`alerts` counts ALERT FIRINGS, not events: the same account can fire again on every scan round "
         "(burst-open and leverage-abuse especially). Say 'N alerts (M accounts)', never 'N events'.",
         "Time column matches the page: intraday-return by trading_day (MT calendar day, inclusive); every other "
-        "tab by scanned_at inside the MT-day window converted to UTC (DST-aware). gap-trade scans the PREVIOUS MT "
-        "day (daily 05:20 HKT), so its scanned_at is one day after the trading window_date.",
+        "tab by scanned_at inside the MT-day window converted to UTC (DST-aware). gap-trade scans once per MT trading "
+        "day at MT 02:20 (HKT 07:20 summer / 08:20 winter) over that SAME MT day's 00:00-02:00 window, so its "
+        "scanned_at falls on the same MT day as window_date.",
         "Alerts whose client id (user_id) is NULL can only be grouped by account, not by client "
         "(`alerts_without_client_id`).",
         "The rebate-arbitrage band (121-130) is retired and has no data.",

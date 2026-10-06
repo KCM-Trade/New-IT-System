@@ -10191,7 +10191,8 @@ function IntradayReturnConfigDrawer({
 // ── Gap Trade Tab ─────────────────────────────────────────
 // Rule 71 = SO + AB pair (双账户配对 + IP 共享高亮)
 // Rule 81 = per-client window profit (单客户聚合)
-// Scan window: previous-MT-day 00:00–02:00 (cron Tue–Sat 05:20 HKT)
+// Scan window: same-MT-day 00:00–02:00 (cron Mon–Sat MT 02:20 = HKT 07:20
+// summer / 08:20 winter; MT follows US DST — OPT-0072)
 // Time filter is DAY-based (Today / Yesterday default / 3d / 7d / custom)
 // because the data only updates once a day.
 
@@ -10347,8 +10348,8 @@ function GapTradeTab({ active }: { active: boolean }) {
   // ── Filters ──
   // Default "Today". Backend filter runs on `scanned_at`, so HK office's
   // mental model "今天 = 今早 cron 跑出来的报告" works directly — today's
-  // HKT 05:20 cron output (about MT-yesterday's gap event) lands under
-  // this preset, even though calendar-wise the gap happened yesterday MT.
+  // MT 02:20 cron output (HKT 07:20 summer / 08:20 winter, covering the
+  // same MT day's 00:00–02:00 gap window) lands under this preset.
   // Manual backfills run today also show under "Today" (admin path,
   // acceptable side effect).
   //
@@ -10597,7 +10598,7 @@ function GapTradeTab({ active }: { active: boolean }) {
 
   // Fetch on activation + when filters change. AbortController per React
   // 18 StrictMode rules — see CLAUDE.md. No interval poll: data only changes
-  // once a day at HKT 05:20, so the active-tab fetch is enough.
+  // once a day at MT 02:20 (HKT 07:20 / 08:20), so the active-tab fetch is enough.
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -11151,7 +11152,7 @@ function GapTradeTab({ active }: { active: boolean }) {
         <div className={RISK_MONITOR_HEADER_ROW}>
           <div className="min-w-0">
             <p className="text-sm text-muted-foreground">
-              每天 HKT 05:20 自动扫描前一个 MT 交易日休市开盘 00:00–02:00 窗口,
+              每天 MT 02:20(夏令 HKT 07:20 / 冬令 HKT 08:20)自动扫描当日 MT 休市开盘 00:00–02:00 窗口,
               监控两件事:① 爆仓账户是否与跨客户对手账户存在 AB 仓对敲;
               ② 该窗口是否有客户拿到异常超额收益。数据每日刷新一次。
             </p>
@@ -11591,7 +11592,8 @@ function GapTradeConfigDrawer({
               <Input
                 type="number"
                 min={1}
-                max={24}
+                // OPT-0072: backend rejects > 2 (final scan is fixed at MT 02:20).
+                max={2}
                 value={config.window_end_hour_mt}
                 onChange={(e) =>
                   setConfig({

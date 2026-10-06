@@ -209,7 +209,7 @@ def _passes_dust_floor(alert: Dict[str, Any], min_l_loss_usd: float) -> bool:
     - **same client** (L and C legs belong to one userid) — deterministic
       identity evidence; a stranger's dust never pairs by accident when the
       userid must match. This bypass is also what makes the 2026-09-15
-      same-client scope actually surface at the 07:20 cron: mobile-carrier
+      same-client scope actually surface at the MT 02:20 cron: mobile-carrier
       IPs rotate daily, and the two legs may only share an IP on the gap
       day itself — whose login_ip file is not generated until 05:10 the
       NEXT day. Perfect Edafiogho (67043827/67043828, per-order loss
@@ -349,15 +349,19 @@ def _query_so_ab_pairs(
 def _iso_z(value: Any) -> Optional[str]:
     """Best-effort UTC ISO8601 with Z suffix.
 
-    Window times are already MT (UTC+3, no DST) — we treat them as MT and
-    convert to UTC by subtracting 3h. Returning the MT-time-stamp untouched
-    would mis-order rows mixed with other rules' alerts (whose times are
-    proper UTC).
+    Naive values are MT wall-clock times. The fixed -3h is the alert-table
+    STORAGE convention (every detector stores times as MT at a fixed +03:00;
+    read back via alert_orders_service.stored_alert_time_to_mt), NOT the
+    real MT offset — MT itself follows the US DST calendar (UTC+3 summer /
+    UTC+2 winter, see rule_intraday_return_service.MT_SERVER_TZ). Do not
+    "fix" it to DST here: historical and new rows would then mix two
+    offsets. Returning the MT-time-stamp untouched would mis-order rows
+    mixed with other rules' alerts.
     """
     if value is None:
         return None
     if isinstance(value, datetime):
-        # Treat naive datetimes as MT broker time (UTC+3).
+        # Naive = MT wall clock, stored at the fixed +03:00 convention (see docstring).
         dt = value if value.tzinfo else (value - timedelta(hours=3)).replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     s = str(value)
@@ -471,7 +475,7 @@ def detect_gap_trade_so(
             c_sid, c_login = _split_login_sid(r.get("C_loginSid"))
 
             # IP overlap — only the **open date** is checked, deliberately.
-            # Rationale: gap-trade cron fires HKT 07:20 (= MT 02:20) right
+            # Rationale: gap-trade cron fires MT 02:20 (HKT 07:20 summer / 08:20 winter) right
             # after today's MT 00-02 window closes. login_ip downloads each
             # day's file at HKT 05:10 NEXT day, so today MT's IP file isn't
             # available yet. Open dates are always in the past (open <=

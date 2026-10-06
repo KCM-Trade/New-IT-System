@@ -225,8 +225,9 @@ Which tool:
   band. When the user says "biggest gap-trade accounts" without naming a band, do NOT ask — call twice
   and show two lists: rule_ids=[71,72,73,74,75,76,77,78,79,80] (SO+AB pairs, net_usd) and
   rule_ids=[81,82,83,84,85,86,87,88,89,90] (excess profit), each group_by="account", sort="metric".
-  gap-trade alerts are scanned the NEXT day (05:20 HKT) for the previous MT day — for "this week" on a
-  Monday, extend the range back to cover last week's trading days and say so.
+  gap-trade alerts come from one scan per MT trading day (Mon-Sat at MT 02:20,
+  i.e. HKT 07:20 summer / 08:20 winter) over that SAME MT day's 00:00-02:00 window, so a day's gap alerts exist only after MT 02:20 —
+  for "this week" early on a Monday, extend the range back to cover last week's trading days and say so.
 - "Do these alerts' / this account's orders look like X" → get_alert_orders(alert_ids ≤ 3), using ids
   from rows[].sample_alert_ids or alert rows.
 - "Group by client and analyse the trading style" → get_risk_alerts(group_by="client") → take the top

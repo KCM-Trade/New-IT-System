@@ -448,8 +448,10 @@ def test_prompt_rule_one_allows_documented_skill_figures_only_when_marked():
 
 
 def test_gap_trade_scan_sentence_is_still_in_the_prompt_risk_block():
-    # Owned by OPT-0072; OPT-0069 must not move or drop it.
-    assert "gap-trade alerts are scanned the NEXT day" in RISK_CONTROL_BLOCK
+    # Owned by OPT-0072 (MT-clock scan time); OPT-0069 must not move or drop it.
+    flat = _flat(RISK_CONTROL_BLOCK)
+    assert "gap-trade alerts come from one scan per MT trading day" in flat
+    assert "MT 02:20" in flat
 
 
 # ── CEN caveat (2026-09-30 data check) ───────────────────────────────────────

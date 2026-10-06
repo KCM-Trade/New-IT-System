@@ -377,18 +377,18 @@ def test_empty_mail_to_skips_email_but_keeps_outbox(tag_db, monkeypatch):
     assert sent == []
 
 
-# ── Intraday window guard ────────────────────────────────────
+# ── Intraday window guard (MT clock since OPT-0072) ──────────
 
 @pytest.mark.parametrize("h,m,expected", [
-    (5, 54, False),
-    (5, 55, True),
-    (6, 30, True),
-    (7, 0, True),
-    (7, 5, True),
-    (7, 6, False),
+    (0, 54, False),
+    (0, 55, True),
+    (1, 30, True),
+    (2, 0, True),
+    (2, 5, True),
+    (2, 6, False),
     (12, 0, False),
     (0, 0, False),
 ])
 def test_intraday_window_guard_boundaries(h, m, expected):
-    from app.core.burst_open_scheduler import _in_intraday_window_hkt
-    assert _in_intraday_window_hkt(h, m) is expected
+    from app.core.burst_open_scheduler import _in_intraday_window_mt
+    assert _in_intraday_window_mt(h, m) is expected
