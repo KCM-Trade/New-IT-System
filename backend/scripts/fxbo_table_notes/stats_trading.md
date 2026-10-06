@@ -1,3 +1,3 @@
 - 一行=(date, loginSid)；totalPlClosed=当日 SUM(PROFIT+SWAPS+COMMISSION)（净已实现），totalProfit 仅 PROFIT
-- currency='CEN' ÷100；per-user 日期范围最优索引 (userId,date)
+- ⚠ 单位：CEN 账户的金额与手数**已经是美元/标准手**（CRM 建表时已 ÷100），**不要再 ÷100**——再除一次少算 100 倍（2026-10-06 与 mt4_trades 逐账户对账；例外组与实测见 backend/app/services/stats_trading_units.py）。这与 mt4_trades / mt4_users / stats_balances / stats_transactions（原始美分，必须 ÷100）相反；per-user 日期范围最优索引 (userId,date)
 - Client Return Rate Phase 1 快路径数据源

@@ -151,9 +151,13 @@ async def rank_accounts(
         "rows_fetched": fetched,
         "rows_masked_by_scope": masked,
     }
+    table = ras.source_table(metric)
     caveats = [
         f"Only accounts with at least {min_orders_v} closed orders in the window are ranked (min_orders).",
         "win_rate = closed orders with PROFIT > 0 / closed orders; swap and commission are NOT part of the win test.",
+        "profit_factor = sum of PROFIT over winning orders / |sum of PROFIT over losing orders| (swap and commission "
+        "excluded, like the win test). It is null for an account with no losing order, and such accounts are left "
+        "out of a profit_factor ranking — say so if the user asks who never lost.",
         "net_profit = sum of totalProfit (PROFIT + COMMISSION + SWAPS) in USD; cent accounts and cent products "
         "(.cent / .kcmc) are already divided by 100 — XAUUSD.c is NOT a cent product.",
         "Lots are standard lots after the same cent conversion (lots /100 only for cent SYMBOLS).",
@@ -162,6 +166,13 @@ async def rank_accounts(
         f"Ties are broken by more orders first, then by login_sid. Group rankings are limited to {ras.MAX_RANGE_DAYS} days.",
         ras.RETURN_PCT_CAVEAT,
     ]
+    if table == "stats_trading":
+        caveats.append(
+            "This ranking is read from the CRM's daily per-account pre-aggregate (stats_trading), which has no win "
+            "COUNT: wins and win_rate are null on every row. That means unknown, not zero — call rank_accounts with "
+            "metric='win_rate' (prefer <= 31 days) if win rates are needed. On cent accounts profit_factor can differ "
+            "from an order-level calculation in the third significant digit (the table stores daily sums rounded to cents)."
+        )
     if masked:
         caveats.append(
             f"{masked} account(s) in the fetched ranking are outside the caller's data scope and were removed BEFORE "
@@ -174,7 +185,7 @@ async def rank_accounts(
         )
     definition = {
         "summary": f"Live trading accounts ranked by {metric} ({order}) over the MT-day window, "
-        f"{min_orders_v}+ closed orders each; SQL aggregation over mt4_trades with the certified account universe "
+        f"{min_orders_v}+ closed orders each; SQL aggregation over {table} with the certified account universe "
         "and cent rules.",
         "caveats": caveats,
         "doc": "docs/ai-agent/02-contracts.md §11; app/services/trade_activity_service.py (shared universe / cent rule)",
@@ -182,6 +193,7 @@ async def rank_accounts(
     source = {
         "service": "app.services.rank_accounts_service",
         "function": "rank",
+        "table": table,
         "as_of": utc_now_iso(),
     }
     return ok_envelope(data, definition=definition, source=source, ctx=ctx, truncated=False)

@@ -1,2 +1,2 @@
 - 一行/loginSid，原币种累计；查历史总交易盈亏首选（免扫 stats_trading 全日表）
-- 用法：SUM(IF(currency='CEN', plClosedHavingActivityRunningTotal/100, plClosedHavingActivityRunningTotal)) GROUP BY userId
+- 用法：SUM(plClosedHavingActivityRunningTotal) GROUP BY userId —— ⚠ CEN 账户**已经是美元，不要 ÷100**（2026-10-06 更正：此前这里写「CEN ÷100」是错的，300 个抽样 CEN 账户中 298 个 = mt4_trades 累计 ÷100；见 backend/app/services/stats_trading_units.py）
