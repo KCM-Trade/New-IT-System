@@ -57,7 +57,10 @@ DEFAULT_MIN_ORDERS = 20
 MAX_FETCH_ROWS = 500
 
 # Same statement budget as the per-client activity query (db-timeout-guard).
-STATEMENT_BUDGET_MS = 15_000
+# 30s since 2026-10-06 (was 15s): this scan costs ~1.35s per closeDate day, so
+# 15s could not finish even a 14-day window (measured 19s).
+STATEMENT_BUDGET_MS = 30_000
+READ_TIMEOUT_S = STATEMENT_BUDGET_MS // 1000 + 10
 
 RETURN_PCT_CAVEAT = (
     "return_pct is null on every row: opening equity is not recorded historically "
@@ -172,8 +175,8 @@ def normalise_row(raw: dict, metric: str) -> dict:
 
 def _default_connect(settings: Settings):
     """The replica connection this service uses unless a test injects one.
-    Carries the db-timeout-guard three timeouts (15s statement budget)."""
-    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS)
+    Carries the db-timeout-guard three timeouts (30s statement budget)."""
+    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS, read_timeout=READ_TIMEOUT_S)
 
 
 def rank(

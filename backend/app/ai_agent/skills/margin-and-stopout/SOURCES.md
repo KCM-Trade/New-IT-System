@@ -33,7 +33,7 @@ File:line references below point at the pre-port tree and may have drifted.
 | MT5 CMD inversion affects CLOSED rows only (open rows are position side) | prompt.py:76, :120; docs/analysis/mt-night-window-abook-simulation.md:45 ("未平仓行正常") |
 | Cent symbol lots ÷100 | open_positions_rank_service.py:54–55; prompt.py:77 |
 | Demo filter GROUP NOT LIKE '%demo%'; employees COALESCE(isEmployee,0)=0 | prompt.py:159–161 |
-| 15 s statement budget | prompt.py:171 |
+| 30 s statement budget | prompt.py:171 |
 
 ## Unsourced / needs business confirmation
 - TODO(business): MC and SO levels per MT4 / MT5 group. Searched docs/, .cursor/skills/, backend/app — nothing found. The skill tells the model never to state one.

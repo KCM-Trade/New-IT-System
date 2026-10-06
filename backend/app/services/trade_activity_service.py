@@ -259,14 +259,16 @@ def summarise_open(open_rows: list[dict]) -> dict:
     }
 
 
-# 15s: the aggregation over a full year of a high-frequency account is the
-# heaviest read any AI tool makes; still strictly below the 20s read_timeout.
-STATEMENT_BUDGET_MS = 15_000
+# 30s (15s before 2026-10-06): the aggregation over a full year of a
+# high-frequency account is the heaviest per-client read any AI tool makes;
+# strictly below the read_timeout derived from it.
+STATEMENT_BUDGET_MS = 30_000
+READ_TIMEOUT_S = STATEMENT_BUDGET_MS // 1000 + 10
 
 
 def _default_connect(settings: Settings):
     """The replica connection this service uses unless a test injects one."""
-    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS)
+    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS, read_timeout=READ_TIMEOUT_S)
 
 
 def by_subject(
@@ -280,7 +282,7 @@ def by_subject(
 ) -> dict:
     """Full result for one client: closed-order aggregates over the MT-day
     window + open-position snapshot. ``connect`` is injectable for tests, but
-    its DEFAULT carries the db-timeout-guard three timeouts (15s statement
+    its DEFAULT carries the db-timeout-guard three timeouts (30s statement
     budget) so a new caller cannot bypass them by simply not passing one."""
     conn = connect(settings)
     try:
