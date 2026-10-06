@@ -301,7 +301,10 @@ def burst_open_latest():
             detail="No scan result available yet. Scanner may still be initializing.",
         )
     burst_alerts = [a for a in result["alerts"] if int(a.get("rule_id", 0)) <= BURST_RULE_MAX_ID]
-    summary = result.get("burst_summary", result["summary"])
+    # `or`, not a .get() default: the scheduler stores burst_summary=None until
+    # the first fast_burst tick after a restart, and a present-but-None key
+    # skips the default.
+    summary = result.get("burst_summary") or result["summary"]
     return BurstOpenScanResult(
         alerts=[BurstOpenAlert(**a) for a in burst_alerts],
         summary=BurstOpenSummary(**summary),
@@ -522,7 +525,7 @@ def burst_open_scan_now(audit: Auditor = Depends(get_auditor)):
                 detail="Scan returned no result.",
             )
         burst_alerts = [a for a in result["alerts"] if int(a.get("rule_id", 0)) <= BURST_RULE_MAX_ID]
-        summary = result.get("burst_summary", result["summary"])
+        summary = result.get("burst_summary") or result["summary"]
         response = BurstOpenScanResult(
             alerts=[BurstOpenAlert(**a) for a in burst_alerts],
             summary=BurstOpenSummary(**summary),
