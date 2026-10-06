@@ -44,7 +44,8 @@ MAX_TOP_N = 50
 # account rows. Above this the result is flagged truncated, never silently cut.
 MAX_FETCH_ROWS = 20_000
 
-STATEMENT_BUDGET_MS = 15_000
+STATEMENT_BUDGET_MS = 30_000
+READ_TIMEOUT_S = STATEMENT_BUDGET_MS // 1000 + 10
 
 # A symbol is a short token; anything else is refused before it reaches SQL
 # (it is parameterised anyway — this keeps LIKE wildcards out of the token).
@@ -214,7 +215,7 @@ def book_totals(rows: Iterable[dict]) -> dict:
 
 
 def _default_connect(settings: Settings):
-    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS)
+    return connect_readonly(settings, max_execution_ms=STATEMENT_BUDGET_MS, read_timeout=READ_TIMEOUT_S)
 
 
 def fetch_open(

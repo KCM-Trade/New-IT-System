@@ -32,6 +32,6 @@ There is **no client id** on this table — join through `mt4_users`.
   MT5 will not be found here.
 - An open-positions query without `sid IN (1,5,6)` picks up thousands of dead sid 4 rows.
 - Adding an `openDate` range to an open-positions question drops every position opened earlier.
-- `OR` between date conditions disables the index; self-joins do not finish in 15 s.
+- `OR` between date conditions disables the index; self-joins do not finish in 30 s.
 - Cent: money ÷100 when the account is CEN or the symbol ends in `.cent`/`.kcmc`; lots ÷100 only for
   those symbols (in the live data CEN accounts trade only those symbols). `XAUUSD.c` is not cent.

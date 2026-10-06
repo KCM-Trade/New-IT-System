@@ -163,7 +163,7 @@ mt4_trades (~48M rows — ALWAYS filter on closeDate / openDate (indexed dates) 
   openDate, closeDate (MT server days, indexed), OPEN_PRICE, CLOSE_PRICE, SL, TP, PROFIT, SWAPS, COMMISSION,
   totalProfit (= PROFIT + SWAPS + COMMISSION for CMD 0/1/6; on an open order = its floating P/L), isDeleted.
   OPEN (still-held) orders: `closeDate = '1970-01-01'` — indexed, ~50k rows, sub-second. Never find open
-  orders with CLOSE_TIME (not indexed: a full scan that hits the 15s limit — the guard refuses it), and never
+  orders with CLOSE_TIME (not indexed: a full scan that hits the 30s limit — the guard refuses it), and never
   add an openDate range to an open-positions question (it drops every position opened before the range).
   Current open positions / exposure by symbol are what rank_open_positions answers (certified) — use it
   instead of SQL.
@@ -180,7 +180,7 @@ stats_ib_commissions (daily rebate per IB per referred client): date, ibId, refI
   currency, commission, lots (repeated per IB level — never sum it as volume).
 user_tags: userId, tagId, createdAt. tags: id, tag, categoryId.
 
-Cost: the replica is shared and each statement stops at 15s. Self-joins of mt4_trades (pairing orders
+Cost: the replica is shared and each statement stops at 30s. Self-joins of mt4_trades (pairing orders
 across accounts or clients) will not finish — cross-client trading-STYLE detection (hedging, martingale,
 burst orders, gap trading, quick profit) is what the Risk Monitor detectors compute; that is a Risk control
 question (see the top of these instructions), not a run_sql one.
@@ -312,7 +312,7 @@ TOOL_DOCSTRINGS = {
         "UNCERTIFIED escape hatch: run ONE read-only SELECT (or UNION of SELECTs) when no certified tool can "
         "answer. db: 'fxbackoffice' (MySQL replica; tables mt4_trades, mt4_users, users, transactions, "
         "stats_ib_commissions, user_tags, tags) or 'risk_cases' (PostgreSQL; schemas public, kcm). limit <= 200 "
-        "rows, cells cut at 500 chars, 15s statement budget. Returns columns/rows plus the SQL echoed back; "
+        "rows, cells cut at 500 chars, 30s statement budget. Returns columns/rows plus the SQL echoed back; "
         "source.certified is false and definition.caveats lists the 口径 the SQL did NOT apply (CEN x100, "
         "demo/employee not excluded, sid=5 CMD inverted, MT day boundary). Any DML/DDL, multi-statement, "
         "SLEEP/BENCHMARK/LOAD_FILE, FOR UPDATE, INTO OUTFILE or non-whitelisted table -> invalid_argument."

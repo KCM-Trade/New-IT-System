@@ -10,7 +10,7 @@ Seven gates (02 §10.1), every one hard:
 
   ① read-only ACCOUNTS — MySQL: the shared ``readonly`` replica account
      through ``core.mysql_readonly.connect_readonly`` (connect 5s /
-     MAX_EXECUTION_TIME 15s / read 20s); PG: the ``ai_agent_ro`` role
+     MAX_EXECUTION_TIME 30s / read 40s); PG: the ``ai_agent_ro`` role
      (SELECT-only, ``default_transaction_read_only``) plus ``statement_timeout``.
   ② ONE statement whose root is SELECT / UNION (sqlglot AST, dialect-aware);
      any DML / DDL / admin node ANYWHERE in the tree (``WITH d AS (DELETE …)``)
@@ -102,13 +102,17 @@ MAX_SQL_CHARS = 4000
 # Statement budget on both engines (02 §10.1 ③). connect_readonly enforces
 # "strictly below read_timeout" for MySQL; PG gets the same number via SET.
 #
-# Kept at 15s on purpose (2026-09-28: a 30s bump was tried and reverted). The
-# fxbackoffice replica is shared; a long scan there churns the buffer pool and
-# queues behind MDL (the 08-09 / 08-15 incident shape, db-timeout-guard skill),
-# so this is the one agent limit whose cost lands outside this app. The client
-# read_timeout is set explicitly from it — connect_readonly refuses a statement
-# budget that is not strictly under its client-side read timeout.
-STATEMENT_TIMEOUT_MS = 15_000
+# 30s since 2026-10-06 (user decision; 15s before — a 30s bump was tried and
+# reverted on 2026-09-28). Measured that day: the whole-universe ranking over
+# mt4_trades costs ~1.35s per closeDate day (14 days 19s, 30 days 40s), so 15s
+# failed even the 14-day window the prompt recommends. The fxbackoffice replica
+# is shared; a long scan there churns the buffer pool and queues behind MDL
+# (the 08-09 / 08-15 incident shape, db-timeout-guard skill), so this is the
+# one agent limit whose cost lands outside this app — do not raise it again to
+# make a 30-day scan fit; that needs a pre-aggregate, not a longer budget. The
+# client read_timeout is set explicitly from it — connect_readonly refuses a
+# statement budget that is not strictly under its client-side read timeout.
+STATEMENT_TIMEOUT_MS = 30_000
 MYSQL_READ_TIMEOUT_S = STATEMENT_TIMEOUT_MS // 1000 + 10
 
 # ⑤ whitelists. MySQL: exactly these tables, all in fxbackoffice (an
@@ -497,13 +501,13 @@ def validate_sql(sql: Any, db: Any) -> Optional[dict]:
 
 # The open-order sentinel on mt4_trades is `closeDate = '1970-01-01'` (indexed).
 # `CLOSE_TIME = '1970-01-01…'` means the same thing but is not indexed: a full
-# scan of ~48M rows that always dies on the 15s limit (2026-09-29, twice in one
+# scan of ~48M rows that always dies on the statement limit (2026-09-29, twice in one
 # turn, "who holds the most XAUUSD"). Refusing it is exact — it is never the
 # right way to write the query — and the message tells the model the fix.
 _TIME_COLUMNS = frozenset({"close_time", "open_time"})
 OPEN_SENTINEL_HINT = (
     "open (still-held) orders are `closeDate = '1970-01-01'` (indexed, sub-second); "
-    "CLOSE_TIME / OPEN_TIME are not indexed and this scan cannot finish in 15s. "
+    "CLOSE_TIME / OPEN_TIME are not indexed and this scan cannot finish within the statement limit. "
     "Do not add an openDate range to an open-positions question. "
     "For current exposure by symbol use the certified rank_open_positions tool instead of SQL"
 )

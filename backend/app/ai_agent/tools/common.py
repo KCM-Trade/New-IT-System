@@ -70,12 +70,17 @@ DAY_BASIS = "MT server day (DST-aware, UTC+3 summer / UTC+2 winter, US DST calen
 # budget: the trade-activity aggregation legitimately needs more than the 5s a
 # point lookup gets. Same three defences, different number — which is exactly
 # why the helper takes the number as a parameter instead of being copied.
-_MAX_EXECUTION_TIME_MS = 15_000
+# 30s since 2026-10-06 (was 15s), same number as run_sql.STATEMENT_TIMEOUT_MS —
+# see the note there for the measurement and why it should not go higher.
+_MAX_EXECUTION_TIME_MS = 30_000
+_READ_TIMEOUT_S = _MAX_EXECUTION_TIME_MS // 1000 + 10
 
 
 def connect_mysql(settings: Optional[Settings] = None) -> pymysql.connections.Connection:
     """Read-only replica connection with connect/read/statement timeouts."""
-    return connect_readonly(settings or get_settings(), max_execution_ms=_MAX_EXECUTION_TIME_MS)
+    return connect_readonly(
+        settings or get_settings(), max_execution_ms=_MAX_EXECUTION_TIME_MS, read_timeout=_READ_TIMEOUT_S
+    )
 
 
 # ── caller context ───────────────────────────────────────────────────────────
@@ -173,7 +178,7 @@ def mysql_timeout_envelope(exc: BaseException, ctx: CallerCtx) -> Optional[dict]
         if code in MYSQL_TIMEOUT_CODES:
             return error_envelope(
                 "upstream_timeout",
-                "The database stopped the query at its 15s limit. Narrow the window/filters and retry once.",
+                f"The database stopped the query at its {_MAX_EXECUTION_TIME_MS // 1000}s limit. Narrow the window/filters and retry once.",
                 {"trace_id": ctx.trace_id, "mysql_errno": code},
             )
     return None

@@ -1,6 +1,6 @@
 ---
 name: fxbackoffice-schema
-description: Writing run_sql against fxbackoffice (MySQL) — tables mt4_trades, mt4_users, users, transactions, stats_ib_commissions, user_tags, tags; join path, indexes, 15s cost rules, open-position sentinel, cent/demo/employee filters, ready SQL for 單邊多單/單邊空單 gold holders, margin level (保證金水平/快被SO), per-account closed trades, rebate by IB. Use before any run_sql on fxbackoffice.
+description: Writing run_sql against fxbackoffice (MySQL) — tables mt4_trades, mt4_users, users, transactions, stats_ib_commissions, user_tags, tags; join path, indexes, 30s cost rules, open-position sentinel, cent/demo/employee filters, ready SQL for 單邊多單/單邊空單 gold holders, margin level (保證金水平/快被SO), per-account closed trades, rebate by IB. Use before any run_sql on fxbackoffice.
 ---
 
 # fxbackoffice schema for run_sql
@@ -34,7 +34,7 @@ Column lists: `references/mt4_trades.md`, `references/mt4_users.md`, `references
 `references/transactions.md`, `references/stats_ib_commissions.md`, `references/tags.md`.
 Use only the columns listed there (they match the system-prompt schema card).
 
-## Cost rules (15 s per statement, shared replica)
+## Cost rules (30 s per statement, shared replica)
 - `mt4_trades` is ~48M rows. Every query on it MUST filter on an indexed column:
   `closeDate`, `openDate` or `loginSid` (indexes: `closeDate`; `openDate`; `loginSid`;
   `(loginSid, closeDate)`; `(SYMBOL, sid, closeDate)`).

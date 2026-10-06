@@ -418,7 +418,7 @@ PINNED_BEFORE_OPT_0069 = (
     "legacy net deposit (incl. IB withdrawal)",
     "net_gain question, not a net-deposit question",
     "NET lots",
-    "15s",
+    "30s",
     "The rebate-arbitrage band (121-130) is retired",
     *ALL_RISK_TABS,
     *FORBIDDEN_WORDS,

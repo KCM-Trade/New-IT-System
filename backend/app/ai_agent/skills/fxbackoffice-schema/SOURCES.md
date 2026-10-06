@@ -61,7 +61,7 @@ never for data-scope-restricted callers — run_sql.py:43-45). The harness shoul
 |---|---|
 | Universe filter block | Proven: same predicates as `open_positions_rank_service._OPEN_SQL` + `_ACCOUNT_FILTER_SQL` (prod, 2026-09-29), minus the NAME predicate; plus QN's sid-1 '7%' and `.demo` symbol lines (QN measured 2026-07-20). |
 | P1 one-sided gold + margin level | **Verify with EXPLAIN before trusting.** Built from the proven open-positions SQL (same driving index `closeDate`), adds `mu.MARGIN_LEVEL` and a HAVING. Not run in repo. HAVING on SELECT aliases is valid MySQL; confirm the run_sql guard (sqlglot) accepts it. |
-| P2 low margin level | **Verify with EXPLAIN before trusting.** No index on MARGIN_LEVEL → full scan of mt4_users (~192K rows); expected well under 15 s but unmeasured. |
+| P2 low margin level | **Verify with EXPLAIN before trusting.** No index on MARGIN_LEVEL → full scan of mt4_users (~192K rows); expected well under 30 s but unmeasured. |
 | P3 one account closed orders | Proven shape: `trade_activity_service._CLOSED_SQL` (loginSid + closeDate BETWEEN). Uses index `(loginSid, closeDate)`. |
 | P4 IB rebate per referred client | **Verify with EXPLAIN before trusting.** Uses `IDX_REF(ibId,date,currency)`; not run in repo. |
 | P5 CRM tags | **Verify with EXPLAIN before trusting.** Trivial indexed lookup; not run in repo. |
