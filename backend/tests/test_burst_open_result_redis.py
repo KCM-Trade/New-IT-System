@@ -340,6 +340,21 @@ def test_route_serves_redis_mirror_when_memory_empty(monkeypatch, client):
     assert len(body["alerts"]) == 1
 
 
+def test_route_200_when_burst_summary_is_null(monkeypatch, client):
+    """After a restart the first tick can be the slow tier, which stores
+    `burst_summary: None` (no burst scan has run yet). The key is present, so
+    a `.get(key, default)` fallback never fires — the route must treat None
+    like a missing key and fall back to the overall summary, not 500."""
+    snapshot = {**RESULT, "burst_summary": None, "tier": "slow"}
+    fake = FakeRedis({bs.LATEST_RESULT_REDIS_KEY: json.dumps(snapshot)})
+    monkeypatch.setattr(bs, "_get_result_redis", lambda: fake)
+
+    res = client.get("/api/v1/risk-monitor/burst-open")
+
+    assert res.status_code == 200
+    assert res.json()["summary"] == RESULT["summary"]
+
+
 def test_route_503_when_memory_and_redis_empty(monkeypatch, client):
     monkeypatch.setattr(bs, "_get_result_redis", lambda: None)
     res = client.get("/api/v1/risk-monitor/burst-open")
