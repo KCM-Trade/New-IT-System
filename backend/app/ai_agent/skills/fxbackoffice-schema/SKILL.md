@@ -41,6 +41,12 @@ Use only the columns listed there (they match the system-prompt schema card).
 - **Open positions = `closeDate = '1970-01-01'`** (indexed, ~50k rows, sub-second). Never use
   `CLOSE_TIME` / `OPEN_TIME` for this (not indexed; the guard refuses it). Never add an `openDate`
   range to an open-positions question (it drops everything opened earlier).
+- **Whole-universe aggregates: aggregate first, join after.** Put the `mt4_trades` scan and its
+  `GROUP BY loginSid` in a subquery with NO joins, then join `mt4_users` / `users` to that result
+  (a few thousand rows) for the demo/employee/CEN filters. Joining per order is twice as slow.
+  When money is summed, also group the subquery by the cent-symbol flag so the /100 can be applied
+  outside. About one month of `closeDate` fits in the budget; longer windows: split by month or say
+  it does not fit. Prefer `rank_accounts` when its metrics are enough.
 - No `OR` across date conditions (breaks the index). No self-joins of `mt4_trades` (pairing orders
   across accounts will not finish) — cross-account trading-style detection is a Risk Monitor question.
 - `*_TIME` columns are MT server wall clock and not indexed: filter by `closeDate`/`openDate`

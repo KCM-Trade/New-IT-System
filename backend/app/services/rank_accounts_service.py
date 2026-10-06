@@ -1,8 +1,8 @@
 """Group-level account ranking for the AI analyst agent (OPT-0065 item 4).
 
 Answers "which accounts had the highest win rate last week" and its
-siblings: one SQL aggregation over ``mt4_trades`` grouped by account, ordered
-by the requested metric. The 口径 is the SAME universe and the SAME cent rule
+siblings: one SQL aggregation over ``mt4_trades`` grouped by account (aggregated
+before the account/client join — see ``_RANK_SQL``), ordered by the requested metric. The 口径 is the SAME universe and the SAME cent rule
 as ``trade_activity_service`` (which pulls rows for one client); nothing here
 is invented:
 
@@ -57,8 +57,8 @@ DEFAULT_MIN_ORDERS = 20
 MAX_FETCH_ROWS = 500
 
 # Same statement budget as the per-client activity query (db-timeout-guard).
-# 30s since 2026-10-06 (was 15s): this scan costs ~1.35s per closeDate day, so
-# 15s could not finish even a 14-day window (measured 19s).
+# 30s since 2026-10-06 (was 15s). With the aggregate-first statement below the
+# scan costs ~0.75s per closeDate day, so about a month fits; 92 days does not.
 STATEMENT_BUDGET_MS = 30_000
 READ_TIMEOUT_S = STATEMENT_BUDGET_MS // 1000 + 10
 
@@ -71,8 +71,9 @@ RETURN_PCT_CAVEAT = (
 # SQL fragments. `%%` because every query here runs with parameters, so a
 # literal percent must be escaped for the driver (same as _ACCOUNT_FILTER_SQL).
 _CENT_SYMBOL_SQL = "(LOWER(t.SYMBOL) LIKE '%%.cent' OR LOWER(t.SYMBOL) LIKE '%%.kcmc')"
-_MONEY_DIV_SQL = f"IF(UPPER(mu.CURRENCY) = 'CEN' OR {_CENT_SYMBOL_SQL}, 100, 1)"
-_LOTS_DIV_SQL = f"IF({_CENT_SYMBOL_SQL}, 100, 1)"
+# Outer-level divisors: `a.cent_sym` is the inner query's per-group cent-symbol flag.
+_MONEY_DIV_SQL = "IF(UPPER(mu.CURRENCY) = 'CEN' OR a.cent_sym, 100, 1)"
+_LOTS_DIV_SQL = "IF(a.cent_sym, 100, 1)"
 
 # ORDER BY expression per metric — column ALIASES from the SELECT list, which
 # MySQL allows in ORDER BY (and in HAVING) but not in WHERE.
@@ -83,25 +84,50 @@ _ORDER_EXPR = {
     "orders": "orders",
 }
 
+# Aggregate FIRST, join AFTER (2026-10-06). The inner query touches mt4_trades
+# only and collapses the window to one row per (account, cent-symbol flag) — a
+# few thousand rows — and only those are joined to mt4_users / users. Joining
+# before aggregating did two eq_ref lookups for every one of ~70k orders a day
+# and took twice as long for the same answer (measured on the replica: 14 days
+# 19.6s -> 10.6s, 30 days 40.2s -> 21.5s; top 150 rows identical). The cent
+# flag is part of the inner GROUP BY because the divisor depends on the SYMBOL
+# of each order, so sums must be kept apart until the division. Dividing the
+# SUM once instead of every order also drops the per-row rounding: against the
+# old statement 4 of 1,500 compared rows moved by 0.01 in gross_profit (all
+# cent accounts), nothing else changed. What is left
+# (~0.75s per closeDate day) is the clustered-index lookup per order: the
+# closeDate index is not covering. Only a covering index or a per-day
+# pre-aggregate removes that; rewriting this statement further will not.
 _RANK_SQL = f"""
-    SELECT t.loginSid AS login_sid, t.sid AS sid, mu.userId AS client_id, u.cid AS cid,
+    SELECT a.loginSid AS login_sid, a.sid AS sid, mu.userId AS client_id, u.cid AS cid,
            (UPPER(mu.CURRENCY) = 'CEN') AS cent_account,
-           MAX({_CENT_SYMBOL_SQL}) AS cent_symbol,
-           COUNT(*) AS orders,
-           SUM(t.PROFIT > 0) AS wins,
-           SUM(t.PROFIT > 0) / COUNT(*) AS win_rate,
-           SUM(t.lots / {_LOTS_DIV_SQL}) AS lots,
-           SUM(t.totalProfit / {_MONEY_DIV_SQL}) AS net_profit,
-           SUM(t.PROFIT / {_MONEY_DIV_SQL}) AS gross_profit
-    FROM fxbackoffice.mt4_trades t
-    JOIN fxbackoffice.mt4_users mu ON mu.loginSid = t.loginSid
+           MAX(a.cent_sym) AS cent_symbol,
+           SUM(a.n_orders) AS orders,
+           SUM(a.n_wins) AS wins,
+           SUM(a.n_wins) / SUM(a.n_orders) AS win_rate,
+           SUM(a.sum_lots / {_LOTS_DIV_SQL}) AS lots,
+           SUM(a.sum_total_profit / {_MONEY_DIV_SQL}) AS net_profit,
+           SUM(a.sum_profit / {_MONEY_DIV_SQL}) AS gross_profit
+    FROM (
+        SELECT t.loginSid AS loginSid, t.sid AS sid,
+               {_CENT_SYMBOL_SQL} AS cent_sym,
+               COUNT(*) AS n_orders,
+               SUM(t.PROFIT > 0) AS n_wins,
+               SUM(t.lots) AS sum_lots,
+               SUM(t.totalProfit) AS sum_total_profit,
+               SUM(t.PROFIT) AS sum_profit
+        FROM fxbackoffice.mt4_trades t
+        WHERE t.closeDate BETWEEN %s AND %s
+          AND t.sid IN ({{sids}})
+          AND t.CMD IN (0, 1)
+          AND (t.isDeleted = 0 OR t.isDeleted IS NULL)
+        GROUP BY t.loginSid, t.sid, cent_sym
+    ) a
+    JOIN fxbackoffice.mt4_users mu ON mu.loginSid = a.loginSid
     JOIN fxbackoffice.users u ON u.id = mu.userId AND COALESCE(u.isEmployee, 0) = 0
-    WHERE t.closeDate BETWEEN %s AND %s
-      AND t.sid IN ({{sids}})
-      AND t.CMD IN (0, 1)
-      AND (t.isDeleted = 0 OR t.isDeleted IS NULL)
+    WHERE 1 = 1
 """ + _ACCOUNT_FILTER_SQL + """
-    GROUP BY t.loginSid, t.sid, mu.userId, u.cid, cent_account
+    GROUP BY a.loginSid, a.sid, mu.userId, u.cid, cent_account
     HAVING orders >= %s
     ORDER BY {order_expr} {direction}, orders DESC, login_sid
     LIMIT %s

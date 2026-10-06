@@ -101,7 +101,7 @@ If asked to do any of those, say so plainly in one sentence.
   rank_accounts. It ranks live ACCOUNTS (login_sid), not clients; say so. Keep min_orders at 20 unless the
   user explicitly asks for a lower bar (never go below 5 on your own; if they insist, pass
   allow_low_min_orders=true and say the bar). The scan covers every live account, so prefer windows of
-  14 days or less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
+  31 days or less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
   return_pct cannot be ranked (no certified opening equity) — offer net_profit instead.
 - For CURRENT open positions / exposure across clients ("who holds the most XAUUSD right now", "biggest
   net gold exposure", "which open positions should we hedge / A-book"): rank_open_positions. It is a
@@ -180,7 +180,9 @@ stats_ib_commissions (daily rebate per IB per referred client): date, ibId, refI
   currency, commission, lots (repeated per IB level — never sum it as volume).
 user_tags: userId, tagId, createdAt. tags: id, tag, categoryId.
 
-Cost: the replica is shared and each statement stops at 30s. Self-joins of mt4_trades (pairing orders
+Cost: the replica is shared and each statement stops at 30s. Whole-universe
+aggregates over mt4_trades: GROUP BY inside a subquery on mt4_trades ALONE, then join mt4_users / users to
+that result (joining first is twice as slow); about one month of closeDate fits. Self-joins of mt4_trades (pairing orders
 across accounts or clients) will not finish — cross-client trading-STYLE detection (hedging, martingale,
 burst orders, gap trading, quick profit) is what the Risk Monitor detectors compute; that is a Risk control
 question (see the top of these instructions), not a run_sql one.
@@ -283,7 +285,7 @@ TOOL_DOCSTRINGS = {
         "Rank LIVE trading accounts (not clients) by one metric over an MT-day window — e.g. "
         "'top 5 win-rate accounts last week'. metric: 'win_rate' | 'net_profit' | 'lots' | 'orders' "
         "('return_pct' is refused: opening equity is not recorded). date_range {from,to} max 92 days; "
-        "prefer <= 14 days (the scan covers every live account). top_n 1-50 (default 10), min_orders >= 1 "
+        "prefer <= 31 days (the scan covers every live account). top_n 1-50 (default 10), min_orders >= 1 "
         "(default 20; below 5 is refused unless the user explicitly asked — then pass allow_low_min_orders=true), "
         "order 'desc'|'asc', sids subset of [1,5,6] or null. Rows: login_sid, client_id, cid, sid, is_cent, "
         "metric_value, orders, wins, win_rate, lots, net_profit, gross_profit. Cent already /100; demo/employee "

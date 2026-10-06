@@ -63,12 +63,31 @@ def test_sql_carries_the_certified_universe_filters():
         assert needle in sql, needle
 
 
+def test_trades_are_aggregated_before_the_account_join():
+    """Joining mt4_users/users per ORDER doubled the run time (2026-10-06,
+    14 days 19.6s vs 10.6s). The joins must sit outside the mt4_trades scan."""
+    sql = ras.build_rank_sql("net_profit", "desc", (1, 5, 6))
+    inner_start = sql.index("FROM fxbackoffice.mt4_trades t")
+    inner_end = sql.index(") a")
+    first_join = sql.index("JOIN fxbackoffice.mt4_users mu")
+    assert inner_start < inner_end < first_join
+    assert "JOIN" not in sql[inner_start:inner_end]
+    # every universe filter on mt4_trades is inside the scan, not after it
+    for needle in ("t.closeDate BETWEEN %s AND %s", "t.sid IN (%s, %s, %s)", "t.CMD IN (0, 1)"):
+        assert inner_start < sql.index(needle) < inner_end, needle
+
+
 def test_cent_rule_is_applied_in_sql_to_money_and_lots_separately():
     sql = ras.build_rank_sql("net_profit", "desc", (1,))
     # money: CEN account OR cent symbol
-    assert "IF(UPPER(mu.CURRENCY) = 'CEN' OR (LOWER(t.SYMBOL) LIKE '%%.cent' OR LOWER(t.SYMBOL) LIKE '%%.kcmc'), 100, 1)" in sql
+    assert "SUM(a.sum_total_profit / IF(UPPER(mu.CURRENCY) = 'CEN' OR a.cent_sym, 100, 1)) AS net_profit" in sql
+    assert "SUM(a.sum_profit / IF(UPPER(mu.CURRENCY) = 'CEN' OR a.cent_sym, 100, 1)) AS gross_profit" in sql
     # lots: cent SYMBOL only
-    assert "SUM(t.lots / IF((LOWER(t.SYMBOL) LIKE '%%.cent' OR LOWER(t.SYMBOL) LIKE '%%.kcmc'), 100, 1))" in sql
+    assert "SUM(a.sum_lots / IF(a.cent_sym, 100, 1)) AS lots" in sql
+    # the flag both divisors use is the cent-SYMBOL rule, and it is part of the
+    # inner GROUP BY so cent and non-cent orders are never summed together
+    assert "(LOWER(t.SYMBOL) LIKE '%%.cent' OR LOWER(t.SYMBOL) LIKE '%%.kcmc') AS cent_sym" in sql
+    assert "GROUP BY t.loginSid, t.sid, cent_sym" in sql
     # '.c' alone must never match — the pattern requires the full suffix
     assert "LIKE '%%.c'" not in sql
 
