@@ -14,6 +14,7 @@ import pymysql
 
 from app.core.config import get_settings
 from app.schemas.dashboard_pnl import SalesTeamPnlRow
+from app.services.stats_trading_units import daily_money_divisor_by_group_sql
 
 # Sales team (tag name) -> country. Empty or "—" in doc -> "Unknown".
 # Source: docs/features/dashboard-pnl24h-by-country-sql.md §6
@@ -78,6 +79,13 @@ SALES_TEAM_TO_COUNTRY: dict[str, str] = {
 # SQL: today/yesterday closed PnL by sales team (tags.categoryId=6). DB: fxbackoffice.
 # totalPlClosed = PROFIT + SWAPS + COMMISSION. Time scope: MT Server natural day.
 # Excludes employee accounts via users.isEmployee (COALESCE(isEmployee,0)=0).
+# stats_trading is ALREADY in dollars for CEN accounts (the CRM divides by 100
+# when it builds the table — measurements in app/services/stats_trading_units.py).
+# Until 2026-10-06 the PnL leg here divided CEN rows by 100 again, so the cent
+# accounts' share of company PnL was shown 100x too small (2026-10-05: 28,184.66
+# shown, 33,927.33 at order level). The only division left is for the one group
+# the CRM leaves in cents.
+_STATS_MONEY_DIV = daily_money_divisor_by_group_sql("mu.`GROUP`", "st.date")
 SQL_PNL_BY_SALES_TEAM = """
 SELECT
     COALESCE(tt.team_tag, 'Unknown') AS sales_team,
@@ -88,7 +96,7 @@ FROM (
     SELECT
         st.userId,
         st.date AS dt,
-        SUM(IF(st.currency = 'CEN', st.totalPlClosed / 100.0, st.totalPlClosed)) AS pl_usd
+        SUM(st.totalPlClosed / __STATS_MONEY_DIV__) AS pl_usd
     FROM stats_trading st
     INNER JOIN mt4_users mu ON st.loginSid = mu.loginSid AND mu.userId = st.userId
     INNER JOIN users u ON u.id = st.userId AND COALESCE(u.isEmployee, 0) = 0
@@ -107,7 +115,7 @@ LEFT JOIN (
 ) tt ON by_user.userId = tt.userid
 GROUP BY tt.team_tag
 ORDER BY net_pnl_total DESC
-"""
+""".replace("__STATS_MONEY_DIV__", _STATS_MONEY_DIV)
 
 
 # IB commission by sales team (today + yesterday). Grouped by client's (refId) sales team

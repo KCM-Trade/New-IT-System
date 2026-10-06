@@ -19,9 +19,17 @@ import pymysql
 from app.core.config import get_settings
 from app.schemas.dashboard_pnl_history import PnlHistoryRow
 from app.services.dashboard_pnl_service import SALES_TEAM_TO_COUNTRY
+from app.services.stats_trading_units import daily_money_divisor_by_group_sql
 
 # Per-(date, sales_team) profit. Same client/employee/demo filters as the
 # 近两日 widget so the two views stay consistent.
+# stats_trading is ALREADY in dollars for CEN accounts (the CRM divides by 100
+# when it builds the table — measurements in app/services/stats_trading_units.py).
+# Until 2026-10-06 the PnL leg here divided CEN rows by 100 again, so the cent
+# accounts' share of company PnL was shown 100x too small (2026-10-05: 28,184.66
+# shown, 33,927.33 at order level). The only division left is for the one group
+# the CRM leaves in cents.
+_STATS_MONEY_DIV = daily_money_divisor_by_group_sql("mu.`GROUP`", "st.date")
 SQL_PNL_HISTORY = """
 SELECT
     by_user.dt                       AS dt,
@@ -31,7 +39,7 @@ FROM (
     SELECT
         st.userId,
         st.date AS dt,
-        SUM(IF(st.currency = 'CEN', st.totalPlClosed / 100.0, st.totalPlClosed)) AS pl_usd
+        SUM(st.totalPlClosed / __STATS_MONEY_DIV__) AS pl_usd
     FROM stats_trading st
     INNER JOIN mt4_users mu ON st.loginSid = mu.loginSid AND mu.userId = st.userId
     INNER JOIN users     u  ON u.id = st.userId AND COALESCE(u.isEmployee, 0) = 0
@@ -50,7 +58,7 @@ LEFT JOIN (
 ) tt ON by_user.userId = tt.userid
 GROUP BY by_user.dt, tt.team_tag
 ORDER BY by_user.dt, profit_excl_rbt DESC
-"""
+""".replace("__STATS_MONEY_DIV__", _STATS_MONEY_DIV)
 
 # Per-(date, sales_team) IB commission. Sums all IB levels on stats_ib_commissions
 # (refId = client). Aligns with the PnL dimension (sales team of the client).

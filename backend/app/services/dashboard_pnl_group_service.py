@@ -14,8 +14,16 @@ import pymysql
 
 from app.core.config import get_settings
 from app.schemas.dashboard_pnl_group import GroupPnlRow
+from app.services.stats_trading_units import daily_money_divisor_by_group_sql
 
 # PnL grouped by (mt4_users.GROUP, sales_team).
+# stats_trading is ALREADY in dollars for CEN accounts (the CRM divides by 100
+# when it builds the table — measurements in app/services/stats_trading_units.py).
+# Until 2026-10-06 the PnL leg here divided CEN rows by 100 again, so the cent
+# accounts' share of company PnL was shown 100x too small (2026-10-05: 28,184.66
+# shown, 33,927.33 at order level). The only division left is for the one group
+# the CRM leaves in cents.
+_STATS_MONEY_DIV = daily_money_divisor_by_group_sql("mu.`GROUP`", "st.date")
 SQL_PNL_BY_GROUP = """
 SELECT
     by_user.account_group,
@@ -29,7 +37,7 @@ FROM (
         st.userId,
         mu.`GROUP` AS account_group,
         st.date AS dt,
-        SUM(IF(st.currency = 'CEN', st.totalPlClosed / 100.0, st.totalPlClosed)) AS pl_usd
+        SUM(st.totalPlClosed / __STATS_MONEY_DIV__) AS pl_usd
     FROM stats_trading st
     INNER JOIN mt4_users mu ON st.loginSid = mu.loginSid AND mu.userId = st.userId
     INNER JOIN users u ON u.id = st.userId AND COALESCE(u.isEmployee, 0) = 0
@@ -48,7 +56,7 @@ LEFT JOIN (
 ) tt ON by_user.userId = tt.userid
 GROUP BY by_user.account_group, tt.team_tag
 ORDER BY by_user.account_group, net_pnl_today DESC
-"""
+""".replace("__STATS_MONEY_DIV__", _STATS_MONEY_DIV)
 
 # IB commission grouped by (mt4_users.GROUP, sales_team).
 # Uses stats_ib_commissions_by_login_sid (account-level) so we can JOIN mt4_users for GROUP.

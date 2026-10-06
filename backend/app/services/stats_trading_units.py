@@ -49,3 +49,10 @@ def daily_money_divisor_sql(login_expr: str, date_expr: str) -> str:
     """Divisor for one ``stats_trading`` row's money columns: 1, or 100 for the
     rows the CRM left in cents."""
     return f"IF({date_expr} >= '{UNDIVIDED_SINCE}' AND {login_expr} IN {UNDIVIDED_LOGINS_SQL}, 100, 1)"
+
+
+def daily_money_divisor_by_group_sql(group_expr: str, date_expr: str) -> str:
+    """Same divisor for statements that already join ``mt4_users``: test the
+    account's group directly instead of a login subquery."""
+    return f"IF({date_expr} >= '{UNDIVIDED_SINCE}' AND {group_expr} IN ({UNDIVIDED_GROUPS_SQL}), 100, 1)"
+
