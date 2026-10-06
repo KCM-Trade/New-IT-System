@@ -13,7 +13,7 @@ Certified tools first:
 |---|---|
 | Who holds the most of symbol X now (net / gross / floating) | `rank_open_positions` |
 | A client's net deposit, net gain, rebate, balances | `get_client_overview` |
-| Account ranking by win rate / profit / lots over closed orders | `rank_accounts` |
+| Account ranking by win rate / profit / lots / orders / profit factor over closed orders (up to 92 days) | `rank_accounts` |
 | How one client/account trades | `get_trade_activity` |
 SQL is justified for a column or filter those tools do not have — most often **margin level**,
 **"only one side" filters combined with margin level**, or **IB commission rows**.

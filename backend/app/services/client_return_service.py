@@ -67,6 +67,11 @@ from zoneinfo import ZoneInfo
 import pymysql
 
 from app.core.config import get_settings
+from app.services.stats_trading_units import (
+    UNDIVIDED_LOGINS_SQL,
+    UNDIVIDED_SINCE,
+    daily_money_divisor_sql,
+)
 from app.core.logging_config import get_logger
 from app.services.clickhouse_service import clickhouse_service
 
@@ -135,30 +140,38 @@ def _get_mysql_connection():
 #   totalProfit   = SUM(PROFIT) only, without swap/commission
 #   totalSwaps    = SUM(SWAPS)
 #   totalCommission = SUM(COMMISSION)
+#
+# Units (2026-10-06): stats_trading is ALREADY in dollars for CEN accounts — the
+# CRM divides by 100 when it builds the table (app/services/stats_trading_units.py
+# has the measurements). This leg used to divide CEN rows by 100 again, which
+# understated every cent account's period profit 100x on the default (daily)
+# path while the mt4_trades fallback below — raw cents, one division — was
+# right. The only division left is for the one group the CRM leaves in cents.
 # ---------------------------------------------------------------------------
+_STATS_MONEY_DIV = daily_money_divisor_sql("st.loginSid", "st.date")
 SQL_PHASE1_STATS = """
 SELECT
     st.userId AS client_id,
-    SUM(IF(st.currency = 'CEN', st.totalPlClosed / 100.0, st.totalPlClosed)) AS month_trade_profit
+    SUM(st.totalPlClosed / __STATS_MONEY_DIV__) AS month_trade_profit
 FROM stats_trading st
 INNER JOIN users u ON u.id = st.userId AND COALESCE(u.isEmployee, 0) = 0
 WHERE st.date BETWEEN %(month_start)s AND %(month_end)s
   AND st.userId > 0
   AND st.tradeCnt > 0
 GROUP BY st.userId
-"""
+""".replace("__STATS_MONEY_DIV__", _STATS_MONEY_DIV)
 
 SQL_PHASE1_STATS_SEARCH = """
 SELECT
     st.userId AS client_id,
-    SUM(IF(st.currency = 'CEN', st.totalPlClosed / 100.0, st.totalPlClosed)) AS month_trade_profit
+    SUM(st.totalPlClosed / __STATS_MONEY_DIV__) AS month_trade_profit
 FROM stats_trading st
 INNER JOIN users u ON u.id = st.userId AND COALESCE(u.isEmployee, 0) = 0
 WHERE st.date BETWEEN %(month_start)s AND %(month_end)s
   AND st.userId = %(search_id)s
   AND st.tradeCnt > 0
 GROUP BY st.userId
-"""
+""".replace("__STATS_MONEY_DIV__", _STATS_MONEY_DIV)
 
 # ---------------------------------------------------------------------------
 # Phase 1 — Slow fallback: mt4_trades raw table
@@ -345,12 +358,15 @@ LEFT JOIN (
 ) AS dep90 ON tm.id = dep90.client_id
 
 -- All-time realized trade P&L. stats_trading_running_totals stores ONE ROW PER
--- loginSid in the ACCOUNT'S OWN currency — it is NOT pre-normalized — so CEN
--- (US-cent) accounts must be divided by 100 exactly like every other money
--- column in this file. Summing it raw inflated every CEN leg by 100x (a -$7.59
--- cent leg read as -$758.57). That also propagated into ROACE, whose denominator
--- avg_daily_equity IS CEN-adjusted, so the ratio was inflated on exactly the
--- mixed USD/CEN clients. See docs/features/client-return-rate.md §3.2.
+-- loginSid and, like stats_trading, is ALREADY in dollars for CEN accounts —
+-- it is the one money leg in this file that must NOT be divided by 100.
+-- (2026-10-06, reverting the 2026-08-28 change that added the division: for 298
+-- of 300 sampled CEN accounts the running total equals lifetime mt4_trades / 100,
+-- and for client 128535 — the sample that change cited — the CEN legs sum to
+-- -758.57 here against -75,857 raw cents in mt4_trades, i.e. -$758.57 is the
+-- dollar figure, not cents. Measurements: app/services/stats_trading_units.py.)
+-- The `ud` join removes the 99% excess on the days the CRM left one group in
+-- cents; it touches a handful of accounts.
 --
 -- Account scope (OPT-0061 decision 1a): sid IN (1,5,6) + non-demo, matching the
 -- ROACE denominator (avg_daily_equity from client_roace_refresh_service) and the
@@ -359,11 +375,16 @@ LEFT JOIN (
 -- clients differed, 540 of them by >$1,000.
 LEFT JOIN (
     SELECT srt.userId AS client_id,
-           SUM(IF(srt.currency = 'CEN',
-                  srt.plClosedHavingActivityRunningTotal / 100.0,
-                  srt.plClosedHavingActivityRunningTotal)) AS profit_hist_trades
+           SUM(srt.plClosedHavingActivityRunningTotal - 0.99 * COALESCE(ud.undivided_pl, 0)) AS profit_hist_trades
     FROM stats_trading_running_totals srt
     INNER JOIN mt4_users mu ON srt.loginSid = mu.loginSid
+    LEFT JOIN (
+        SELECT sd.loginSid, SUM(sd.totalPlClosed) AS undivided_pl
+        FROM stats_trading sd
+        WHERE sd.date >= '{UNDIVIDED_SINCE}'
+          AND sd.loginSid IN {UNDIVIDED_LOGINS_SQL}
+        GROUP BY sd.loginSid
+    ) ud ON ud.loginSid = srt.loginSid
     WHERE srt.userId IN ({id_list_str})
       AND mu.sid IN (1, 5, 6)
       AND mu.`GROUP` NOT LIKE '%demo%'
@@ -636,8 +657,11 @@ def get_client_return_rate_data(
     # columns. v7 blobs lack the new columns and carry the old profit_hist.
     # v9 (OPT-0060): 5 MDD window columns + wipeout/negative_equity flags,
     # keyed on the new include_mdd parameter. v8 blobs lack the columns.
+    # v10 (2026-10-06): month_trade_profit and profit_hist no longer divide CEN
+    # accounts by 100 a second time (stats_trading and its running totals are
+    # already in dollars). v9 blobs carry cent legs 100x too small.
     cache_params = (
-        "client_return_v9_mdd_"
+        "client_return_v10_statsusd_"
         f"{month_start}_{month_end}_{search}_{deposit_bucket}_{sort_by}_{sort_order}_"
         f"{page}_{page_size}_{close_time_start}_{include_avg_equity}_{include_mdd}_"
         f"{country_filter}_{akcm_filter}_{usdt_filter}_{return_all}"

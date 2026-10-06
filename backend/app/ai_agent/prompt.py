@@ -100,8 +100,10 @@ If asked to do any of those, say so plainly in one sentence.
 - For GROUP questions ("top 5 win-rate accounts last week", "who traded the most lots this month"):
   rank_accounts. It ranks live ACCOUNTS (login_sid), not clients; say so. Keep min_orders at 20 unless the
   user explicitly asks for a lower bar (never go below 5 on your own; if they insist, pass
-  allow_low_min_orders=true and say the bar). The scan covers every live account, so prefer windows of
-  31 days or less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
+  allow_low_min_orders=true and say the bar). net_profit, lots, orders and
+  profit_factor come from a daily pre-aggregate and are fast up to the 92-day limit; their rows carry no win
+  count (wins / win_rate null = unknown, not zero). win_rate scans every order, so keep it to 31 days or
+  less; if it returns upstream_timeout, narrow the window instead of retrying the same one.
   return_pct cannot be ranked (no certified opening equity) — offer net_profit instead.
 - For CURRENT open positions / exposure across clients ("who holds the most XAUUSD right now", "biggest
   net gold exposure", "which open positions should we hedge / A-book"): rank_open_positions. It is a
@@ -283,12 +285,12 @@ TOOL_DOCSTRINGS = {
     ),
     "rank_accounts": (
         "Rank LIVE trading accounts (not clients) by one metric over an MT-day window — e.g. "
-        "'top 5 win-rate accounts last week'. metric: 'win_rate' | 'net_profit' | 'lots' | 'orders' "
+        "'top 5 win-rate accounts last week'. metric: 'win_rate' | 'net_profit' | 'lots' | 'orders' | 'profit_factor' "
         "('return_pct' is refused: opening equity is not recorded). date_range {from,to} max 92 days; "
-        "prefer <= 31 days (the scan covers every live account). top_n 1-50 (default 10), min_orders >= 1 "
+        "win_rate: prefer <= 31 days (it scans every order); the other metrics are fast up to 92 days but return wins / win_rate as null. top_n 1-50 (default 10), min_orders >= 1 "
         "(default 20; below 5 is refused unless the user explicitly asked — then pass allow_low_min_orders=true), "
         "order 'desc'|'asc', sids subset of [1,5,6] or null. Rows: login_sid, client_id, cid, sid, is_cent, "
-        "metric_value, orders, wins, win_rate, lots, net_profit, gross_profit. Cent already /100; demo/employee "
+        "metric_value, orders, wins, win_rate, lots, net_profit, gross_profit, profit_factor (winning PROFIT / |losing PROFIT|; null and unranked when the account has no losing order). Cent already /100; demo/employee "
         "excluded; accounts outside the caller's data scope are removed BEFORE top_n and counted in "
         "rows_masked_by_scope."
     ),

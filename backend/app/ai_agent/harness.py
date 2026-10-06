@@ -252,7 +252,7 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
     # rows by `ctx.scope` before taking top_n and reports rows_masked_by_scope.
     @tool(name="rank_accounts", description=TOOL_DOCSTRINGS["rank_accounts"])
     async def rank_accounts(
-        metric: Annotated[Literal["win_rate", "net_profit", "lots", "orders", "return_pct"], "ranking metric ('return_pct' is refused: no certified opening equity)"],
+        metric: Annotated[Literal["win_rate", "net_profit", "lots", "orders", "profit_factor", "return_pct"], "ranking metric ('return_pct' is refused: no certified opening equity)"],
         date_range: DateRange,
         top_n: Annotated[int, "1..50 accounts to return"] = 10,
         min_orders: Annotated[int, "minimum closed orders to qualify; >= 1, default 20; below 5 refused unless allow_low_min_orders"] = 20,
