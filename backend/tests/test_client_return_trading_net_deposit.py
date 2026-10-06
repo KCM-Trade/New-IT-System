@@ -143,7 +143,7 @@ class TestCacheVersionPinnedToTheFormula:
                 f"cache prefix still {stale} while the result 口径 changed — "
                 f"stale cached rows would be served under the old formula"
             )
-        assert "client_return_v9_mdd_" in src
+        assert "client_return_v10_statsusd_" in src
         # The new parameter must be IN the cache key, or two calls differing
         # only in include_mdd would collide on one blob.
         assert "{include_avg_equity}_{include_mdd}_" in src

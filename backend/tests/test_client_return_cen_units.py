@@ -1,28 +1,25 @@
 """Anti-drift guards for CEN (US-cent) unit conversion in Client Return Rate SQL.
 
-The bug (found 2026-08-28): the `rt` LEFT JOIN summed
-`stats_trading_running_totals.plClosedHavingActivityRunningTotal` raw:
+Two kinds of source feed the money columns, and they need opposite handling:
 
-    SUM(plClosedHavingActivityRunningTotal) AS profit_hist_trades
+* RAW-CENTS tables — ``mt4_users`` (EQUITY), ``stats_transactions``,
+  ``stats_balances``, ``mt4_trades``: a CEN account's amounts are cents and every
+  aggregate must be ``SUM(IF(currency = 'CEN', col / 100.0, col))``.
+* The CRM's trading pre-aggregates — ``stats_trading`` and
+  ``stats_trading_running_totals``: ALREADY in dollars for CEN accounts. They
+  must NOT be divided again.
 
-That table holds one row per loginSid **in the account's own currency** and has a
-`currency` column — it is NOT pre-normalized, despite a stale comment in
-docs/features/client-return-rate.md claiming otherwise. So every CEN account leg
-was counted 100x. Replica measurement: 3,781 of 27,476 clients (13.8%) carry a
-non-zero CEN leg; client 128535 showed profit_hist 27,702.02 instead of 28,453.00
-(a -$7.59 cent leg read as -$758.57), and 116 clients had profit_hist land on the
-wrong SIGN.
-
-It also leaked into ROACE: `return_on_avg_equity = profit_hist / avg_daily_equity`
-and the denominator (client_roace_refresh_service) *is* CEN-adjusted, so the ratio
-was inflated on exactly the mixed USD/CEN clients.
+History, because this file used to assert the opposite for ``profit_hist``:
+the leg summed the running totals raw until 2026-08-28, when a /100 was added
+on the belief that the table was in account currency (sample: client 128535,
+CEN legs summing to -758.57, read as cents). On 2026-10-06 that client's CEN
+accounts were reconciled against ``mt4_trades`` order by order: the raw trades
+sum to -75,857 cents, so -758.57 is the DOLLAR figure and the division made
+cent legs 100x too small. The same check on 300 sampled CEN accounts and on
+the whole September universe is recorded in app/services/stats_trading_units.py.
 
 These tests assert on generated SQL text rather than hitting MySQL — SQL text is
-where this class of drift happens, and nothing else in the suite would fail if a
-future edit dropped the IF(currency='CEN', ...) wrapper again.
-
-Convention SSOT: CLAUDE.md "CEN accounts: amounts in cents — divide by 100" and
-backend/scripts/fxbo_table_notes/stats_trading_running_totals.md.
+where this class of drift happens.
 """
 
 import re
@@ -35,8 +32,9 @@ _RAW_SQL = _build_phase2_sql("1,2,3", "2026-07-01", "2026-07-15")
 # and that prose must not be able to satisfy these assertions. Pin executable SQL.
 _SQL = re.sub(r"--[^\n]*", "", _RAW_SQL)
 
-# Every money aggregate in Phase 2 that reads a currency-tagged fxbackoffice
-# table, mapped to the raw column it must normalize.
+# Every money aggregate in Phase 2 that reads a RAW-CENTS fxbackoffice table,
+# mapped to the raw column it must normalize. profit_hist_trades is deliberately
+# absent: its source is already in dollars (see the class below).
 _MONEY_LEGS = {
     "equity": "EQUITY",
     "deposits_hist": "st.amount",
@@ -46,7 +44,6 @@ _MONEY_LEGS = {
     "withdrawals_month": "st.amount",
     "ib_withdrawal_month": "st.amount",
     "deposits_90d": "st.amount",
-    "profit_hist_trades": "plClosedHavingActivityRunningTotal",
 }
 
 
@@ -68,45 +65,40 @@ def _leg(alias: str) -> str:
     raise AssertionError(f"no SUM(...) aggregate found for alias {alias!r}")
 
 
-class TestProfitHistDividesCenByHundred:
-    """The specific 2026-08-28 regression."""
+class TestStatsTradingLegsAreNotDividedAgain:
+    """stats_trading and stats_trading_running_totals are ALREADY in dollars for
+    CEN accounts (app/services/stats_trading_units.py has the measurements), so
+    the two legs that read them must not carry the CEN /100 every raw-cents leg
+    needs. History: profit_hist summed the running totals raw until 2026-08-28,
+    when a /100 was added on the belief that the table was in account currency;
+    2026-10-06 trade-level reconciliation showed that belief was wrong and the
+    division understated cent legs 100x."""
 
-    def test_profit_hist_leg_has_a_cen_branch(self):
+    def test_profit_hist_leg_has_no_cen_division(self):
         leg = _leg("profit_hist_trades")
-        assert "CEN" in leg, (
-            "profit_hist sums stats_trading_running_totals without a CEN branch. "
-            "That table is per-loginSid in the ACCOUNT'S OWN currency and is NOT "
-            "pre-normalized — cent accounts get counted 100x (3,781 clients "
-            "affected, 116 of them flipping sign). Restore "
-            "SUM(IF(currency = 'CEN', col / 100.0, col))."
-        )
+        assert "CEN" not in leg and "/ 100" not in leg and "/100" not in leg, leg
+        assert "plClosedHavingActivityRunningTotal" in leg
 
-    def test_profit_hist_leg_divides_by_100(self):
+    def test_profit_hist_corrects_the_group_the_crm_leaves_in_cents(self):
         leg = _leg("profit_hist_trades")
-        assert "/ 100.0" in leg or "/100.0" in leg, (
-            "profit_hist has a CEN branch but no /100 divisor"
-        )
+        assert "- 0.99 * COALESCE(ud.undivided_pl, 0)" in leg
+        assert "sd.date >= '2026-04-24'" in _SQL
+        assert "sd.loginSid IN (SELECT ug.loginSid FROM fxbackoffice.mt4_users ug WHERE ug.`GROUP` IN (" in _SQL
 
-    def test_profit_hist_divides_the_right_column(self):
-        """Guard against a /100 that lands on the wrong operand."""
-        leg = _leg("profit_hist_trades")
-        assert re.search(
-            r"plClosedHavingActivityRunningTotal\s*/\s*100\.0", leg
-        ), f"the /100 is not applied to plClosedHavingActivityRunningTotal: {leg!r}"
+    def test_period_profit_fast_path_has_no_cen_division(self):
+        from app.services import client_return_service as crs
 
-    def test_profit_hist_keeps_the_unconverted_fallback(self):
-        """USD/USDT rows must pass through untouched — the IF needs both branches.
+        for sql in (crs.SQL_PHASE1_STATS, crs.SQL_PHASE1_STATS_SEARCH):
+            assert "__STATS_MONEY_DIV__" not in sql
+            assert "'CEN'" not in sql, "stats_trading is already in dollars for CEN accounts"
+            assert "SUM(st.totalPlClosed / IF(st.date >= '2026-04-24' AND st.loginSid IN (SELECT" in sql
 
-        Columns may carry a table qualifier (`srt.`) since OPT-0061 joined
-        mt4_users into the leg (mt4_users has its own CURRENCY column, so the
-        bare name became ambiguous).
-        """
-        leg = _leg("profit_hist_trades")
-        assert re.search(
-            r"IF\(\s*(?:\w+\.)?currency\s*=\s*'CEN'\s*,\s*(?:\w+\.)?plClosedHavingActivityRunningTotal\s*/\s*100\.0\s*,"
-            r"\s*(?:\w+\.)?plClosedHavingActivityRunningTotal\s*\)",
-            leg,
-        ), f"CEN branch is not the canonical two-branch IF: {leg!r}"
+    def test_period_profit_fallback_still_divides_raw_cents(self):
+        """mt4_trades IS raw cents — that leg keeps its single division."""
+        from app.services import client_return_service as crs
+
+        for sql in (crs.SQL_PHASE1_TRADES, crs.SQL_PHASE1_TRADES_SEARCH):
+            assert "IF(mu.CURRENCY = 'CEN', t.totalProfit / 100.0, t.totalProfit)" in sql
 
 
 class TestEveryMoneyLegNormalizesCen:
