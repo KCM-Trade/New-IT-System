@@ -25,6 +25,7 @@
 |----|--------|------|--------|------|
 | [OPT-0073](./items/OPT-0073-ai-agent-skills-hardening.md) | P2 | backend | M | AI agent Skills hardening（OPT-0069 冷审 #5–#11）：token 上限/压缩、审计粒度、sqlglot 测试、MAF 锁定、skill 审核、事件白名单 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，25s 工具超时后线程仍跑完）+ 老工具「每轮 2 次」从 prompt 升为 harness 硬性 |
+| [OPT-0074](./items/OPT-0074-gap-trade-dst-hardening.md) | P3 | backend | S | Gap Trade DST hardening（OPT-0072 冷审 #8–#10）：MT 时区 fromutc + 挪 core/mt_clock、手动/定时重复告警、心跳默认开 |
 | [OPT-0001](./items/OPT-0001-risk-monitor-tab-cache.md) | P2 | frontend | M | Risk-monitor 四个 tab 切换状态/缓存优化 |
 | [OPT-0003](./items/OPT-0003-risk-monitor-sqlite-perf.md) | P1 | db | L | Risk-monitor SQLite 数据增长后的性能方案 |
 | [OPT-0044](./items/OPT-0044-alert-mail-hardening.md) | P2 | backend | M | 告警邮件中心 hardening：发送移出扫描锁 / digest 渲染上限 / digest UNIQUE 认领 / 注册表 dataclass 化 |
