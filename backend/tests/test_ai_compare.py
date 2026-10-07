@@ -814,16 +814,21 @@ def test_all_runs_failing_voids_the_turn(make_client, agent, tmp_path):
     assert compare["selectable"] == []
     assert events[-1][0] == "done"
     assert "run" not in events[-1][1]
-    assert events[-1][1]["terminal_reason"] == "error"
-    # If the whole-turn failure is also announced as an `error` frame, it is
-    # this code and no other.
-    whole_errors = [d for e, d in _whole_turn(events) if e == "error"]
-    assert all(d["code"] == "compare_failed" for d in whole_errors)
+    assert events[-1][1] == {"terminal_reason": "error", "num_turns": 0}
+    # No run-less `error` frame: the void `compare` event IS the announcement.
+    # `compare_failed` is a stored code (transcript + audit), never an event.
+    assert [e for e, _ in _whole_turn(events)] == ["init", "compare", "done"]
+    assert "compare_failed" not in r.text
 
-    rows = _all(tmp_path, "SELECT seq, role, text, error_code FROM ai_messages WHERE session_id = 'void' ORDER BY seq")
+    rows = _all(
+        tmp_path,
+        "SELECT seq, role, text, error_code, model, compare_id FROM ai_messages WHERE session_id = 'void' ORDER BY seq",
+    )
     assert [(r["seq"], r["role"]) for r in rows] == [(1, "user"), (2, "assistant")]
     assert rows[0]["text"] == QUESTION
     assert rows[1]["error_code"] == "compare_failed"
+    assert rows[1]["model"] is None  # no single model answered
+    assert rows[1]["compare_id"] == compare["compare_id"]  # what links the row to its runs
 
     turn = _one(tmp_path, "SELECT state FROM ai_compare_turns WHERE compare_id = ?", (compare["compare_id"],))
     assert turn["state"] == "void"
@@ -839,6 +844,10 @@ def test_all_runs_failing_voids_the_turn(make_client, agent, tmp_path):
     assert set(alternatives) == {TERRA, GROK}
     assert alternatives[TERRA]["error_code"] == "rate_limited"
     assert alternatives[GROK]["error_code"] == "internal"
+    assert failed_row.get("model") is None
+
+    # Nothing to choose from a void compare.
+    assert _select(client, sid, "void", compare["compare_id"], TERRA).status_code == 422
 
     # Not pending: the next turn is served.
     agent["scripts"][TERRA] = _ok(TERRA)
@@ -1063,8 +1072,9 @@ def test_a_compare_that_would_exceed_the_turn_limit_is_refused_unforwarded(make_
     assert _usage_today(client, sid)["turns"] == 1  # and not counted
 
     # §19: the refusal is in the transcript and the session is not left pending.
-    rows = _all(tmp_path, "SELECT role, error_code FROM ai_messages WHERE session_id = 'three' ORDER BY seq")
+    rows = _all(tmp_path, "SELECT role, error_code, model FROM ai_messages WHERE session_id = 'three' ORDER BY seq")
     assert [(r["role"], r["error_code"]) for r in rows] == [("user", None), ("assistant", "quota_exceeded")]
+    assert all(r["model"] is None for r in rows)
     assert _detail(client, sid, "three").get("pending_compare") is None
     assert _one(
         tmp_path,
@@ -1118,8 +1128,9 @@ def test_a_third_concurrent_compare_is_refused_as_compare_busy(make_client, agen
     assert agent["calls"] == []
     assert _usage_today(client, sid)["turns"] == 0  # §19: not counted
 
-    rows = _all(tmp_path, "SELECT role, error_code FROM ai_messages WHERE session_id = 'busy' ORDER BY seq")
+    rows = _all(tmp_path, "SELECT role, error_code, model FROM ai_messages WHERE session_id = 'busy' ORDER BY seq")
     assert [(r["role"], r["error_code"]) for r in rows] == [("user", None), ("assistant", "compare_busy")]
+    assert all(r["model"] is None for r in rows)
     assert _detail(client, sid, "busy").get("pending_compare") is None
     # The session is free: the same question can be asked single-model at once.
     assert _turn(client, sid, session_id="busy").status_code == 200
@@ -1502,8 +1513,8 @@ def test_select_after_the_session_moved_on_is_409_stale_and_voids_the_compare(ma
     calls_before = len(agent["calls"])
     assert _turn(client, sid, session_id="moved").status_code == 200
     assert agent["calls"][calls_before]["session_blob"] == {"marker": "old-build"}
-    # A second attempt at the voided compare does not resurrect it: nothing in
-    # a void compare is selectable, so it is refused as 422 (02 §22).
+    # A second attempt at the voided compare is refused (nothing in a void
+    # compare is selectable) and does not resurrect it.
     assert _select(client, sid, "moved", compare_id, TERRA).status_code == 422
     assert _one(tmp_path, "SELECT state FROM ai_compare_turns WHERE compare_id = ?", (compare_id,))["state"] == "void"
 
@@ -1685,8 +1696,12 @@ def test_a_quota_refused_compare_is_one_row(make_client, agent, tmp_path):
     assert value["terminal_reason"] == "error"
     assert value["error_code"] == "quota_exceeded"
     assert value["cost_usd"] == 0 and value["input_tokens"] == 0
-    for run in value.get("runs", []):
-        assert set(run) <= RUN_KEYS
+    # One item per model even though none ran: zero tokens, the turn's code.
+    runs = _assert_run_items(value, [TERRA, GROK], failed={TERRA: "quota_exceeded", GROK: "quota_exceeded"})
+    for run in runs.values():
+        assert run["terminal_reason"] == "error"
+        assert run["input_tokens"] == 0 and run["output_tokens"] == 0 and run["cost_usd"] == 0
+        assert run["tools_called"] == []
 
 
 def test_a_compare_busy_refusal_is_one_row(make_client, agent, tmp_path):
@@ -1698,6 +1713,8 @@ def test_a_compare_busy_refusal_is_one_row(make_client, agent, tmp_path):
     assert value["models"] == [TERRA, GROK]
     assert value["terminal_reason"] == "error"
     assert value["error_code"] == "compare_busy"
+    runs = _assert_run_items(value, [TERRA, GROK], failed={TERRA: "compare_busy", GROK: "compare_busy"})
+    assert all(run["terminal_reason"] == "error" and run["input_tokens"] == 0 for run in runs.values())
 
 
 def test_run_sql_text_is_prefixed_with_its_model_and_refusals_are_summed(make_client, agent, tmp_path):
