@@ -1502,8 +1502,9 @@ def test_select_after_the_session_moved_on_is_409_stale_and_voids_the_compare(ma
     calls_before = len(agent["calls"])
     assert _turn(client, sid, session_id="moved").status_code == 200
     assert agent["calls"][calls_before]["session_blob"] == {"marker": "old-build"}
-    # A second attempt at the voided compare does not resurrect it.
-    assert _select(client, sid, "moved", compare_id, TERRA).status_code in (404, 409)
+    # A second attempt at the voided compare does not resurrect it: nothing in
+    # a void compare is selectable, so it is refused as 422 (02 §22).
+    assert _select(client, sid, "moved", compare_id, TERRA).status_code == 422
     assert _one(tmp_path, "SELECT state FROM ai_compare_turns WHERE compare_id = ?", (compare_id,))["state"] == "void"
 
 
