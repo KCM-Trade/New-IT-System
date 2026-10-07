@@ -22,12 +22,23 @@ import { formatHk } from "@/lib/hk-time"
  * full `definition` object stays on the model side, so the popover shows what
  * the browser actually knows rather than pretending to a longer document.
  */
-export function SourceBadge({ tool }: { tool: ToolCall }) {
+/**
+ * `unique` (compare mode only): this tool was called by this model alone. The
+ * badge gets an outline ring — when the answers disagree, a source only one
+ * model consulted is the first place to look.
+ */
+const UNIQUE_RING = "ring-2 ring-foreground/30 ring-offset-1 ring-offset-background"
+
+export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?: boolean }) {
   const { t } = useI18n()
 
   if (tool.ok === null) {
     return (
-      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+      <Badge
+        variant="outline"
+        title={unique ? t("ai.compare.onlyThisModel") : undefined}
+        className={cn("gap-1 font-normal text-muted-foreground", unique && UNIQUE_RING)}
+      >
         <IconLoader2 className="animate-spin" />
         {t("ai.querying", { tool: tool.name })}
       </Badge>
@@ -48,8 +59,14 @@ export function SourceBadge({ tool }: { tool: ToolCall }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={uncertified ? t("ai.badgeUncertifiedTooltip") : t("ai.badgeTooltip")}
-          className="rounded-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          title={
+            (uncertified ? t("ai.badgeUncertifiedTooltip") : t("ai.badgeTooltip")) +
+            (unique ? ` · ${t("ai.compare.onlyThisModel")}` : "")
+          }
+          className={cn(
+            "rounded-md focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            unique && UNIQUE_RING,
+          )}
         >
           <Badge
             variant="outline"

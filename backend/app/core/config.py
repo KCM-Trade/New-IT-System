@@ -205,6 +205,7 @@ class Settings:
     AI_AGENT_INTERNAL_TOKEN: str | None
     AI_DAILY_TURNS_LIMIT: int
     AI_DAILY_COST_LIMIT_USD: float
+    AI_COMPARE_MAX_CONCURRENT: int
     AI_MODEL_PRICES: dict[str, tuple[float, ...]]
     AI_SESSION_RETENTION_DAYS: int
     FRED_API_KEY: str
@@ -708,6 +709,15 @@ class Settings:
         )
         self.AI_DAILY_COST_LIMIT_USD = float(
             (os.environ.get("AI_DAILY_COST_LIMIT_USD") or "20").strip()
+        )
+        # OPT-0076: how many compare turns (one question fanned out to 2–3
+        # models) may be in flight server-wide. Each one multiplies the load on
+        # the agent container and the read replica by its model count, so the
+        # cap is on turns, not on people. Counted in ai_agent.db — it has to
+        # hold across the four uvicorn workers. At the cap the next compare is
+        # refused with `compare_busy`; single-model turns are never affected.
+        self.AI_COMPARE_MAX_CONCURRENT = int(
+            (os.environ.get("AI_COMPARE_MAX_CONCURRENT") or "2").strip()
         )
         # USD per million tokens, {deployment: [input, output]}. The main API
         # is the ONLY place cost is computed (the agent reports raw token

@@ -1,7 +1,7 @@
 ---
 id: OPT-0076
 title: AI agent 多模型对比模式（一次提问并发 2–3 个模型，用户选答案）
-status: wip
+status: done
 priority: P2
 area: mixed
 effort: L
@@ -429,4 +429,35 @@ Refactoring UI 建议：
 
 ## 结果
 
-（未开始）
+2026-10-07 完成并合入 main。契约 SSOT 与全部实施出入在 `docs/ai-agent/02-contracts.md` §19–§24 及其后的实施注记。
+
+**交付**
+
+- 后端：`POST /ai/turn` 可选 `compare_models`（2–3 个），主 API 并发调 N 次 agent、事件带 `run`；两张新表 `ai_compare_turns` / `ai_turn_candidates`，
+  `ai_messages` 加 `model` / `compare_id`；`POST /ai/sessions/{id}/select`；待选择时 `409 compare pending`；配额按模型数计；
+  全服并发对比轮次上限 `AI_COMPARE_MAX_CONCURRENT`（缺省 2）；`TURN_CLAIM_STALE_SECONDS` 360 → 720。agent 容器零改动。
+- 前端：对比开关（缺省关，`useFilterPersist` 键 `AI_ASSISTANT_MAIN_FILTERS_V1`，不进 View Profiles）、容器查询决定 1 / 2 / 3 列（一列不窄于 480px）、
+  模型条、待选择提示条、选后折叠「查看其他回答」、可选理由、每条回答标出模型名、对比模式下历史栏收成图标。
+- 测试：`backend/tests/test_ai_compare.py` 95 个（另一个 worker 只看契约写成）；`test_ai_route.py` / `test_ai_sessions.py` 零改动全过；
+  `./verify.sh` PASS（后端 2998 过、前端 vitest 377 过）。
+
+**与 plan 的出入**
+
+- §23 的新返回字段为空时不出现（不是 `null` / `false`），因为现有测试钉死了键集合。
+- 全部失败时流里没有不带 `run` 的 `error`；对已作废的轮次 select 回 422。
+- 前端：输入框与待选择提示条保持 768px 居中；工具条沿用现有徽章文案；待选择提示条里重复放了对比开关；对比块流式时不自动滚到底。
+
+**验证情况**
+
+- 用户在 dev（独立端口，集成 worktree）浏览器里看过并确认：三模型可选、Grok 可用。
+- 用户要求直接上线，**未跑 outsider-review**。
+- 没有人工逐格核对 1280 / 1440 / 1920 × 侧栏开收的列宽；列头吸顶未专门确认。
+
+**Follow-up（未立单）**
+
+- 审计行余量小：3 模型 × 6 次工具 + 500 字问题约 1817 / 2000 字符，subject 多或带 `run_sql` 时会被截断成不可解析的 JSON（单模型行今天也会）。
+- 待选择的轮次没有过期时间，候选 blob 一直留到选择或会话被删。
+- 同一模型无变化的重复 select 不写审计行，`AuditMissing` 会记一条 WARNING。
+- 没有测试覆盖：N 个 run 共用整轮时限、`AUTH_ENABLED=false` 下的对比、多 worker 真并发抢对比名额。
+- 模型多选框仍是硬编码的 `AI_MODELS`，等 OPT-0077 的 `GET /ai/models`。
+- dev 的后端镜像缺 `openpyxl`（与本单无关，8001 起不来），需要重建 dev 镜像。
