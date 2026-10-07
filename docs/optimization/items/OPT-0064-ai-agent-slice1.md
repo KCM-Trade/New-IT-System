@@ -1,7 +1,7 @@
 ---
 id: OPT-0064
 title: AI 分析 agent 第一刀 —— `ai` 模块 + 独立 agent 容器（Microsoft Agent Framework + Azure OpenAI gpt-5.6）+ `/api/v1/ai/turn` SSE + 三个受信工具 + 三轴贯通 + 来源徽章 + 审计 + 配额
-status: wip
+status: done
 priority: P1
 area: mixed
 effort: XL
@@ -83,6 +83,8 @@ risk team 要一个登录后按人隔离的分析 agent：问「客户 123456 �
 
 ## 结果
 
-（未 close，OPT 保持 wip 直到 UI 二轮 + `ai_agent_ro` 落地。）**2026-09-27 14:24 已上 prod**：merge `ac21437`、`aaf9b21`，回滚标签 `pre-ai-slice1-20260927`；闸门 pytest 1971 / tsc 0 / vitest 304。待办见 `docs/ai-agent/05-rollout.md` §5.4–5.6。
+**2026-10-07 补 close**（账面清理，无代码改动）：两个 close 条件——UI 二轮与 PG `ai_agent_ro`——都已在 2026-09-27 15:44 那次部署落地，此后一直没走关闭流程。MySQL 侧 `ai_agent_ro` 用户 09-27 拍板不建，不算遗留。后续刀次见 OPT-0065 / 0066 / 0069 / 0075。
+
+**2026-09-27 14:24 已上 prod**：merge `ac21437`、`aaf9b21`，回滚标签 `pre-ai-slice1-20260927`；闸门 pytest 1971 / tsc 0 / vitest 304。待办见 `docs/ai-agent/05-rollout.md` §5.4–5.6。
 
 **2026-09-27 15:44 第二次部署**：UI 二轮（`9f89e2b`，ChatGPT 式居中输入框、模型下拉）+ prompt 每轮注入当前日期（`1cf088d`，修「最近 N 天」按训练截止日解析的 bug）+ PG 只读角色 `ai_agent_ro` 接上 prod/dev；回滚 `new-it-system-{api,web,ai-agent}:pre-ai-ui2-20260927`；闸门 pytest 1986 / tsc 0 / vitest 304。剩：MySQL `ai_agent_ro`（用户自建）、第二刀。

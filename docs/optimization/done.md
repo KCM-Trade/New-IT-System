@@ -10,6 +10,7 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | Commit | 标题 |
 |------|----|--------|------|
+| 2026-10-07 | [OPT-0064](./items/OPT-0064-ai-agent-slice1.md) | `ac21437` | AI 分析 agent 第一刀（独立容器 + `/api/v1/ai/*` + 三个受信工具 + 审计 + 配额）；09-27 已上 prod，本行是补 close |
 | 2026-10-07 | [OPT-0075](./items/OPT-0075-ai-agent-grok-deepseek.md) | — | AI agent 加 grok-4.7 + DeepSeek-V4-Pro 可选模型（都走 Responses API）：工具 schema 展开 `$ref`、五模型清单、按模型的缓存单价、价格 env 改叠加 |
 | 2026-10-06 | [OPT-0072](./items/OPT-0072-gap-trade-winter-dst.md) | — | Gap Trade 扫描锚 MT 时钟（MT 02:20，冬令 HKT 08:20）：启动补扫 + 按日回补 + 窗口配置 422 + apscheduler<4 |
 | 2026-09-30 | [OPT-0069](./items/OPT-0069-ai-agent-skills.md) | — | AI agent 接入 Agent Skills：7 个 skill 按受众（all/run_sql/risk）过滤，资源白名单 + 启动自检；execution-and-slippage 等 4 个暂缓 |
