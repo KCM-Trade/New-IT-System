@@ -1,5 +1,6 @@
 import { useI18n } from "@/components/i18n-provider"
 import type { AiModel, TurnUsage } from "@/hooks/useAiTurn"
+import { formatTokens, formatUsd } from "@/lib/ai-compare"
 
 export interface TodayUsage {
   day_hk: string
@@ -21,25 +22,37 @@ export interface TodayUsage {
  * conversation, so it is one muted line with middle-dot separators rather
  * than a row of stat cards. Per-turn numbers come from the `usage` event;
  * the daily counters from `GET /ai/usage/today`, refreshed after every turn.
+ *
+ * Compare mode (OPT-0076): with the switch on, the leading model name becomes
+ * `对比 N 个模型 · 本次计 N 轮` — the next question costs N turns of the daily
+ * quota, and the reader should know before sending. When the last answer was
+ * a compare turn, "本轮" is the total across its models and says so.
  */
 export function AiStatusBar({
   model,
   turnUsage,
   today,
+  lead,
+  turnRuns = 0,
 }: {
   model: AiModel
   turnUsage: TurnUsage | null
   today: TodayUsage | null
+  /** Replaces the leading model name (compare mode: "对比 N 个模型 · 本次计 N 轮"). */
+  lead?: string
+  /** Number of models `turnUsage` is summed over; 0 = a single-model turn. */
+  turnRuns?: number
 }) {
   const { t } = useI18n()
 
   // Before the first turn there is nothing to say about "this turn", so say
   // nothing rather than printing dashes the reader has to decode.
-  const parts: string[] = [model]
+  const parts: string[] = [lead ?? model]
   if (turnUsage) {
     const cost = turnUsage.cost_usd == null ? "" : ` · ${formatUsd(turnUsage.cost_usd)}`
+    const scope = turnRuns > 0 ? `${t("ai.compare.totalOf", { n: turnRuns })} ` : ""
     parts.push(
-      `${t("ai.status.thisTurn")} ${formatTokens(turnUsage.input_tokens + turnUsage.output_tokens)} tokens${cost}`,
+      `${t("ai.status.thisTurn")} ${scope}${formatTokens(turnUsage.input_tokens + turnUsage.output_tokens)} tokens${cost}`,
     )
   }
   if (today) {
@@ -57,22 +70,9 @@ export function AiStatusBar({
       {parts.map((p, i) => (
         <span key={i} className="flex items-center gap-2">
           {i > 0 && <span aria-hidden>·</span>}
-          <span className={i === 0 ? "font-mono" : undefined}>{p}</span>
+          <span className={i === 0 && lead === undefined ? "font-mono" : undefined}>{p}</span>
         </span>
       ))}
     </div>
   )
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
-
-function formatUsd(v: number): string {
-  // Sub-cent costs are the normal case for one turn; two decimals would print
-  // "$0.00" for most of them and read as free.
-  const digits = v > 0 && v < 0.1 ? 3 : 2
-  return `$${v.toFixed(digits)}`
 }

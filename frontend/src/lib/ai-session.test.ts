@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  mapPendingCompare,
   mapSessionMessages,
+  sessionTranscript,
   sessionModel,
   sessionTitle,
   shouldPersistSessionId,
+  type AiPendingCompare,
+  type AiSessionDetail,
   type AiSessionMessageRow,
 } from "./ai-session"
 
@@ -121,5 +125,183 @@ describe("shouldPersistSessionId", () => {
   })
   it("writes a real id", () => {
     expect(shouldPersistSessionId("b1348b47999f4d38beac9f92b5766bc4")).toBe(true)
+  })
+})
+
+// ── OPT-0076: model per answer, compare alternatives, pending compare ──────
+
+const session = {
+  session_id: "s1",
+  title: "t",
+  model: "grok-4.7",
+  turns: 2,
+  created_at: "2026-10-07T01:00:00Z",
+  updated_at: "2026-10-07T01:00:00Z",
+}
+
+const compareRows: AiSessionMessageRow[] = [
+  { seq: 1, role: "user", text: "10 月有哪些数据？", tools: null, usage: null, error_code: null, at: "x" },
+  {
+    seq: 2,
+    role: "assistant",
+    text: "chosen answer",
+    tools: [],
+    usage: null,
+    error_code: null,
+    at: "x",
+    model: "grok-4.7",
+    compare: {
+      compare_id: "cmp1",
+      reason: "numbers",
+      alternatives: [
+        {
+          model: "gpt-5.6-terra",
+          text: "other answer",
+          tools: [{ name: "get_economic_calendar", ok: true, certified: true }],
+          usage: { input_tokens: 5, output_tokens: 5, cost_usd: 0.001 },
+          error_code: null,
+          elapsed_ms: 12000,
+        },
+        { model: "DeepSeek-V4-Pro", text: "", tools: null, usage: null, error_code: "incomplete", elapsed_ms: null },
+      ],
+    },
+  },
+  // Plain single-model answer stored after OPT-0076: model, no compare.
+  { seq: 3, role: "user", text: "next", tools: null, usage: null, error_code: null, at: "x" },
+  { seq: 4, role: "assistant", text: "plain", tools: [], usage: null, error_code: null, at: "x", model: "gpt-5.6-sol" },
+  // A turn where no run was selectable.
+  { seq: 5, role: "user", text: "again", tools: null, usage: null, error_code: null, at: "x" },
+  {
+    seq: 6,
+    role: "assistant",
+    text: "",
+    tools: [],
+    usage: null,
+    error_code: "compare_failed",
+    at: "x",
+    compare: {
+      compare_id: "cmp2",
+      reason: null,
+      alternatives: [
+        { model: "gpt-5.6-terra", text: "", tools: [], usage: null, error_code: "internal", elapsed_ms: 10 },
+        { model: "grok-4.7", text: "", tools: [], usage: null, error_code: "agent_unavailable", elapsed_ms: 20 },
+      ],
+    },
+  },
+]
+
+describe("mapSessionMessages — model and compare", () => {
+  const out = mapSessionMessages(compareRows)
+
+  it("puts the model on assistant answers, and leaves old rows without one", () => {
+    expect(out[1].model).toBe("grok-4.7")
+    expect(out[3].model).toBe("gpt-5.6-sol")
+    expect(out[3].compare).toBeUndefined()
+    // Rows stored before OPT-0076 omit the field entirely.
+    expect(mapSessionMessages(rows)[1].model).toBeUndefined()
+    expect(mapSessionMessages(rows)[1].compare).toBeUndefined()
+  })
+
+  it("maps a chosen answer: the row is the answer, the alternatives are the runs", () => {
+    const c = out[1].compare!
+    expect(c).toMatchObject({ compareId: "cmp1", state: "selected", selectedModel: "grok-4.7", reason: "numbers" })
+    expect(c.models).toEqual(["grok-4.7", "gpt-5.6-terra", "DeepSeek-V4-Pro"])
+    expect(c.runs.map((r) => [r.model, r.status])).toEqual([
+      ["gpt-5.6-terra", "done"],
+      ["DeepSeek-V4-Pro", "failed"],
+    ])
+    expect(c.runs[0]).toMatchObject({ text: "other answer", elapsedMs: 12000 })
+    expect(c.runs[0].tools[0]).toMatchObject({ name: "get_economic_calendar", ok: true, certified: true })
+    expect(c.runs[0].usage?.cost_usd).toBe(0.001)
+    expect(c.runs[1].error).toEqual({ code: "incomplete", message: "" })
+    expect(out[1].text).toBe("chosen answer")
+  })
+
+  it("maps a void turn: every run is an alternative and nothing is selected", () => {
+    const c = out[5].compare!
+    expect(c.state).toBe("void")
+    expect(c.selectedModel).toBeUndefined()
+    expect(c.runs).toHaveLength(2)
+    expect(out[5].error).toEqual({ code: "compare_failed", message: "" })
+  })
+
+  it("an unknown reason string reads as no reason", () => {
+    const odd = mapSessionMessages([
+      { ...compareRows[1], compare: { ...compareRows[1].compare!, reason: "because" } },
+    ])
+    expect(odd[0].compare?.reason).toBeNull()
+  })
+})
+
+const pending: AiPendingCompare = {
+  compare_id: "cmp9",
+  state: "pending",
+  question: "哪个更好？",
+  models: ["gpt-5.6-terra", "grok-4.7", "DeepSeek-V4-Pro"],
+  created_at: "2026-10-07T02:00:00Z",
+  candidates: [
+    // Deliberately out of column order: `models` decides the order.
+    { model: "grok-4.7", text: "g", tools: [], usage: null, error_code: null, elapsed_ms: 9000, selectable: true },
+    { model: "gpt-5.6-terra", text: "t", tools: [], usage: null, error_code: null, elapsed_ms: 8000, selectable: true },
+    { model: "DeepSeek-V4-Pro", text: "", tools: [], usage: null, error_code: "incomplete", elapsed_ms: null, selectable: false },
+  ],
+}
+
+describe("mapPendingCompare", () => {
+  it("builds the question and a pending compare message, like a live turn", () => {
+    const [q, a] = mapPendingCompare(pending)
+    expect(q).toMatchObject({ role: "user", text: "哪个更好？" })
+    expect(a.role).toBe("assistant")
+    const c = a.compare!
+    expect(c).toMatchObject({ compareId: "cmp9", state: "pending", detached: false })
+    expect(c.runs.map((r) => r.model)).toEqual(pending.models)
+    expect(c.selectable).toEqual(["grok-4.7", "gpt-5.6-terra"])
+    expect(c.runs[2]).toMatchObject({ status: "failed", error: { code: "incomplete" } })
+    expect(c.startedAt).toBe(Date.parse("2026-10-07T02:00:00Z"))
+  })
+
+  it("running: no candidates yet, every column is a placeholder and nothing is selectable", () => {
+    const [, a] = mapPendingCompare({ ...pending, state: "running", candidates: [] })
+    const c = a.compare!
+    expect(c).toMatchObject({ state: "running", detached: true, selectable: [] })
+    expect(c.runs.map((r) => r.status)).toEqual(["running", "running", "running"])
+  })
+})
+
+describe("sessionTranscript", () => {
+  const detail = (pc?: AiPendingCompare | null): AiSessionDetail => ({
+    session,
+    messages: compareRows.slice(0, 2),
+    ...(pc === undefined ? {} : { pending_compare: pc }),
+  })
+
+  it("is just the stored messages when the field is omitted or null", () => {
+    expect(sessionTranscript(detail())).toHaveLength(2)
+    expect(sessionTranscript(detail(null))).toHaveLength(2)
+  })
+
+  it("appends an open compare after the stored messages", () => {
+    const out = sessionTranscript(detail(pending))
+    expect(out).toHaveLength(4)
+    expect(out[3].compare?.state).toBe("pending")
+  })
+
+  it("keeps the on-screen runs while the server is still finishing that same compare", () => {
+    const [q, a] = mapPendingCompare({ ...pending, state: "running", candidates: [] })
+    const live = {
+      ...a,
+      stopped: true,
+      compare: { ...a.compare!, detached: false, runs: a.compare!.runs.map((r) => ({ ...r, text: "partial" })) },
+    }
+    const out = sessionTranscript(detail({ ...pending, state: "running", candidates: [] }), [q, live])
+    expect(out).toHaveLength(4)
+    expect(out[3].compare?.runs[0].text).toBe("partial")
+    expect(out[3].compare?.detached).toBe(true)
+    // Once it is pending, the server's candidates replace the snapshot.
+    const settled = sessionTranscript(detail(pending), [q, live])
+    expect(settled[3].compare?.runs[0].text).toBe("t")
+    // A different compare id on screen is never kept.
+    const other = sessionTranscript(detail({ ...pending, compare_id: "zzz", state: "running", candidates: [] }), [q, live])
+    expect(other[3].compare?.runs[0].text).toBe("")
   })
 })

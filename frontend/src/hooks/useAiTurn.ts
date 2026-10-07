@@ -18,10 +18,24 @@
  * `newConversation()` just forgets the id; the server row stays in the list.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { createDeltaBuffer } from "@/lib/delta-buffer";
-import { mapSessionMessages, type AiSessionDetail } from "@/lib/ai-session";
+import {
+  appendRunText,
+  applyCompareResult,
+  applyCompareRunEvent,
+  compareIsUntouched,
+  isOpenCompare,
+  newCompare,
+  runOf,
+  sumUsage,
+  updateRun,
+  type AiCompare,
+  type CompareReason,
+  type CompareRun,
+} from "@/lib/ai-compare";
+import { createDeltaBuffer, type DeltaBuffer } from "@/lib/delta-buffer";
+import { sessionTranscript, type AiSessionDetail } from "@/lib/ai-session";
 import { apiFetch } from "@/lib/fetch";
 import { SseParser, parseFrameJson } from "@/lib/sse-parser";
 
@@ -72,12 +86,20 @@ export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
-  model?: AiModel;
+  /** The model that gave this answer (a plain string: history may name a retired model). */
+  model?: string;
   tools: ToolCall[];
   error?: TurnError;
   usage?: TurnUsage;
   /** Set when the user pressed stop before `done` arrived. */
   stopped?: boolean;
+  /**
+   * Set on the assistant message of a multi-model compare turn (02 §19–§23).
+   * While `running` / `pending` the runs ARE the answer and render side by
+   * side; once `selected` the message itself is the chosen answer and the
+   * runs are the alternatives.
+   */
+  compare?: AiCompare;
 }
 
 export interface UseAiTurnResult {
@@ -90,8 +112,27 @@ export interface UseAiTurnResult {
   sessionId: string | null;
   /** True while a stored conversation is being loaded for redisplay. */
   loadingSession: boolean;
-  send: (message: string, model: AiModel) => Promise<void>;
+  /**
+   * Ask a question. With `compareModels` (2–3 models) the turn fans out to all
+   * of them and `model` is ignored by the server.
+   */
+  send: (message: string, model: AiModel, compareModels?: readonly AiModel[]) => Promise<void>;
   stop: () => void;
+  /**
+   * The open conversation's unresolved compare turn (still generating, or
+   * waiting for a choice), or null. While it exists the server refuses any new
+   * question with 409 — whatever the compare switch says.
+   */
+  pendingCompare: AiCompare | null;
+  /** The model whose answer is being committed right now, if any. */
+  selecting: string | null;
+  /** The last failed `select`, cleared by the next attempt. */
+  selectError: TurnError | null;
+  /**
+   * Continue the conversation with one model's answer, or (same model again)
+   * attach / change the optional reason. Re-reads the session afterwards.
+   */
+  select: (compareId: string, model: string, reason?: CompareReason | null) => Promise<boolean>;
   /**
    * Replace the transcript with a stored conversation and continue it.
    * Resolves to the session detail, or `null` when it does not exist (404) or
@@ -108,7 +149,11 @@ interface UseAiTurnOptions {
 }
 
 // Wire payloads, per 02 §4.3.
-interface InitEvent { session_id: string; model: string }
+interface InitEvent {
+  session_id: string;
+  model: string;
+  compare?: { compare_id?: string; models?: string[] };
+}
 interface TextEvent { delta: string }
 interface ToolUseEvent { name: string; input?: unknown }
 interface ToolDoneEvent {
@@ -119,6 +164,24 @@ interface ToolDoneEvent {
   error_code?: string;
 }
 interface ErrorEvent { code: string; message: string; trace_id?: string }
+
+/** Poll cadence for a compare turn the server is finishing in the background. */
+const COMPARE_POLL_MS = 5_000;
+/**
+ * Stop polling after this long. The server treats a `running` turn older than
+ * 720s as dead (02 §21) but only marks it so on the next claim; past that
+ * point the next question is what unblocks the conversation, not more polls.
+ */
+const COMPARE_POLL_MAX_MS = 780_000;
+
+async function readDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    return typeof body.detail === "string" ? body.detail : "";
+  } catch {
+    return ""; // non-JSON body
+  }
+}
 
 function newId(): string {
   // crypto.randomUUID is available in every browser this app supports; the
@@ -134,14 +197,24 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
   const [usage, setUsage] = useState<TurnUsage | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [selecting, setSelecting] = useState<string | null>(null);
+  const [selectError, setSelectError] = useState<TurnError | null>(null);
 
   const controllerRef = useRef<AbortController | null>(null);
   // Mirror of `loadingSession` readable from inside `send` without making it a
   // dependency (a resume in flight must block a new question, or the resumed
   // transcript would replace the one the question was just appended to).
   const loadingRef = useRef(false);
+  // Set inside `send` when the turn's outcome has to be read back from the
+  // server once the stream is over; consumed in its `finally`.
+  const compareRefreshRef = useRef<string | null>(null);
   const onTurnEndRef = useRef(options.onTurnEnd);
   onTurnEndRef.current = options.onTurnEnd;
+  // Readable from async callbacks that must notice the conversation changed
+  // underneath them (a poll or a select landing after "new conversation").
+  const sessionIdRef = useRef<string | null>(null);
+  sessionIdRef.current = sessionId;
+  const selectingRef = useRef(false);
 
   // Abort an in-flight stream when the page unmounts (React 18 StrictMode
   // mounts twice; the second mount starts nothing, so this is safe).
@@ -164,7 +237,86 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
     setError(null);
     setUsage(null);
     setSessionId(null);
+    setSelectError(null);
   }, [streaming]);
+
+  /**
+   * Re-read the open conversation and rebuild the transcript from it. Used
+   * after Stop, after a choice, and by the background poll. Never touches the
+   * transcript while a turn is streaming or another conversation was opened.
+   */
+  const refreshSession = useCallback(async (id: string, signal?: AbortSignal): Promise<AiSessionDetail | null> => {
+    try {
+      const res = await apiFetch(`/api/v1/ai/sessions/${encodeURIComponent(id)}`, { signal });
+      if (!res.ok) return null;
+      const detail = (await res.json()) as AiSessionDetail;
+      if (signal?.aborted || controllerRef.current || sessionIdRef.current !== id) return null;
+      setMessages((prev) => sessionTranscript(detail, prev));
+      return detail;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return null;
+      return null; // the transcript keeps its last value; the next poll retries
+    }
+  }, []);
+
+  const select = useCallback(
+    async (compareId: string, model: string, reason?: CompareReason | null): Promise<boolean> => {
+      const id = sessionIdRef.current;
+      if (!id || !compareId || controllerRef.current || selectingRef.current) return false;
+      selectingRef.current = true;
+      setSelecting(model);
+      setSelectError(null);
+      try {
+        const res = await apiFetch(
+          `/api/v1/ai/sessions/${encodeURIComponent(id)}/select`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ compare_id: compareId, model, reason: reason ?? null }),
+          },
+          // A choice is not idempotent across models; never replay it blindly.
+          { retries: 0 },
+        );
+        if (!res.ok) {
+          const detail = await readDetail(res);
+          const code =
+            res.status === 404
+              ? "session_not_found"
+              : res.status === 403
+                ? "forbidden"
+                : res.status === 409
+                  ? detail === "compare stale"
+                    ? "compare_stale"
+                    : detail === "compare already selected"
+                      ? "compare_selected"
+                      : "session_busy"
+                  : res.status === 422
+                    ? "compare_unselectable"
+                    : `http_${res.status}`;
+          setSelectError({
+            code,
+            message: detail || res.statusText,
+            traceId: res.headers.get("X-Trace-ID") ?? undefined,
+          });
+          // Stale / already chosen elsewhere / no longer selectable (422): the
+          // server's view has moved on, so show it. The error line stays.
+          if ((res.status === 409 && code !== "session_busy") || res.status === 422) await refreshSession(id);
+          return false;
+        }
+        await refreshSession(id);
+        setUsage(null);
+        onTurnEndRef.current?.();
+        return true;
+      } catch (err) {
+        setSelectError({ code: "network", message: err instanceof Error ? err.message : String(err) });
+        return false;
+      } finally {
+        selectingRef.current = false;
+        setSelecting(null);
+      }
+    },
+    [refreshSession],
+  );
 
   const resumeSession = useCallback(
     async (id: string, signal?: AbortSignal): Promise<AiSessionDetail | null> => {
@@ -184,8 +336,9 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
         }
         const detail = (await res.json()) as AiSessionDetail;
         if (signal?.aborted || controllerRef.current) return null;
-        setMessages(mapSessionMessages(detail.messages));
+        setMessages(sessionTranscript(detail));
         setError(null);
+        setSelectError(null);
         setUsage(null);
         setSessionId(detail.session.session_id);
         return detail;
@@ -202,25 +355,70 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
   );
 
   const send = useCallback(
-    async (message: string, model: AiModel) => {
+    async (message: string, model: AiModel, compareModels?: readonly AiModel[]) => {
       const question = message.trim();
       if (!question || controllerRef.current || loadingRef.current) return;
+      const runModels = compareModels && compareModels.length > 0 ? [...compareModels] : null;
 
       const controller = new AbortController();
       controllerRef.current = controller;
       setStreaming(true);
       setError(null);
+      setSelectError(null);
 
       const assistantId = newId();
       setMessages((prev) => [
         ...prev,
         { id: newId(), role: "user", text: question, tools: [] },
-        { id: assistantId, role: "assistant", text: "", model, tools: [] },
+        runModels
+          ? { id: assistantId, role: "assistant", text: "", tools: [], compare: newCompare(runModels, Date.now()) }
+          : { id: assistantId, role: "assistant", text: "", model, tools: [] },
       ]);
+      if (runModels) setUsage(null);
 
       // Declared outside `try` so the catch block can flush what was buffered
       // before an abort or a network error.
       const textBufferRef: { current: { flush: () => void } | null } = { current: null };
+
+      // Compare turn: one delta buffer per run, so each column's text is
+      // coalesced per animation frame on its own and a fast model does not
+      // force a re-render of the others.
+      const runBuffers = new Map<string, DeltaBuffer>();
+      const runUsage = new Map<string, TurnUsage>();
+      const patchCompare = (fn: (c: AiCompare) => AiCompare) => {
+        patchAssistant(assistantId, (m) => {
+          if (!m.compare) return m;
+          const next = fn(m.compare);
+          return next === m.compare ? m : { ...m, compare: next };
+        });
+      };
+      const patchRun = (run: string, fn: (r: CompareRun) => CompareRun) => {
+        patchCompare((c) => updateRun(c, run, fn));
+      };
+      const runBuffer = (run: string): DeltaBuffer => {
+        let buf = runBuffers.get(run);
+        if (!buf) {
+          buf = createDeltaBuffer((chunk) => patchRun(run, (r) => appendRunText(r, chunk)));
+          runBuffers.set(run, buf);
+        }
+        return buf;
+      };
+      const flushRuns = () => {
+        for (const buf of runBuffers.values()) buf.flush();
+      };
+      let compareResolved = false;
+      // The stream ended without the turn's verdict. With a session id the
+      // server is asked for it (and polled while it is still finishing);
+      // without one nothing was ever stored, so the turn is closed locally.
+      const detachCompare = () => {
+        const sid = sessionIdRef.current;
+        if (sid) {
+          patchCompare((c) => ({ ...c, detached: true }));
+          compareRefreshRef.current = sid;
+        } else {
+          patchCompare((c) => applyCompareResult(c, { state: "void" }));
+        }
+      };
 
       const fail = (err: TurnError) => {
         setError(err);
@@ -233,7 +431,16 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
           {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-            body: JSON.stringify({ session_id: sessionId, message: question, model }),
+            // The single-model body is unchanged: `compare_models` is absent,
+            // not null, so that request stays byte-identical (02 §19).
+            body: runModels
+              ? JSON.stringify({
+                  session_id: sessionId,
+                  message: question,
+                  model: runModels[0],
+                  compare_models: runModels,
+                })
+              : JSON.stringify({ session_id: sessionId, message: question, model }),
             signal: controller.signal,
           },
           // No timeout (a deep analysis can run for minutes) and no retry (a
@@ -244,13 +451,9 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
         if (!res.ok || !res.body) {
           // 403 = module not granted (never 401 — see lib/fetch.ts). Anything
           // else is surfaced with its status so the trace can be found.
-          let detail = "";
-          try {
-            const body = (await res.json()) as { detail?: unknown };
-            if (typeof body.detail === "string") detail = body.detail;
-          } catch {
-            /* non-JSON body */
-          }
+          const detail = await readDetail(res);
+          // Refused before the stream started: no run ever existed.
+          if (runModels) patchAssistant(assistantId, (m) => ({ ...m, compare: undefined }));
           if (res.status === 404) {
             // The conversation we were continuing is gone (deleted in another
             // tab, or never ours). Forget the id so the next question starts
@@ -264,11 +467,18 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
                 : res.status === 404
                   ? "session_not_found"
                   : res.status === 409
-                    ? "session_busy"
+                    ? detail === "compare pending"
+                      ? "compare_pending"
+                      : "session_busy"
                     : `http_${res.status}`,
             message: detail || res.statusText,
             traceId: res.headers.get("X-Trace-ID") ?? undefined,
           });
+          if (res.status === 409 && detail === "compare pending" && sessionId) {
+            // The pending turn was created elsewhere (another tab); show it,
+            // since choosing is the only way forward.
+            compareRefreshRef.current = sessionId;
+          }
           return;
         }
 
@@ -287,13 +497,79 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
         });
         textBufferRef.current = textBuffer;
 
+        // Events of a compare turn that carry `run` belong to one column.
+        const handleRun = (run: string, event: string, payload: unknown) => {
+          if (event === "text") {
+            const delta = (payload as TextEvent).delta;
+            if (delta) runBuffer(run).push(delta);
+            return;
+          }
+          // Flush first so a badge or an error never overtakes the text that
+          // preceded it on the wire.
+          runBuffers.get(run)?.flush();
+          patchCompare((c) => applyCompareRunEvent(c, run, event, payload));
+          if (event === "usage") {
+            const u = payload as Partial<TurnUsage>;
+            runUsage.set(run, {
+              input_tokens: u.input_tokens ?? 0,
+              output_tokens: u.output_tokens ?? 0,
+              cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+              cost_usd: u.cost_usd ?? null,
+            });
+            setUsage(sumUsage([...runUsage.values()]));
+          }
+        };
+
         const handle = (event: string, data: string) => {
           const frame = { event, data };
+          if (runModels) {
+            const payload = parseFrameJson<unknown>(frame);
+            const run = runOf(payload);
+            if (run !== null) {
+              handleRun(run, event, payload);
+              return;
+            }
+            // No `run`: the event is about the whole turn.
+            flushRuns();
+            if (event === "compare") {
+              compareResolved = true;
+              patchCompare((c) => applyCompareResult(c, payload));
+              const state = (payload as { state?: string } | null)?.state;
+              if (state !== "pending") {
+                const err: TurnError = { code: "compare_failed", message: "" };
+                setError(err);
+                patchAssistant(assistantId, (m) => (m.error ? m : { ...m, error: err }));
+              }
+              return;
+            }
+            if (event === "error") {
+              const p = payload as ErrorEvent | null;
+              const err: TurnError = { code: p?.code ?? "internal", message: p?.message ?? "", traceId: p?.trace_id };
+              compareResolved = true;
+              setError(err);
+              // Refused up front (quota / compare_busy): nothing ran, so the
+              // message is a plain failed answer. Otherwise keep what the
+              // runs produced and close the turn as void.
+              patchAssistant(assistantId, (m) => {
+                if (!m.compare) return { ...m, error: err };
+                if (compareIsUntouched(m.compare)) return { ...m, error: err, compare: undefined };
+                return { ...m, error: err, compare: applyCompareResult(m.compare, { state: "void" }) };
+              });
+              return;
+            }
+          }
           if (event !== "text") textBuffer.flush();
           switch (event) {
             case "init": {
               const p = parseFrameJson<InitEvent>(frame);
-              if (p?.session_id) setSessionId(p.session_id);
+              if (p?.session_id) {
+                setSessionId(p.session_id);
+                sessionIdRef.current = p.session_id;
+              }
+              if (runModels && p?.compare?.compare_id) {
+                const compareId = p.compare.compare_id;
+                patchCompare((c) => ({ ...c, compareId }));
+              }
               break;
             }
             case "text": {
@@ -372,23 +648,103 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
         for (const f of parser.push(decoder.decode())) handle(f.event, f.data);
         for (const f of parser.flush()) handle(f.event, f.data);
         textBuffer.flush();
+        flushRuns();
+        if (runModels && !compareResolved) {
+          // The stream closed without a verdict (proxy cut, worker restart).
+          // The server may still be finishing; ask it instead of guessing.
+          detachCompare();
+        }
       } catch (err) {
         // Whatever was buffered before the stream broke is still the model's
         // answer; show it before the stop / error marker.
         textBufferRef.current?.flush();
+        flushRuns();
         if (err instanceof DOMException && err.name === "AbortError") {
           patchAssistant(assistantId, (m) => ({ ...m, stopped: true }));
         } else {
           fail({ code: "network", message: err instanceof Error ? err.message : String(err) });
         }
+        if (runModels && !compareResolved) {
+          // Stop / disconnect: the server keeps draining the runs for up to
+          // 120s and then stores whatever finished (02 §20). Its answer comes
+          // from `pending_compare`, not from this stream.
+          detachCompare();
+        }
       } finally {
         controllerRef.current = null;
         setStreaming(false);
         onTurnEndRef.current?.();
+        const refreshId = compareRefreshRef.current;
+        compareRefreshRef.current = null;
+        if (refreshId) void refreshSession(refreshId);
       }
     },
-    [patchAssistant, sessionId],
+    [patchAssistant, refreshSession, sessionId],
   );
+
+  // The open conversation's unresolved compare turn, if any. Always the last
+  // assistant message: nothing can be asked after it until it is resolved.
+  const pendingCompare = useMemo<AiCompare | null>(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const c = messages[i].compare;
+      if (c) return isOpenCompare(c) ? c : null;
+      if (messages[i].role === "assistant") return null;
+    }
+    return null;
+  }, [messages]);
+
+  // A compare turn the server is finishing without us (after Stop, or found
+  // `running` on resume): poll the session until it is no longer running.
+  // Hidden tabs skip the tick and catch up at once on return (CLAUDE.md).
+  const pollingCompareId =
+    !streaming && sessionId && pendingCompare?.state === "running" ? pendingCompare.compareId || "?" : null;
+  const pollStartedAt = pendingCompare?.startedAt;
+  useEffect(() => {
+    if (!pollingCompareId || !sessionId) return;
+    const id = sessionId;
+    const deadline = (pollStartedAt ?? Date.now()) + COMPARE_POLL_MAX_MS;
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const giveUp = () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+      // The worker is presumed dead; release the conversation locally. The
+      // server voids the stale turn on the next question.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.compare && m.compare.state === "running"
+            ? { ...m, error: { code: "incomplete", message: "" }, compare: applyCompareResult(m.compare, { state: "void" }) }
+            : m,
+        ),
+      );
+    };
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      const expired = Date.now() > deadline;
+      controller?.abort();
+      controller = new AbortController();
+      const { signal } = controller;
+      void refreshSession(id, signal).then((detail) => {
+        if (signal.aborted) return;
+        if (detail && detail.pending_compare?.state !== "running") {
+          // The turn ended while we were away: quota and the list moved too.
+          onTurnEndRef.current?.();
+        } else if (expired) {
+          giveUp();
+        }
+      });
+    };
+    timer = setInterval(tick, COMPARE_POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      controller?.abort();
+    };
+  }, [pollingCompareId, pollStartedAt, sessionId, refreshSession]);
 
   return {
     messages,
@@ -399,6 +755,10 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
     loadingSession,
     send,
     stop,
+    pendingCompare,
+    selecting,
+    selectError,
+    select,
     resumeSession,
     newConversation,
   };

@@ -1,18 +1,23 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   IconArrowUp,
+  IconChevronRight,
   IconHistory,
   IconMessageChatbot,
   IconPlayerStopFilled,
 } from "@tabler/icons-react"
 
 import { AiStatusBar, type TodayUsage } from "@/components/ai/AiStatusBar"
+import { CompareBlock } from "@/components/ai/CompareBlock"
+import { CompareModelPicker } from "@/components/ai/CompareModelPicker"
+import { ErrorLine } from "@/components/ai/ErrorLine"
 import { SessionList } from "@/components/ai/SessionList"
 import { SourceBadge } from "@/components/ai/SourceBadge"
 import { MarkdownMessage } from "@/components/ai/MarkdownMessage"
 import { useI18n } from "@/components/i18n-provider"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -21,8 +26,17 @@ import {
   useAiTurn,
   type AiMessage,
   type AiModel,
-  type TurnError,
 } from "@/hooks/useAiTurn"
+import { readFilterState, useFilterPersist } from "@/hooks/useFilterPersist"
+import {
+  COMPARE_REASONS,
+  compareModelsValid,
+  isOpenCompare,
+  normalizeCompareModels,
+  sumUsage,
+  type AiCompare,
+  type CompareReason,
+} from "@/lib/ai-compare"
 import {
   readStoredSessionId,
   sessionModel,
@@ -54,6 +68,23 @@ import { cn } from "@/lib/utils"
  * conversation lives in sessionStorage — tab-scoped on purpose: a refresh
  * comes back to the same investigation, a new tab starts clean, and nothing
  * about *what* was being investigated is stored as a preference.
+ *
+ * Compare mode (OPT-0076): a labelled switch in the composer, off by default.
+ * Off, the page is the one described above. On, the model picker becomes a
+ * 2–3 model multi-select and a question fans out to all of them; the answers
+ * render side by side in a block that uses the full content width (see
+ * components/ai/CompareBlock for the one layout rule). Two consequences live
+ * here:
+ *   - the history column collapses to its icon whenever the switch is on or
+ *     the open conversation has an unresolved compare turn — at 1280 / 1440
+ *     its 256px are the difference between one column and two;
+ *   - while a compare turn is unresolved the composer is replaced by a notice
+ *     with one button per selectable answer. The server refuses any question
+ *     until one is chosen, so that holds even with the switch turned off.
+ * The switch and the model set are a "how I look at data" preference and are
+ * kept in localStorage (`AI_ASSISTANT_MAIN_FILTERS_V1`). They are deliberately
+ * NOT in the view-profiles manifest: a profile can be claimed by a colleague,
+ * and claiming one must not silently double their quota spend.
  */
 
 // The DashboardLayout wrapper is a plain block with `pt-4` (1rem) under a
@@ -61,10 +92,30 @@ import { cn } from "@/lib/utils"
 const PAGE_HEIGHT = "h-[calc(100svh-var(--header-height)-1rem)]"
 const COLUMN = "mx-auto w-full max-w-3xl"
 
+const FILTERS_KEY = "AI_ASSISTANT_MAIN_FILTERS_V1"
+type AiAssistantFilters = { compare: boolean; compareModels: string[] }
+const FILTER_DEFAULTS: AiAssistantFilters = { compare: false, compareModels: [] }
+
+/**
+ * The stored model set, sanitised. Someone who never used compare mode has
+ * nothing stored; their pair is decided at the first switch-on, when the
+ * single model they are using can stand in for "the other model used last".
+ */
+function loadCompareModels(stored: AiAssistantFilters): AiModel[] {
+  const raw: unknown = stored.compareModels
+  if (!stored.compare && !(Array.isArray(raw) && raw.length > 0)) return []
+  return normalizeCompareModels(raw, AI_MODELS) as AiModel[]
+}
+
 export default function AiAssistantPage() {
   const { t } = useI18n()
   const [draft, setDraft] = useState("")
   const [model, setModel] = useState<AiModel>(DEFAULT_AI_MODEL)
+  const [storedFilters] = useState(() => readFilterState(FILTERS_KEY, FILTER_DEFAULTS))
+  const [compareOn, setCompareOn] = useState(() => storedFilters.compare === true)
+  const [compareModels, setCompareModels] = useState<AiModel[]>(() => loadCompareModels(storedFilters))
+  useFilterPersist<AiAssistantFilters>(FILTERS_KEY, FILTER_DEFAULTS, { compare: compareOn, compareModels })
+  const compareReady = compareModelsValid(compareModels)
   const [today, setToday] = useState<TodayUsage | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
@@ -113,8 +164,21 @@ export default function AiAssistantPage() {
     return () => controller.abort()
   }, [fetchSessions])
 
-  const { messages, streaming, usage, sessionId, loadingSession, send, stop, resumeSession, newConversation } =
-    useAiTurn({
+  const {
+    messages,
+    streaming,
+    usage,
+    sessionId,
+    loadingSession,
+    send,
+    stop,
+    pendingCompare,
+    selecting,
+    selectError,
+    select,
+    resumeSession,
+    newConversation,
+  } = useAiTurn({
       onTurnEnd: () => {
         fetchToday()
         // The first turn gives the row its title; later turns move it to the top.
@@ -122,6 +186,11 @@ export default function AiAssistantPage() {
       },
     })
   const hasConversation = messages.length > 0
+  // An unresolved compare turn owns the conversation: nothing can be asked
+  // until an answer is chosen. Independent of the switch on purpose.
+  const awaitingChoice = pendingCompare !== null && !streaming
+  // Compare needs the width: the history column gives way to its icon.
+  const wideLayout = compareOn || pendingCompare !== null
 
   // Keep the tab's "current conversation" in step with the hook. Only real
   // ids are written here; clearing is explicit (startNew / delete-active) —
@@ -223,10 +292,58 @@ export default function AiAssistantPage() {
 
   const submit = useCallback(() => {
     const q = draft.trim()
-    if (!q || streaming) return
+    if (!q || streaming || pendingCompare) return
+    if (compareOn && !compareReady) return
     setDraft("")
-    void send(q, model)
-  }, [draft, streaming, send, model])
+    if (compareOn) void send(q, compareModels[0], compareModels)
+    else void send(q, model)
+  }, [draft, streaming, pendingCompare, compareOn, compareReady, compareModels, send, model])
+
+  const toggleCompare = useCallback(
+    (on: boolean) => {
+      setCompareOn(on)
+      // First switch-on (or a set left below two): gpt-5.6-terra plus the
+      // model in use, falling back to grok-4.7.
+      if (on && !compareModelsValid(compareModels)) {
+        setCompareModels(normalizeCompareModels(compareModels, AI_MODELS, model) as AiModel[])
+      }
+    },
+    [compareModels, model],
+  )
+
+  const chooseAnswer = useCallback(
+    (compareId: string, chosen: string) => void select(compareId, chosen),
+    [select],
+  )
+  const giveReason = useCallback(
+    (compareId: string, chosen: string, reason: CompareReason) => void select(compareId, chosen, reason),
+    [select],
+  )
+
+  // "This turn" in the status line: a compare turn's cost is the sum of its runs.
+  const lastCompare = useMemo<AiCompare | null>(() => {
+    const last = messages.length ? messages[messages.length - 1] : null
+    return last?.compare && last.compare.state !== "selected" ? last.compare : null
+  }, [messages])
+  const compareUsage = useMemo(
+    () => (lastCompare ? sumUsage(lastCompare.runs.map((r) => r.usage)) : null),
+    [lastCompare],
+  )
+  const statusBar = (
+    <AiStatusBar
+      model={model}
+      lead={
+        compareOn
+          ? compareReady
+            ? t("ai.compare.statusLine", { n: compareModels.length })
+            : t("ai.compare.needTwo")
+          : undefined
+      }
+      turnUsage={lastCompare ? compareUsage : usage}
+      turnRuns={lastCompare ? lastCompare.runs.length : 0}
+      today={today}
+    />
+  )
 
   const startNew = useCallback(() => {
     newConversation()
@@ -248,7 +365,9 @@ export default function AiAssistantPage() {
       onDelete={deleteSession}
     />
   )
-  // Narrow screens: the same list behind one icon, in a sheet.
+  // The same list behind one icon, in a sheet: on narrow screens always, and
+  // at every width while compare mode needs the room (`wideLayout`), where the
+  // icon moves from the composer to the top-left of the conversation.
   const historyToggle = showHistory ? (
     <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
       <SheetTrigger asChild>
@@ -257,7 +376,7 @@ export default function AiAssistantPage() {
           size="icon"
           aria-label={t("ai.history")}
           title={t("ai.history")}
-          className="size-8 text-muted-foreground md:hidden"
+          className={cn("size-8 text-muted-foreground", !wideLayout && "md:hidden")}
         >
           <IconHistory className="h-4 w-4" />
         </Button>
@@ -267,6 +386,59 @@ export default function AiAssistantPage() {
         {historyList}
       </SheetContent>
     </Sheet>
+  ) : null
+
+  const compareSwitch = (
+    <label
+      title={t("ai.compare.switchHint")}
+      className="flex shrink-0 cursor-pointer items-center gap-1.5 pl-1.5 text-xs text-muted-foreground"
+    >
+      <Switch
+        checked={compareOn}
+        onCheckedChange={toggleCompare}
+        disabled={streaming}
+        aria-label={t("ai.compare.switchHint")}
+      />
+      <span className={cn(compareOn && "text-foreground")}>{t("ai.compare.switchLabel")}</span>
+    </label>
+  )
+
+  // Replaces the composer while a compare turn is unresolved (design sketch
+  // "待选择态"). The buttons are outline: the filled one is in each column.
+  const pendingNotice = pendingCompare ? (
+    <div className="rounded-2xl border bg-card px-4 py-3 shadow-sm" role="status">
+      <p className="text-sm">
+        {pendingCompare.state === "pending"
+          ? t("ai.compare.pendingNotice", { n: pendingCompare.selectable.length })
+          : t("ai.compare.pendingRunning")}
+      </p>
+      {pendingCompare.state === "pending" && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">{t("ai.compare.continueUsing")}</span>
+          {pendingCompare.selectable.map((m) => (
+            <Button
+              key={m}
+              variant="outline"
+              size="sm"
+              disabled={selecting !== null}
+              onClick={() => chooseAnswer(pendingCompare.compareId, m)}
+              className="h-7 font-mono text-xs"
+            >
+              {m}
+            </Button>
+          ))}
+        </div>
+      )}
+      {selectError && (
+        <div className="mt-2">
+          <ErrorLine error={selectError} />
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">{t("ai.compare.switchNoEffect")}</span>
+        {compareSwitch}
+      </div>
+    </div>
   ) : null
 
   const composer = (
@@ -289,8 +461,16 @@ export default function AiAssistantPage() {
         className="max-h-48 min-h-6 resize-none overflow-y-auto border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 md:text-sm"
       />
       <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-        {historyToggle}
+        <div className="flex min-w-0 items-center gap-1">
+        {!wideLayout && historyToggle}
+        {compareOn ? (
+          <CompareModelPicker
+            models={AI_MODELS}
+            value={compareModels}
+            onChange={(next) => setCompareModels(next as AiModel[])}
+            disabled={streaming}
+          />
+        ) : (
         <Select value={model} onValueChange={(v) => setModel(v as AiModel)} disabled={streaming}>
           <SelectTrigger
             size="sm"
@@ -317,6 +497,8 @@ export default function AiAssistantPage() {
             </SelectItem>
           </SelectContent>
         </Select>
+        )}
+        {compareSwitch}
         </div>
         {streaming ? (
           <Button
@@ -333,9 +515,9 @@ export default function AiAssistantPage() {
           <Button
             size="icon"
             onClick={submit}
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || (compareOn && !compareReady)}
             aria-label={t("ai.send")}
-            title={t("ai.send")}
+            title={compareOn && !compareReady ? t("ai.compare.needTwo") : t("ai.send")}
             className="size-8 rounded-full"
           >
             <IconArrowUp className="h-4 w-4" />
@@ -348,43 +530,58 @@ export default function AiAssistantPage() {
   // Wide screens: the history column sits left of the conversation once there
   // is anything to list. With no sessions the page is exactly the slice-1
   // empty state — nothing to explain, nothing to navigate.
-  const historyColumn = showHistory ? (
-    <aside className="hidden w-60 shrink-0 py-3 md:block">{historyList}</aside>
-  ) : null
+  const historyColumn =
+    showHistory && !wideLayout ? (
+      <aside className="hidden w-60 shrink-0 py-3 md:block">{historyList}</aside>
+    ) : null
 
   const main = !hasConversation ? (
     // Empty state: the composer alone, vertically centred, the way a fresh
     // ChatGPT / Gemini window opens — product name above, status line below.
-    <div className="flex min-w-0 flex-1 flex-col items-center justify-center pb-16">
+    <div className="relative flex min-w-0 flex-1 flex-col items-center justify-center pb-16">
+      {wideLayout && historyToggle && <div className="absolute left-0 top-0">{historyToggle}</div>}
       <div className={cn(COLUMN, "flex flex-col gap-5")}>
         <h1 className="text-center text-2xl font-medium tracking-tight">{t("ai.greeting")}</h1>
         {composer}
-        <div className="flex justify-center px-1">
-          <AiStatusBar model={model} turnUsage={usage} today={today} />
-        </div>
+        <div className="flex justify-center px-1">{statusBar}</div>
       </div>
     </div>
   ) : (
     <div className="flex min-w-0 flex-1 flex-col">
-      {/* Transcript — scrolls on its own; the composer below never moves. */}
+      {wideLayout && historyToggle && <div className="flex h-9 shrink-0 items-center">{historyToggle}</div>}
+      {/* Transcript — scrolls on its own; the composer below never moves.
+          Rows centre themselves in the reading column; a compare block is the
+          one thing that takes the full width. */}
       <div
         ref={transcriptRef}
         onScroll={onTranscriptScroll}
         className="min-h-0 flex-1 overflow-y-auto"
       >
-        <div className={cn(COLUMN, "flex flex-col gap-6 py-4")}>
+        <div className="flex flex-col gap-6 py-4">
           {messages.map((m) => (
-            <MessageRow key={m.id} message={m} streaming={streaming} />
+            <MessageRow
+              key={m.id}
+              message={m}
+              streaming={streaming}
+              selecting={selecting}
+              onSelect={chooseAnswer}
+              onReason={giveReason}
+            />
           ))}
         </div>
       </div>
 
-      {/* Composer + one muted status line */}
+      {/* Composer (or the pending-choice notice) + one muted status line */}
       <div className={cn(COLUMN, "flex flex-col gap-2 pb-4 pt-2")}>
-        {composer}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-          <AiStatusBar model={model} turnUsage={usage} today={today} />
-        </div>
+        {awaitingChoice ? pendingNotice : composer}
+        {/* A refused choice (stale / no longer selectable) ends the pending
+            state, so its explanation has to outlive the notice. */}
+        {selectError && !awaitingChoice && (
+          <div className="px-1">
+            <ErrorLine error={selectError} />
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">{statusBar}</div>
       </div>
     </div>
   )
@@ -412,19 +609,30 @@ function ModelOption({ label, desc }: { label: string; desc: string }) {
 
 // Memoised on purpose: while streaming, only the last assistant message object
 // changes per frame; every earlier row keeps the same `message` reference and
-// must not re-render. `streaming` flips only at turn boundaries.
+// must not re-render. `streaming` flips only at turn boundaries, `selecting`
+// only around a choice, and the two callbacks are stable.
 const MessageRow = memo(function MessageRow({
   message,
   streaming,
+  selecting,
+  onSelect,
+  onReason,
 }: {
   message: AiMessage
   streaming: boolean
+  selecting: string | null
+  onSelect: (compareId: string, model: string) => void
+  onReason: (compareId: string, model: string, reason: CompareReason) => void
 }) {
   const { t } = useI18n()
+  const compare = message.compare
+  // A turn where no run was selectable has nothing but its runs to show, so
+  // they start expanded; the alternatives of a chosen answer start folded.
+  const [othersOpen, setOthersOpen] = useState(compare?.state === "void")
 
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
+      <div className={cn(COLUMN, "flex justify-end")}>
         <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-muted px-4 py-2 text-sm">
           {message.text}
         </div>
@@ -432,49 +640,133 @@ const MessageRow = memo(function MessageRow({
     )
   }
 
+  // Still generating, or waiting for a choice: the runs are the answer.
+  if (compare && isOpenCompare(compare)) {
+    return <CompareBlock compare={compare} mode="choose" selecting={selecting} onSelect={onSelect} />
+  }
+
   const isLive = streaming && !message.error && !message.stopped
   const showThinking = isLive && message.text === "" && message.tools.every((tl) => tl.ok !== null)
+  const chosen = compare?.state === "selected" ? compare : null
+  const others = compare && compare.runs.length > 0 ? compare : null
 
   return (
-    <div className="flex gap-3">
-      <div className="mt-0.5 shrink-0 rounded-lg bg-muted p-1.5">
-        <IconMessageChatbot className="h-4 w-4 text-muted-foreground" />
+    <div>
+      <div className={cn(COLUMN, "flex gap-3")}>
+        <div className="mt-0.5 shrink-0 rounded-lg bg-muted p-1.5">
+          <IconMessageChatbot className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          {message.text && (
+            <MarkdownMessage text={message.text} />
+          )}
+          {showThinking && <p className="text-sm text-muted-foreground">{t("ai.thinking")}</p>}
+          {message.tools.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {message.tools.map((tl) => (
+                <SourceBadge key={tl.key} tool={tl} />
+              ))}
+            </div>
+          )}
+          {message.stopped && <p className="text-xs text-muted-foreground">{t("ai.stopped")}</p>}
+          {message.error && <ErrorLine error={message.error} />}
+          {(message.model || chosen) && (
+            // Which model said this — on every answer, live or from history.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                {message.model && <span className="font-mono">{message.model}</span>}
+                {chosen && (
+                  <>
+                    {message.model ? " · " : ""}
+                    {t("ai.compare.chosenFrom", { n: chosen.runs.length + 1 })}
+                  </>
+                )}
+              </span>
+              {chosen && message.model && (
+                <ReasonRow
+                  compare={chosen}
+                  model={message.model}
+                  disabled={selecting !== null || streaming}
+                  onReason={onReason}
+                />
+              )}
+            </div>
+          )}
+          {others && (
+            <button
+              type="button"
+              onClick={() => setOthersOpen((v) => !v)}
+              aria-expanded={othersOpen}
+              className="inline-flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <IconChevronRight className={cn("size-3.5 transition-transform", othersOpen && "rotate-90")} />
+              {othersOpen
+                ? t("ai.compare.hideOthers")
+                : t(chosen ? "ai.compare.showOthers" : "ai.compare.showRuns", { n: others.runs.length })}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="min-w-0 flex-1 space-y-2">
-        {message.text && (
-          <MarkdownMessage text={message.text} />
-        )}
-        {showThinking && <p className="text-sm text-muted-foreground">{t("ai.thinking")}</p>}
-        {message.tools.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {message.tools.map((tl) => (
-              <SourceBadge key={tl.key} tool={tl} />
-            ))}
-          </div>
-        )}
-        {message.stopped && <p className="text-xs text-muted-foreground">{t("ai.stopped")}</p>}
-        {message.error && <ErrorLine error={message.error} />}
-      </div>
+      {others && othersOpen && (
+        // Same k-column rule as the live block; read-only, no select buttons.
+        <div className="mt-3">
+          <CompareBlock compare={others} mode="alternatives" />
+        </div>
+      )}
     </div>
   )
 })
 
-function ErrorLine({ error }: { error: TurnError }) {
+/**
+ * "Why this one?" — optional, never blocks. A click re-sends the same choice
+ * with the reason attached (the select endpoint is idempotent, 02 §22). Once
+ * a reason is stored the row reads back as plain text on later visits.
+ */
+function ReasonRow({
+  compare,
+  model,
+  disabled,
+  onReason,
+}: {
+  compare: AiCompare
+  model: string
+  disabled: boolean
+  onReason: (compareId: string, model: string, reason: CompareReason) => void
+}) {
   const { t } = useI18n()
-  // The locale table is the whitelist: `t()` returns the key path itself for
-  // a code it does not know, so a new backend code needs an i18n entry and
-  // nothing else. Unknown codes fall back to the server's message plus the
-  // raw code (always shown below) and the trace id.
-  const key = `ai.errors.${error.code}`
-  const translated = t(key)
-  const text = translated !== key ? translated : error.message || error.code
-  return (
-    <p className={cn("text-xs", "text-destructive/80")}>
-      {text}
-      <span className="ml-2 font-mono text-muted-foreground">
-        {error.code}
-        {error.traceId ? ` · trace ${error.traceId}` : ""}
+  const [stored] = useState<CompareReason | null>(compare.reason ?? null)
+  const [picked, setPicked] = useState<CompareReason | null>(compare.reason ?? null)
+
+  if (stored) {
+    return (
+      <span>
+        {t("ai.compare.reasonLabel")}
+        {t(`ai.compare.reasons.${stored}`)}
       </span>
-    </p>
+    )
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      <span>{t("ai.compare.whyChosen")}</span>
+      {COMPARE_REASONS.map((r) => (
+        <button
+          key={r}
+          type="button"
+          disabled={disabled}
+          aria-pressed={picked === r}
+          onClick={() => {
+            if (picked === r) return
+            setPicked(r)
+            onReason(compare.compareId, model, r)
+          }}
+          className={cn(
+            "rounded-full border px-2 py-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60",
+            picked === r ? "border-transparent bg-secondary text-foreground" : "border-border",
+          )}
+        >
+          {t(`ai.compare.reasons.${r}`)}
+        </button>
+      ))}
+    </span>
   )
 }
