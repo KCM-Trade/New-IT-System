@@ -23,6 +23,7 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
+| [OPT-0076](./items/OPT-0076-ai-agent-compare-mode.md) | P2 | mixed | L | AI agent 多模型对比模式：一次提问并发 2–3 个模型、并排显示、用户选答案；契约 02 §19–§24，plan 与布局在 item |
 | [OPT-0077](./items/OPT-0077-ai-agent-model-registry-hardening.md) | P2 | mixed | M | AI agent 模型注册表 hardening（OPT-0075 冷审）：逻辑名→部署名注册表、`GET /ai/models`、schema 展开在请求构造处、请求级超时 + 报错带模型名 |
 | [OPT-0073](./items/OPT-0073-ai-agent-skills-hardening.md) | P2 | backend | M | AI agent Skills hardening（OPT-0069 冷审 #5–#11）：token 上限/压缩、审计粒度、sqlglot 测试、MAF 锁定、skill 审核、事件白名单 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，工具超时后线程仍跑完）；原第 2 项「老工具每轮上限」已作废（上限 09-28 取消） |
@@ -42,7 +43,6 @@
 
 | ID | 区域 | 标题 | 备注 |
 |----|------|------|------|
-| [OPT-0076](./items/OPT-0076-ai-agent-compare-mode.md) | mixed | AI agent 多模型对比模式（并发 2–3 个模型、并排显示、用户选答案） | 前置 OPT-0075；会话分叉 / 配额口径 / 缺省模型组合待拍板，调研结论已写进 item |
 | [OPT-0004](./items/OPT-0004-risk-monitor-arch.md) | mixed | Risk-monitor 架构/框架重构 | 太宽，需要先拆 3~5 个子任务（路由分层 / service 抽象 / 配置集中 / 任务调度 …） |
 | [OPT-0018](./items/OPT-0018-cache-layer-audit.md) | mixed | 全链路缓存审计与硬化（HTTP / 应用 / Redis / DB） | 已扫描出 5 条真问题（Redis 无 maxmemory、匿名 volume、PnL/IB hit rate 异常等），audit 完成后拆 3-5 个子 OPT |
 | [OPT-0020](./items/OPT-0020-client-return-rate-risk-signals.md) | mixed | Client Return Rate 加 4 个风控判断列（过夜 / ~~USDT~~ / Sharpe / Consistency） | 剩余 7 列分两 Drop 上线（USDT 已拆到 OPT-0022），复用 OPT-0006 的夜间预计算 SQLite 模式；claim 前需用户审 AC、回答 4 个开放问题 + 先跑过夜 SQL 的预飞行实测 |
