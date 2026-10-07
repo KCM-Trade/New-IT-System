@@ -1,7 +1,7 @@
 """SQLite store for the AI analyst agent (OPT-0064 quota, OPT-0065 sessions).
 
 ``backend/data/ai_agent.db`` — a NEW file rather than more tables in
-``users.db`` (docs/ai-agent/02-contracts.md §6 / §8.2). Three tables:
+``users.db`` (docs/ai-agent/02-contracts.md §6 / §8.2). The tables:
 
   * ``ai_usage_daily`` — per-person daily quota counters (OPT-0064).
   * ``ai_sessions``    — one row per conversation; ``blob`` is the serialised
@@ -11,6 +11,9 @@
   * ``ai_messages``    — the human-readable transcript (user / assistant text,
     tool summaries, usage) for the history list and replay. Never fed to the
     model.
+  * ``ai_compare_turns`` / ``ai_turn_candidates`` — compare mode (OPT-0076,
+    02 §21): one question answered by 2–3 models, held OUTSIDE the two tables
+    above until the user picks one.
 
 Two reasons for keeping all of this out of ``users.db``:
 
@@ -94,6 +97,48 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     UNIQUE(session_id, seq)
 );
 
+-- OPT-0076 (02 §21). A compare turn: one question sent to 2–3 models at once.
+-- While it waits for the user's choice NOTHING is written to ai_messages and
+-- ai_sessions.blob does not move — the question lives here and each model's
+-- answer + context in ai_turn_candidates. backend/data is one bind mount
+-- shared by dev and prod, so code that predates these tables may be running
+-- against this file; to it a pending compare is simply "that turn has not
+-- happened yet" and the conversation stays fully usable. `base_seq` is how
+-- the select step notices that such code moved the conversation on meanwhile.
+-- state: running | pending | selected | void.
+CREATE TABLE IF NOT EXISTS ai_compare_turns (
+    compare_id     TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    user_id        INTEGER NOT NULL,
+    question       TEXT NOT NULL,
+    models_json    TEXT NOT NULL,
+    base_seq       INTEGER NOT NULL,
+    state          TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    selected_model TEXT,
+    selected_at    TEXT,
+    reason         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_compare_session ON ai_compare_turns(session_id, state);
+
+-- `blob` is one model's AgentSession.to_dict(); NULL for a failed run, and
+-- set to NULL on EVERY row of the turn once one candidate has been selected.
+CREATE TABLE IF NOT EXISTS ai_turn_candidates (
+    compare_id  TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    text        TEXT NOT NULL,
+    tools_json  TEXT,
+    usage_json  TEXT,
+    error_code  TEXT,
+    elapsed_ms  INTEGER,
+    blob        TEXT,
+    turns       INTEGER NOT NULL DEFAULT 0,
+    selected    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (compare_id, model)
+);
+
 -- OPT-0065 §12. Daily-refreshed US economic-release calendar (FOMC page +
 -- FRED release dates), read by the agent's get_economic_calendar tool through
 -- the read-only mount. `source` groups rows so one source can be replaced
@@ -168,6 +213,12 @@ _MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # timestamp while a turn is in flight, NULL when idle; a stale claim is
     # taken over by the next turn.
     ("ai_sessions", "turn_started_at", "TEXT"),
+    # OPT-0076 (02 §21). Which model gave an assistant answer (single-model
+    # turns write it too), and which compare turn it was selected from. Both
+    # nullable and deliberately NOT indexed: an index in _SCHEMA on a column
+    # that only exists after these ALTERs would fail on the live file.
+    ("ai_messages", "model", "TEXT"),
+    ("ai_messages", "compare_id", "TEXT"),
 )
 
 
@@ -209,8 +260,9 @@ def get_usage(user_id: int, day_hk: str) -> dict:
     }
 
 
-def increment_turn(user_id: int, day_hk: str) -> None:
-    """Count one turn.
+def increment_turn(user_id: int, day_hk: str, n: int = 1) -> None:
+    """Count one turn — or ``n`` of them: a compare turn is charged one turn
+    per model it fans out to (02 §19).
 
     Called at interception time, i.e. the moment the route decides the turn
     may proceed — not when it finishes. A turn that is forwarded and then dies
@@ -220,9 +272,9 @@ def increment_turn(user_id: int, day_hk: str) -> None:
     """
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO ai_usage_daily (user_id, day_hk, turns) VALUES (?, ?, 1) "
-            "ON CONFLICT(user_id, day_hk) DO UPDATE SET turns = turns + 1",
-            (int(user_id), day_hk),
+            "INSERT INTO ai_usage_daily (user_id, day_hk, turns) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, day_hk) DO UPDATE SET turns = turns + excluded.turns",
+            (int(user_id), day_hk, int(n)),
         )
 
 
@@ -264,9 +316,15 @@ def add_usage(
 
 _SESSION_COLUMNS = "session_id, user_id, title, model, turns, created_at, updated_at"
 
+# 02 §23: does a compare turn on this session wait for the user's choice.
+_PENDING_COMPARE_FLAG = (
+    "EXISTS (SELECT 1 FROM ai_compare_turns c "
+    "WHERE c.session_id = ai_sessions.session_id AND c.state = 'pending') AS pending_compare"
+)
+
 
 def _session_row_to_dict(row: sqlite3.Row) -> dict:
-    return {
+    out = {
         "session_id": row["session_id"],
         "title": row["title"],
         "model": row["model"],
@@ -274,6 +332,9 @@ def _session_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+    if "pending_compare" in row.keys():
+        out["pending_compare"] = bool(row["pending_compare"])
+    return out
 
 
 def get_session_for_turn(session_id: str) -> Optional[dict]:
@@ -341,9 +402,18 @@ def save_session_state(session_id: str, user_id: int, *, blob: Any, turns: int, 
 
 
 # A claim older than this is treated as abandoned: the worker that held it
-# died (deploy, crash) before the finally that clears it. Longer than any turn
-# can legitimately run (TURN_TOTAL_SECONDS = 300 s + the disconnect drain cap).
-TURN_CLAIM_STALE_SECONDS = 6 * 60
+# died (deploy, crash) before the finally that clears it. It MUST exceed the
+# longest a turn can legitimately run — ai_gateway_service.TURN_TOTAL_SECONDS
+# (560 s; the disconnect drain is capped by what is left of that same budget)
+# — or a second tab could take the claim from a turn that is still running.
+# It was 360 until OPT-0076, i.e. below the turn limit. The same figure ages
+# out a compare turn left in `running` by a dead worker.
+TURN_CLAIM_STALE_SECONDS = 12 * 60
+
+# Why claim_turn() refused, as told by turn_refusal(). The values are the
+# route's 409 `detail` strings (02 §19).
+REFUSAL_COMPARE_PENDING = "compare pending"
+REFUSAL_SESSION_BUSY = "session busy"
 
 
 def claim_turn(session_id: str, user_id: int, *, now: Optional[datetime] = None) -> bool:
@@ -354,18 +424,50 @@ def claim_turn(session_id: str, user_id: int, *, now: Optional[datetime] = None)
     used to race: both turns ran against the same blob and the second
     write-back silently dropped the first turn from the model's memory while
     the transcript kept it (cold review #6). Now the second caller gets 409.
+
+    Also False while a compare turn on this session waits for the user's
+    choice (OPT-0076): the next question has to build on ONE of the candidate
+    contexts, and which one is not decided yet. ``turn_refusal`` tells the two
+    refusals apart.
     """
     now = now or datetime.now(timezone.utc)
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     stale_iso = (now - timedelta(seconds=TURN_CLAIM_STALE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _connect() as conn:
+        # A compare turn whose worker died stays `running` forever; void it
+        # here, lazily, so it neither blocks nor lingers. One transaction with
+        # the claim below.
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE ai_compare_turns SET state = 'void', finished_at = ? "
+            "WHERE session_id = ? AND state = 'running' AND created_at < ?",
+            (now_iso, session_id, stale_iso),
+        )
         cur = conn.execute(
             "UPDATE ai_sessions SET turn_started_at = ? "
             "WHERE session_id = ? AND user_id = ? AND deleted_at IS NULL "
-            "AND (turn_started_at IS NULL OR turn_started_at < ?)",
+            "AND (turn_started_at IS NULL OR turn_started_at < ?) "
+            "AND NOT EXISTS (SELECT 1 FROM ai_compare_turns c "
+            "WHERE c.session_id = ai_sessions.session_id AND c.state = 'pending')",
             (now_iso, session_id, int(user_id), stale_iso),
         )
         return cur.rowcount > 0
+
+
+def turn_refusal(session_id: str) -> str:
+    """Why ``claim_turn`` just said no: ``REFUSAL_COMPARE_PENDING`` when a
+    compare turn waits for a choice, otherwise ``REFUSAL_SESSION_BUSY``.
+
+    A separate read after the failed claim rather than a richer return value,
+    so the claim itself stays one atomic UPDATE. Pending wins when both hold
+    (possible only if code that predates compare mode took the claim).
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM ai_compare_turns WHERE session_id = ? AND state = 'pending' LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    return REFUSAL_COMPARE_PENDING if row is not None else REFUSAL_SESSION_BUSY
 
 
 def release_turn(session_id: str, user_id: int) -> None:
@@ -395,8 +497,10 @@ def append_turn_messages(
     tools: list[dict],
     usage: dict,
     error_code: Optional[str],
+    model: Optional[str] = None,
 ) -> None:
     """Append the two transcript rows of one turn (user, then assistant).
+    ``model`` is recorded on the assistant row.
 
     One transaction, ``seq`` read and written inside it, so two concurrent
     turns on the same session (two tabs) cannot collide on the UNIQUE
@@ -420,9 +524,9 @@ def append_turn_messages(
             (session_id, seq, question, now),
         )
         conn.execute(
-            "INSERT INTO ai_messages (session_id, seq, role, text, tools_json, usage_json, error_code, at) "
-            "VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)",
-            (session_id, seq + 1, answer or "", tools_json, usage_json, error_code, now),
+            "INSERT INTO ai_messages (session_id, seq, role, text, tools_json, usage_json, error_code, at, model) "
+            "VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)",
+            (session_id, seq + 1, answer or "", tools_json, usage_json, error_code, now, model),
         )
 
 
@@ -430,7 +534,7 @@ def list_sessions(user_id: int, *, limit: int = 50) -> tuple[list[dict], int]:
     """The caller's live sessions, newest activity first, plus the total count."""
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT {_SESSION_COLUMNS} FROM ai_sessions "
+            f"SELECT {_SESSION_COLUMNS}, {_PENDING_COMPARE_FLAG} FROM ai_sessions "
             "WHERE user_id = ? AND deleted_at IS NULL "
             "ORDER BY updated_at DESC, created_at DESC LIMIT ?",
             (int(user_id), int(limit)),
@@ -448,32 +552,53 @@ def get_session_detail(session_id: str, user_id: int) -> Optional[dict]:
     framework's private format and carries raw tool results."""
     with _connect() as conn:
         row = conn.execute(
-            f"SELECT {_SESSION_COLUMNS} FROM ai_sessions "
+            f"SELECT {_SESSION_COLUMNS}, {_PENDING_COMPARE_FLAG} FROM ai_sessions "
             "WHERE session_id = ? AND user_id = ? AND deleted_at IS NULL",
             (session_id, int(user_id)),
         ).fetchone()
         if row is None:
             return None
         msgs = conn.execute(
-            "SELECT seq, role, text, tools_json, usage_json, error_code, at "
+            "SELECT seq, role, text, tools_json, usage_json, error_code, at, model, compare_id "
             "FROM ai_messages WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
-    return {
-        "session": _session_row_to_dict(row),
-        "messages": [
-            {
-                "seq": int(m["seq"]),
-                "role": m["role"],
-                "text": m["text"],
-                "tools": _loads_or_none(m["tools_json"]),
-                "usage": _loads_or_none(m["usage_json"]),
-                "error_code": m["error_code"],
-                "at": m["at"],
+        # Compare turns behind this transcript (02 §23): the answers that were
+        # not chosen ride along on the assistant row they lost to.
+        outcomes: dict[str, dict] = {}
+        for compare_id in {m["compare_id"] for m in msgs if m["compare_id"]}:
+            turn = conn.execute(
+                "SELECT reason FROM ai_compare_turns WHERE compare_id = ? AND session_id = ?",
+                (compare_id, session_id),
+            ).fetchone()
+            if turn is None:
+                continue
+            outcomes[compare_id] = {
+                "compare_id": compare_id,
+                "reason": turn["reason"],
+                "alternatives": [
+                    _candidate_to_dict(c)
+                    for c in _candidate_rows(conn, compare_id)
+                    if not c["selected"]
+                ],
             }
-            for m in msgs
-        ],
-    }
+        pending = _pending_compare(conn, session_id, int(user_id))
+    messages = []
+    for m in msgs:
+        message = {
+            "seq": int(m["seq"]),
+            "role": m["role"],
+            "text": m["text"],
+            "tools": _loads_or_none(m["tools_json"]),
+            "usage": _loads_or_none(m["usage_json"]),
+            "error_code": m["error_code"],
+            "at": m["at"],
+            "model": m["model"],
+        }
+        if m["compare_id"] in outcomes:
+            message["compare"] = outcomes[m["compare_id"]]
+        messages.append(message)
+    return {"session": _session_row_to_dict(row), "messages": messages, "pending_compare": pending}
 
 
 def _loads_or_none(text: Optional[str]) -> Any:
@@ -545,9 +670,454 @@ def purge_ai_sessions(retention_days: int, *, now: Optional[datetime] = None) ->
         if not ids:
             return 0
         marks = ",".join("?" * len(ids))
+        # Compare turns go with their session (02 §21) — candidates first,
+        # they are keyed by the turn.
+        conn.execute(
+            "DELETE FROM ai_turn_candidates WHERE compare_id IN "
+            f"(SELECT compare_id FROM ai_compare_turns WHERE session_id IN ({marks}))",
+            ids,
+        )
+        conn.execute(f"DELETE FROM ai_compare_turns WHERE session_id IN ({marks})", ids)
         conn.execute(f"DELETE FROM ai_messages WHERE session_id IN ({marks})", ids)
         conn.execute(f"DELETE FROM ai_sessions WHERE session_id IN ({marks})", ids)
     return len(ids)
+
+
+# ── compare mode (OPT-0076, 02 §19–§23) ──────────────────────────────────────
+#
+# Lifecycle of one compare turn:
+#
+#   begin_compare    running   the route holds the session's turn claim
+#   finish_compare   pending   >= 1 selectable candidate; waits for the user
+#                    void      nobody answered; written to ai_messages as a
+#                              failed turn right away
+#   select_candidate selected  the chosen blob becomes the session's context
+#                              and the transcript rows are written, in ONE
+#                              transaction; every candidate blob is dropped
+#
+# Until `selected` (or `void` from finish) ai_messages and ai_sessions.blob are
+# not touched — see the comment on the tables in _SCHEMA for why.
+
+COMPARE_RUNNING = "running"
+COMPARE_PENDING = "pending"
+COMPARE_SELECTED = "selected"
+COMPARE_VOID = "void"
+
+# error_code on the assistant row of a compare turn in which no model produced
+# a selectable answer, and on a run the worker stopped waiting for.
+ERROR_COMPARE_FAILED = "compare_failed"
+ERROR_RUN_INCOMPLETE = "incomplete"
+
+# select_candidate() outcomes.
+SELECT_OK = "selected"
+SELECT_UNCHANGED = "unchanged"
+SELECT_NOT_FOUND = "not_found"
+SELECT_BUSY = "busy"
+SELECT_ALREADY = "already_selected"
+SELECT_STALE = "stale"
+SELECT_NOT_SELECTABLE = "not_selectable"
+
+
+def _stale_iso(now: datetime) -> str:
+    return (now - timedelta(seconds=TURN_CLAIM_STALE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _candidate_rows(conn: sqlite3.Connection, compare_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT model, position, text, tools_json, usage_json, error_code, elapsed_ms, "
+        "blob IS NOT NULL AS has_blob, turns, selected "
+        "FROM ai_turn_candidates WHERE compare_id = ? ORDER BY position",
+        (compare_id,),
+    ).fetchall()
+
+
+def _candidate_to_dict(row: sqlite3.Row) -> dict:
+    """A candidate as the browser may see it — never the blob."""
+    return {
+        "model": row["model"],
+        "text": row["text"],
+        "tools": _loads_or_none(row["tools_json"]),
+        "usage": _loads_or_none(row["usage_json"]),
+        "error_code": row["error_code"],
+        "elapsed_ms": row["elapsed_ms"],
+    }
+
+
+def is_selectable(*, has_blob: bool, error_code: Optional[str], text: Optional[str]) -> bool:
+    """02 §20: a candidate can be chosen when the run left a context to carry
+    on from, did not fail, and actually said something."""
+    return bool(has_blob) and not error_code and bool((text or "").strip())
+
+
+def _row_selectable(row: sqlite3.Row) -> bool:
+    return is_selectable(has_blob=row["has_blob"], error_code=row["error_code"], text=row["text"])
+
+
+def count_running_compares(*, now: Optional[datetime] = None) -> int:
+    """Compare turns in flight across ALL workers. A `running` row older than
+    the claim-stale window belongs to a dead worker and is not counted."""
+    now = now or datetime.now(timezone.utc)
+    with _connect() as conn:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM ai_compare_turns WHERE state = 'running' AND created_at >= ?",
+                (_stale_iso(now),),
+            ).fetchone()[0]
+        )
+
+
+def begin_compare(
+    compare_id: str,
+    session_id: str,
+    user_id: int,
+    *,
+    question: str,
+    models: list[str],
+    max_concurrent: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Open a compare turn in `running`; False when ``max_concurrent`` compare
+    turns are already in flight server-wide (the route answers `compare_busy`).
+
+    The count and the insert are ONE statement, so the limit holds across the
+    four uvicorn workers without an in-process semaphore: SQLite serialises
+    writers on the file and the subquery is evaluated inside that
+    serialisation. ``base_seq`` is the session's last transcript seq right
+    now — select_candidate() refuses if it has moved by then.
+    """
+    now = now or datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO ai_compare_turns "
+            "(compare_id, session_id, user_id, question, models_json, base_seq, state, created_at) "
+            "SELECT ?, ?, ?, ?, ?, "
+            "(SELECT COALESCE(MAX(seq), 0) FROM ai_messages WHERE session_id = ?), 'running', ? "
+            "WHERE (SELECT COUNT(*) FROM ai_compare_turns "
+            "WHERE state = 'running' AND created_at >= ?) < ?",
+            (
+                compare_id,
+                session_id,
+                int(user_id),
+                question,
+                json.dumps(list(models), ensure_ascii=False),
+                session_id,
+                now_iso,
+                _stale_iso(now),
+                int(max_concurrent),
+            ),
+        )
+        return cur.rowcount > 0
+
+
+def finish_compare(
+    compare_id: str,
+    session_id: str,
+    user_id: int,
+    *,
+    candidates: list[dict],
+) -> dict:
+    """Close a `running` compare turn: store every run and decide the state.
+
+    ``candidates`` — one dict per model, in column order:
+    ``{"model", "text", "tools", "usage", "error_code", "elapsed_ms", "blob",
+    "turns"}`` (``blob`` a dict or None).
+
+    Returns ``{"state": "pending" | "void", "selectable": [model, ...]}``.
+
+      * at least one selectable run -> `pending`. ai_messages and
+        ai_sessions.blob are NOT touched; only `updated_at` moves so the
+        conversation surfaces at the top of the list.
+      * none -> `void`, and the turn is written to ai_messages as a failed
+        turn at once (question + empty answer with `compare_failed`), so the
+        conversation is free for the next question.
+
+    One transaction. A turn that is no longer `running` (voided as stale by a
+    later claim) is left alone and reported `void`.
+    """
+    now = utc_now_iso()
+    prepared = []
+    for position, cand in enumerate(candidates):
+        blob = cand.get("blob")
+        blob_text = json.dumps(blob, ensure_ascii=False, default=str) if isinstance(blob, dict) else None
+        if blob_text is not None and len(blob_text) > BLOB_WARN_CHARS:
+            logger.warning(
+                "ai_turn_candidates.blob for compare %s / %s is %d chars (> %d)",
+                compare_id, cand.get("model"), len(blob_text), BLOB_WARN_CHARS,
+            )
+        tools = cand.get("tools")
+        usage = cand.get("usage")
+        prepared.append(
+            {
+                "model": str(cand["model"]),
+                "position": position,
+                "text": cand.get("text") or "",
+                "tools_json": json.dumps(tools, ensure_ascii=False, default=str) if tools else None,
+                "usage_json": json.dumps(usage, ensure_ascii=False, default=str) if usage else None,
+                "usage": usage or {},
+                "error_code": cand.get("error_code"),
+                "elapsed_ms": cand.get("elapsed_ms"),
+                "blob": blob_text,
+                "turns": int(cand.get("turns") or 0),
+            }
+        )
+    selectable = [
+        c["model"]
+        for c in prepared
+        if is_selectable(has_blob=c["blob"] is not None, error_code=c["error_code"], text=c["text"])
+    ]
+    state = COMPARE_PENDING if selectable else COMPARE_VOID
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        turn = conn.execute(
+            "SELECT question, state FROM ai_compare_turns "
+            "WHERE compare_id = ? AND session_id = ? AND user_id = ?",
+            (compare_id, session_id, int(user_id)),
+        ).fetchone()
+        if turn is None or turn["state"] != COMPARE_RUNNING:
+            return {"state": COMPARE_VOID, "selectable": []}
+        conn.executemany(
+            "INSERT OR REPLACE INTO ai_turn_candidates "
+            "(compare_id, model, position, text, tools_json, usage_json, error_code, elapsed_ms, blob, turns, selected) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            [
+                (
+                    compare_id,
+                    c["model"],
+                    c["position"],
+                    c["text"],
+                    c["tools_json"],
+                    c["usage_json"],
+                    c["error_code"],
+                    c["elapsed_ms"],
+                    # Nothing can be chosen from a void turn, so no context is kept.
+                    c["blob"] if state == COMPARE_PENDING else None,
+                    c["turns"],
+                )
+                for c in prepared
+            ],
+        )
+        conn.execute(
+            "UPDATE ai_compare_turns SET state = ?, finished_at = ? WHERE compare_id = ?",
+            (state, now, compare_id),
+        )
+        if state == COMPARE_VOID:
+            totals = {
+                key: sum((c["usage"].get(key) or 0) for c in prepared)
+                for key in ("input_tokens", "output_tokens", "cache_read_input_tokens")
+            }
+            totals["cost_usd"] = round(sum(float(c["usage"].get("cost_usd") or 0.0) for c in prepared), 6)
+            seq = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM ai_messages WHERE session_id = ?", (session_id,)
+                ).fetchone()[0]
+            ) + 1
+            conn.execute(
+                "INSERT INTO ai_messages (session_id, seq, role, text, tools_json, usage_json, error_code, at) "
+                "VALUES (?, ?, 'user', ?, NULL, NULL, NULL, ?)",
+                (session_id, seq, turn["question"], now),
+            )
+            conn.execute(
+                "INSERT INTO ai_messages "
+                "(session_id, seq, role, text, tools_json, usage_json, error_code, at, model, compare_id) "
+                "VALUES (?, ?, 'assistant', '', NULL, ?, ?, ?, NULL, ?)",
+                (session_id, seq + 1, json.dumps(totals), ERROR_COMPARE_FAILED, now, compare_id),
+            )
+        conn.execute(
+            "UPDATE ai_sessions SET updated_at = ? WHERE session_id = ? AND user_id = ?",
+            (now, session_id, int(user_id)),
+        )
+    return {"state": state, "selectable": selectable}
+
+
+def void_compare(compare_id: str) -> None:
+    """Give up on a `running` compare turn whose results could not be stored.
+    Without this the row would hold a concurrency slot until it ages out."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ai_compare_turns SET state = 'void', finished_at = ? "
+            "WHERE compare_id = ? AND state = 'running'",
+            (utc_now_iso(), compare_id),
+        )
+
+
+def _pending_compare(
+    conn: sqlite3.Connection, session_id: str, user_id: int, *, now: Optional[datetime] = None
+) -> Optional[dict]:
+    now = now or datetime.now(timezone.utc)
+    turn = conn.execute(
+        "SELECT compare_id, state, question, models_json, created_at FROM ai_compare_turns "
+        "WHERE session_id = ? AND user_id = ? "
+        "AND (state = 'pending' OR (state = 'running' AND created_at >= ?)) "
+        # A pending turn outranks a running one; there is at most one of each.
+        "ORDER BY state = 'pending' DESC, created_at DESC LIMIT 1",
+        (session_id, int(user_id), _stale_iso(now)),
+    ).fetchone()
+    if turn is None:
+        return None
+    candidates = []
+    for row in _candidate_rows(conn, turn["compare_id"]):
+        candidate = _candidate_to_dict(row)
+        candidate["selectable"] = _row_selectable(row)
+        candidates.append(candidate)
+    return {
+        "compare_id": turn["compare_id"],
+        "state": turn["state"],
+        "question": turn["question"],
+        "models": _loads_or_none(turn["models_json"]) or [],
+        "created_at": turn["created_at"],
+        "candidates": candidates,
+    }
+
+
+def get_pending_compare(session_id: str, user_id: int) -> Optional[dict]:
+    """The owner's compare turn that is still `running` or waits for a choice
+    (02 §23), with its candidates (empty while running; never a blob). ``None``
+    when there is none, or the session is not this caller's."""
+    with _connect() as conn:
+        return _pending_compare(conn, session_id, int(user_id))
+
+
+def select_candidate(
+    session_id: str,
+    user_id: int,
+    *,
+    compare_id: str,
+    model: str,
+    reason: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Make one candidate of a pending compare turn the conversation's answer.
+
+    Returns ``{"status": SELECT_*, ...}``; the route maps the status to HTTP
+    (02 §22). On ``SELECT_OK`` and ``SELECT_UNCHANGED`` the dict also carries
+    ``others`` / ``selectable`` (model lists, column order) and
+    ``old_reason`` / ``reason`` for the audit row.
+
+    Everything happens in ONE ``BEGIN IMMEDIATE`` transaction: ownership and
+    state checks, then ``ai_sessions.blob / turns / model`` <- the candidate's,
+    the two ai_messages rows (the question; the chosen answer, tagged with
+    ``model`` and ``compare_id``), ``selected = 1`` on that candidate,
+    ``blob = NULL`` on ALL candidates, and the turn -> `selected`.
+
+    Idempotent: the same model again is ``SELECT_UNCHANGED``; if this call
+    brings a reason the turn does not have yet (or a different one) only the
+    reason is updated. A different model after a selection is refused — the
+    other contexts are gone.
+    """
+    now = now or datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        session = conn.execute(
+            "SELECT turns, turn_started_at FROM ai_sessions "
+            "WHERE session_id = ? AND user_id = ? AND deleted_at IS NULL",
+            (session_id, int(user_id)),
+        ).fetchone()
+        turn = (
+            conn.execute(
+                "SELECT question, base_seq, state, created_at, finished_at, selected_model, reason "
+                "FROM ai_compare_turns WHERE compare_id = ? AND session_id = ? AND user_id = ?",
+                (compare_id, session_id, int(user_id)),
+            ).fetchone()
+            if session is not None
+            else None
+        )
+        if session is None or turn is None:
+            return {"status": SELECT_NOT_FOUND}
+
+        rows = _candidate_rows(conn, compare_id)
+        by_model = {r["model"]: r for r in rows}
+        info = {
+            "others": [r["model"] for r in rows if r["model"] != model],
+            "old_reason": turn["reason"],
+            "reason": turn["reason"],
+        }
+
+        if turn["state"] == COMPARE_SELECTED:
+            if turn["selected_model"] != model:
+                return {"status": SELECT_ALREADY}
+            if reason is not None and reason != turn["reason"]:
+                conn.execute(
+                    "UPDATE ai_compare_turns SET reason = ? WHERE compare_id = ?", (reason, compare_id)
+                )
+                info["reason"] = reason
+            # The blobs are gone, so "selectable" can no longer be derived.
+            return {"status": SELECT_UNCHANGED, "selectable": [], **info}
+
+        if turn["state"] == COMPARE_RUNNING:
+            return {"status": SELECT_BUSY}
+        if turn["state"] != COMPARE_PENDING:
+            # void: nothing in it can be chosen.
+            return {"status": SELECT_NOT_SELECTABLE}
+
+        selectable = [r["model"] for r in rows if _row_selectable(r)]
+        if model not in selectable:
+            return {"status": SELECT_NOT_SELECTABLE}
+        claim = session["turn_started_at"]
+        if claim is not None and claim >= _stale_iso(now):
+            # Only code that predates compare mode can hold the claim while a
+            # compare is pending; its turn is about to move the conversation.
+            return {"status": SELECT_BUSY}
+
+        max_seq = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM ai_messages WHERE session_id = ?", (session_id,)
+            ).fetchone()[0]
+        )
+        if max_seq != int(turn["base_seq"]):
+            # The conversation moved on while this turn waited (older code on
+            # the shared file, or a rolled-back image). None of the candidate
+            # contexts contains that newer turn, so none may replace the blob.
+            conn.execute(
+                "UPDATE ai_compare_turns SET state = 'void', finished_at = COALESCE(finished_at, ?) "
+                "WHERE compare_id = ?",
+                (now_iso, compare_id),
+            )
+            conn.execute("UPDATE ai_turn_candidates SET blob = NULL WHERE compare_id = ?", (compare_id,))
+            return {"status": SELECT_STALE}
+
+        chosen = by_model[model]
+        blob_text = conn.execute(
+            "SELECT blob FROM ai_turn_candidates WHERE compare_id = ? AND model = ?", (compare_id, model)
+        ).fetchone()["blob"]
+        conn.execute(
+            "UPDATE ai_sessions SET blob = ?, turns = MAX(turns, ?), model = ?, updated_at = ? "
+            "WHERE session_id = ? AND user_id = ?",
+            (blob_text, int(chosen["turns"] or 0), model, now_iso, session_id, int(user_id)),
+        )
+        conn.execute(
+            "INSERT INTO ai_messages (session_id, seq, role, text, tools_json, usage_json, error_code, at) "
+            "VALUES (?, ?, 'user', ?, NULL, NULL, NULL, ?)",
+            (session_id, max_seq + 1, turn["question"], turn["created_at"]),
+        )
+        conn.execute(
+            "INSERT INTO ai_messages "
+            "(session_id, seq, role, text, tools_json, usage_json, error_code, at, model, compare_id) "
+            "VALUES (?, ?, 'assistant', ?, ?, ?, NULL, ?, ?, ?)",
+            (
+                session_id,
+                max_seq + 2,
+                chosen["text"],
+                chosen["tools_json"],
+                chosen["usage_json"],
+                turn["finished_at"] or now_iso,
+                model,
+                compare_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE ai_turn_candidates SET selected = (model = ?), blob = NULL WHERE compare_id = ?",
+            (model, compare_id),
+        )
+        conn.execute(
+            "UPDATE ai_compare_turns SET state = 'selected', selected_model = ?, selected_at = ?, reason = ? "
+            "WHERE compare_id = ?",
+            (model, now_iso, reason, compare_id),
+        )
+        info["reason"] = reason
+        info["old_reason"] = None
+        return {"status": SELECT_OK, "selectable": selectable, **info}
 
 
 # ── econ calendar cache (OPT-0065 §12) ───────────────────────────────────────
