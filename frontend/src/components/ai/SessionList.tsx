@@ -208,9 +208,18 @@ function SessionRow({
           type="button"
           disabled={disabled}
           onClick={() => onSelect(session.session_id)}
-          title={title}
+          title={session.pending_compare ? `${title} · ${t("ai.compare.pendingDot")}` : title}
           className="flex h-8 min-w-0 flex-1 items-center px-2 text-left disabled:cursor-default"
         >
+          {session.pending_compare && (
+            // A compare turn of this conversation still waits for a choice.
+            <span
+              role="img"
+              aria-label={t("ai.compare.pendingDot")}
+              title={t("ai.compare.pendingDot")}
+              className="mr-1.5 size-2 shrink-0 rounded-full bg-amber-500"
+            />
+          )}
           <span className={cn("truncate", !session.title && "text-muted-foreground")}>{title}</span>
         </button>
       )}
