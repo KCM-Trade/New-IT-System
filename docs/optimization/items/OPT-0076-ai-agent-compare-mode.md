@@ -1,7 +1,7 @@
 ---
 id: OPT-0076
 title: AI agent 多模型对比模式（一次提问并发 2–3 个模型，用户选答案）
-status: ready
+status: wip
 priority: P2
 area: mixed
 effort: L
