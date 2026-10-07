@@ -309,6 +309,12 @@ export default function AiAssistantPage() {
             <SelectItem value="gpt-6.1-sol" className="items-start py-2">
               <ModelOption label={t("ai.modelFrontier")} desc={t("ai.modelFrontierDesc")} />
             </SelectItem>
+            <SelectItem value="grok-4.7" className="items-start py-2">
+              <ModelOption label={t("ai.modelGrok")} desc={t("ai.modelGrokDesc")} />
+            </SelectItem>
+            <SelectItem value="DeepSeek-V4-Pro" className="items-start py-2">
+              <ModelOption label={t("ai.modelDeepSeek")} desc={t("ai.modelDeepSeekDesc")} />
+            </SelectItem>
           </SelectContent>
         </Select>
         </div>

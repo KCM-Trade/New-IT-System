@@ -101,19 +101,25 @@ if "OPENAI_API_KEY" in os.environ:
     )
 
 
+# The deployments a caller may pick, as (env override name, default deployment
+# name on kcm-ai-agent-east-us). Order is the picker's order; the first entry
+# is the default analyst. All five go through the same Responses API client:
+# grok-4.7 (xAI) and DeepSeek-V4-Pro were probed 2026-10-07 and accept function
+# tools, ``store: false`` and each other's session history, so a conversation
+# may switch model between turns.
+# Keep in sync with schemas.ai.AiModel and the frontend AI_MODELS (tested).
+SELECTABLE_MODELS: tuple[tuple[str, str], ...] = (
+    ("AZURE_OPENAI_CHAT_MODEL", "gpt-5.6-terra"),
+    ("AI_AGENT_MODEL_DEEP", "gpt-5.6-sol"),
+    ("AI_AGENT_MODEL_FRONTIER", "gpt-6.1-sol"),
+    ("AI_AGENT_MODEL_GROK", "grok-4.7"),
+    ("AI_AGENT_MODEL_DEEPSEEK", "DeepSeek-V4-Pro"),
+)
+
+
 def default_model() -> str:
-    return os.environ.get("AZURE_OPENAI_CHAT_MODEL", "gpt-5.6-terra")
-
-
-def deep_model() -> str:
-    return os.environ.get("AI_AGENT_MODEL_DEEP", "gpt-5.6-sol")
-
-
-def frontier_model() -> str:
-    """Newest-generation deployment offered as a third picker option
-    (``gpt-6.1-sol``, deployed 2026-10-05). Additive: the default and deep
-    deployments stay as they are, so existing sessions keep their model."""
-    return os.environ.get("AI_AGENT_MODEL_FRONTIER", "gpt-6.1-sol")
+    env_name, deployment = SELECTABLE_MODELS[0]
+    return os.environ.get(env_name, deployment)
 
 
 def summary_model() -> str:
@@ -132,7 +138,9 @@ def summary_model() -> str:
 
 
 def allowed_models() -> tuple[str, ...]:
-    return tuple(dict.fromkeys((default_model(), deep_model(), frontier_model())))
+    """Deployment names the agent accepts: env overrides applied, duplicates
+    dropped (two entries may be pointed at the same deployment)."""
+    return tuple(dict.fromkeys(os.environ.get(env_name, deployment) for env_name, deployment in SELECTABLE_MODELS))
 
 
 _clients: dict[str, OpenAIChatClient] = {}
@@ -179,6 +187,57 @@ Subjects = Annotated[
 ]
 
 Emit = Callable[[str, dict], Awaitable[None]]
+
+
+def inline_schema_refs(schema: dict) -> dict:
+    """Return ``schema`` with every local ``$ref`` replaced by its definition
+    and ``$defs`` removed.
+
+    pydantic emits ``$defs`` + ``$ref`` for the ``SubjectArg`` TypedDict. xAI's
+    grok-4.7 answers a request whose tools contain them with a bare 400
+    ("There was an issue with your request", no param, no code) — for the
+    whole request, not just that tool (probed 2026-10-07). The inlined form is
+    equivalent JSON Schema, so it is sent to every model rather than branching
+    per provider. Keys written next to a ``$ref`` (a description) win over the
+    definition's own. A recursive definition cannot be inlined and raises.
+    """
+    defs = schema.get("$defs") or {}
+    prefix = "#/$defs/"
+
+    def walk(node: Any, resolving: tuple[str, ...]) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if ref is not None:
+                name = ref[len(prefix):] if isinstance(ref, str) and ref.startswith(prefix) else None
+                if name is None or name not in defs:
+                    raise ValueError(f"tool schema $ref {ref!r} is not a local definition")
+                if name in resolving:
+                    raise ValueError(f"tool schema definition {name!r} is recursive and cannot be inlined")
+                resolved = walk(defs[name], (*resolving, name))
+                siblings = {k: walk(v, resolving) for k, v in node.items() if k not in ("$ref", "$defs")}
+                return {**resolved, **siblings}
+            return {k: walk(v, resolving) for k, v in node.items() if k != "$defs"}
+        if isinstance(node, list):
+            return [walk(item, resolving) for item in node]
+        return node
+
+    return walk(schema, ())
+
+
+def inline_tool_schemas(tools: list) -> list:
+    """Apply ``inline_schema_refs`` to each function tool's parameter schema.
+
+    ``parameters()`` hands out the tool's cached schema dict — the same object
+    the client reads when it builds the request — so the rewrite is done in
+    place through that public accessor. Arguments are still validated by the
+    tool's pydantic input model, which this does not touch.
+    """
+    for t in tools:
+        schema = t.parameters()
+        inlined = inline_schema_refs(schema)
+        schema.clear()
+        schema.update(inlined)
+    return tools
 
 # No per-tool call budget (removed 2026-09-28 at the user's request, after a
 # 2-then-6 cap kept turning "check these 9 clients" into a refusal). A turn is
@@ -403,7 +462,7 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
 
         tools.extend([get_risk_alerts, get_alert_orders, get_window_scan])
 
-    return tools
+    return inline_tool_schemas(tools)
 
 
 def db_choices_match_impl() -> bool:
@@ -570,7 +629,9 @@ class KcmSkillsProvider(SkillsProvider):
         self._on_use = on_use
 
     def _create_tools(self, skills: Any) -> list:
-        return [t for t in super()._create_tools(skills) if t.name != self.RUN_SKILL_SCRIPT_TOOL_NAME]
+        # Same `$ref`-free rule as build_tools: one offending tool fails the
+        # whole request on grok-4.7.
+        return inline_tool_schemas([t for t in super()._create_tools(skills) if t.name != self.RUN_SKILL_SCRIPT_TOOL_NAME])
 
     async def _load_skill(self, skills: Any, skill_name: str) -> str:
         content = await super()._load_skill(skills, skill_name)

@@ -79,19 +79,22 @@ def compute_cost_usd(
 
     ``cache_read_input_tokens`` is a SUBSET of ``input_tokens`` (that is how
     both OpenAI and the agent framework report it), so the cached portion is
-    subtracted from the full-price input before being billed at 10%. An
+    subtracted from the full-price input before being billed at the model's
+    cached-input price — the optional third value of its price row, or 10% of
+    the input price when the row has none (the Azure OpenAI discount). An
     unknown deployment prices at 0 — visibly, since the token counts next to it
     are not zero — rather than raising inside a stream.
     """
     prices = settings.AI_MODEL_PRICES.get(model)
     if prices is None:
         return 0.0
-    price_in, price_out = prices
+    price_in, price_out = prices[0], prices[1]
+    price_cached = prices[2] if len(prices) > 2 else price_in * 0.10
     cached = max(0, min(int(cache_read_input_tokens or 0), int(input_tokens or 0)))
     full_in = max(0, int(input_tokens or 0) - cached)
     usd = (
         full_in * price_in
-        + cached * price_in * 0.10
+        + cached * price_cached
         + max(0, int(output_tokens or 0)) * price_out
     ) / 1_000_000
     return round(usd, 6)

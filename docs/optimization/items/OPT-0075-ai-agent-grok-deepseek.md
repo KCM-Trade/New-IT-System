@@ -1,7 +1,7 @@
 ---
 id: OPT-0075
 title: AI agent 接入 grok-4.7 + DeepSeek-V4-Pro 作为可选模型
-status: wip
+status: done
 priority: P2
 area: mixed
 effort: M
@@ -104,4 +104,33 @@ output 预留？）。
 
 ## 结果
 
-（待实施）
+**2026-10-07 完成**（分支 `opt/ai-agent-grok-deepseek`：`a437318` 实施 + `535f219` 冷审 #1 修复）。
+
+交付（对照 AC）：
+- 工具 schema 发送前内联展开 `$ref`、去掉 `$defs`（`harness.inline_schema_refs` / `inline_tool_schemas`，`build_tools` 与
+  skill 的两个读工具都走），对所有模型生效。
+- 模型清单改成 `harness.SELECTABLE_MODELS` 五行表（新 env 覆盖名 `AI_AGENT_MODEL_GROK` / `AI_AGENT_MODEL_DEEPSEEK`）；
+  `AiModel`、前端 `AI_MODELS`、选择器、两个 locale 同步到五个。
+- 价格：DeepSeek-V4-Pro `(1.74, 3.48, cached 0.145)`（Azure 实价）；grok-4.7 `(2.0, 6.0, cached 0.5)` **占位**
+  （Azure 无 meter；cached 按 grok-4.6 的 25% 猜，猜错方向是多算配额）。价格行可带第三个值 = 缓存输入单价，没有则 10%。
+- 测试：新增 10 + 12 个（schema 无 `$ref`、五模型各层一致、每个可选模型价格 > 0、价格 env 叠加与行校验）。
+- 闸门：实施 commit 上 `./verify.sh` PASS（pytest 2896 / tsc 0 / vitest 339）；冷审修复后后端 pytest 2907 passed / 1 deselected。
+- dev 活体（一次性容器挂分支代码，无 shim，合成问题）：两个模型各通过 日历工具 / `load_skill` / 同会话续问 / 12 工具全集；
+  terra → Grok → DeepSeek → terra 跨模型会话四步全过。
+- 限流：未复现。六轮并发（Grok 24s 内 17.1 万 token、DeepSeek 11s 内 14.1 万）无 429；上午的 429 最可能是容量刚从 50 调到
+  200 / 300 还没生效（活动日志看不到调整前容量，属推断）。未改容量。
+
+冷审（独立零上下文 agent，2026-10-07）处理记录：
+- #1 `AI_MODEL_PRICES` 整表替换 → 漏写的模型按 $0 计费；解析器接受零 / 负数 / NaN：**当场修**（`535f219`，叠加 + 行校验）。
+  prod / dev 当时都没设这个 env，属潜在问题。
+- #3 推理 / 缓存 token 记账：**实测排除**——三家 Responses usage 都满足 in + out = total、cached ≤ in、reasoning ⊂ out。
+- #4 跨模型加密推理条目：**实测排除**——GPT 的带推理条目会话被 Grok / DeepSeek 正常续答，新模型不产生推理条目。
+- #2 env 覆盖改掉对外名字、#5 schema 展开依赖框架对象复用、#6 展开函数边界、#7 清单七处手工同步、#9 厂商卡住等满 520s
+  + 测试质量：**立 OPT-0077**。
+- #8 逐条消息没有模型名：**并入 OPT-0076**。
+
+未验证 / follow-up：
+- 浏览器里的选择器与状态条成本显示（只有单测 + tsc）。
+- 三个带客户参数的工具（`get_client_overview` 等）在 Grok 上的真实调用——schema 被接受，但活体问题不含客户数据，未触发。
+- 新模型对 prompt 规则的遵守程度没有评测，靠用户手测。
+- grok-4.7 价格与缓存比例：Azure 出 meter 后核对。

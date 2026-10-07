@@ -23,49 +23,71 @@ BREAK_GLASS_SECRET_MIN_LEN = 32
 # somebody forgot to replace, and the safe reading of a placeholder is "off".
 AI_INTERNAL_TOKEN_MIN_LEN = 32
 
-# Defaults for AI_MODEL_PRICES, USD per MTok [input, output] — the
-# deployments on kcm-ai-agent-east-us (docs/ai-agent/04 §0.1.1). Values are the
-# Azure retail price API's Global Standard short-context meters as read on
-# 2026-10-05 (prices.azure.com, meter "<model> ShortCo Inp/Opt Std Gl"); the
-# earlier 2.5/15, 5/30, 1/6 were list prices from the launch post and ran
-# 20-80% above what Azure bills. Long-context and cache-write surcharges are
-# not modelled.
-_DEFAULT_MODEL_PRICES: dict[str, tuple[float, float]] = {
+# Defaults for AI_MODEL_PRICES, USD per MTok [input, output] or
+# [input, output, cached input] — the deployments on kcm-ai-agent-east-us
+# (docs/ai-agent/04 §0.1.1). Values are the Azure retail price API's Global
+# Standard short-context meters as read on 2026-10-05 (prices.azure.com, meter
+# "<model> ShortCo Inp/Opt Std Gl"); the earlier 2.5/15, 5/30, 1/6 were list
+# prices from the launch post and ran 20-80% above what Azure bills.
+# Long-context and cache-write surcharges are not modelled.
+# The optional third value is the price of cache-read input tokens; without it
+# they bill at 10% of the input price (Azure OpenAI's discount), which is wrong
+# for the non-OpenAI deployments.
+# Every model the page can select MUST have a row here: an unknown deployment
+# prices at $0, i.e. it would not count against the daily cost quota (tested).
+_DEFAULT_MODEL_PRICES: dict[str, tuple[float, ...]] = {
     "gpt-5.6-terra": (2.0, 12.0),
     "gpt-5.6-sol": (4.0, 20.0),
     "gpt-5.6-luna": (0.2, 1.2),
     # Provisional: the Azure retail price API had no gpt-6.1-sol meter on
     # 2026-10-05, so this is gpt-6-sol's Global Standard price. Re-check.
     "gpt-6.1-sol": (2.0, 10.0),
+    # Azure retail price API, Global Standard, read 2026-10-07.
+    "DeepSeek-V4-Pro": (1.74, 3.48, 0.145),
+    # Provisional: Azure had no grok-4.7 meter on 2026-10-07. Input/output are
+    # xAI's own list price from a second-hand source; the cached price assumes
+    # the 25% of input that grok-4.6 carries. Re-check once a meter exists.
+    "grok-4.7": (2.0, 6.0, 0.5),
 }
 
 
-def _parse_model_prices(raw: str | None) -> dict[str, tuple[float, float]]:
+def _parse_model_prices(raw: str | None) -> dict[str, tuple[float, ...]]:
     """Parse AI_MODEL_PRICES (JSON) tolerantly; fall back to the defaults.
+
+    The env value is an OVERLAY on the built-in table, not a replacement: a
+    deployment it does not mention keeps its default row. Replacing the table
+    would price every omitted model at zero, i.e. take it out of the daily
+    cost quota, and nobody editing one model's price means that.
 
     A malformed value must not take the whole app down at import time (this
     runs inside get_settings(), i.e. on the request hot path the first time),
     so it degrades to the built-in table with a log line rather than raising.
-    Unknown deployments simply price at zero downstream, which the usage event
-    makes visible as `cost_usd: 0` next to non-zero token counts.
+    A row must be a list of 2 or 3 finite numbers greater than zero: a zero,
+    negative or NaN price would silently disable the quota for that model.
     """
     if raw is None or not raw.strip():
         return dict(_DEFAULT_MODEL_PRICES)
     import json
     import logging
+    import math
 
     try:
         parsed = json.loads(raw)
-        out: dict[str, tuple[float, float]] = {}
-        for model, pair in parsed.items():
-            inp, outp = pair
-            out[str(model)] = (float(inp), float(outp))
-        if not out:
-            raise ValueError("empty price table")
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("expected a non-empty object")
+        out: dict[str, tuple[float, ...]] = dict(_DEFAULT_MODEL_PRICES)
+        for model, prices in parsed.items():
+            if not isinstance(prices, (list, tuple)) or len(prices) not in (2, 3):
+                raise ValueError("expected [in, out] or [in, out, cached in]")
+            row = tuple(float(p) for p in prices)
+            if not all(math.isfinite(p) and p > 0 for p in row):
+                raise ValueError("prices must be finite and greater than zero")
+            out[str(model)] = row
         return out
     except Exception:  # noqa: BLE001 — degrade, do not crash settings
         logging.getLogger(__name__).error(
-            "AI_MODEL_PRICES is not valid JSON of {model: [in, out]}; using defaults"
+            "AI_MODEL_PRICES is not valid JSON of {model: [in, out]} or "
+            "{model: [in, out, cached in]} with finite prices > 0; using defaults"
         )
         return dict(_DEFAULT_MODEL_PRICES)
 
@@ -183,7 +205,7 @@ class Settings:
     AI_AGENT_INTERNAL_TOKEN: str | None
     AI_DAILY_TURNS_LIMIT: int
     AI_DAILY_COST_LIMIT_USD: float
-    AI_MODEL_PRICES: dict[str, tuple[float, float]]
+    AI_MODEL_PRICES: dict[str, tuple[float, ...]]
     AI_SESSION_RETENTION_DAYS: int
     FRED_API_KEY: str
 
@@ -691,7 +713,8 @@ class Settings:
         # is the ONLY place cost is computed (the agent reports raw token
         # counts, the browser is never trusted), so a price change is one env
         # edit here and nowhere else. Cache-read input tokens are billed at
-        # 10% of the input price, which is Azure OpenAI's published discount.
+        # the model's third price when it has one, otherwise at 10% of the
+        # input price, which is Azure OpenAI's published discount.
         self.AI_MODEL_PRICES = _parse_model_prices(os.environ.get("AI_MODEL_PRICES"))
         # OPT-0065 §8.2: how long a soft-deleted conversation (ai_sessions +
         # ai_messages) is kept before the daily sweep hard-deletes it. Same

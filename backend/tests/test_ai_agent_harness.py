@@ -17,6 +17,9 @@ fakes. What is pinned:
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("agent_framework")
@@ -233,10 +236,234 @@ def test_selectable_models_agree_across_layers(monkeypatch):
     from typing import get_args
 
     from app.core.config import _DEFAULT_MODEL_PRICES
-    from app.schemas.ai import AiModel
+    from app.schemas.ai import DEFAULT_MODEL, AiModel
 
-    for name in ("AZURE_OPENAI_CHAT_MODEL", "AI_AGENT_MODEL_DEEP", "AI_AGENT_MODEL_FRONTIER"):
-        monkeypatch.delenv(name, raising=False)
-    assert set(harness.allowed_models()) == set(get_args(AiModel))
-    assert "gpt-6.1-sol" in harness.allowed_models()
+    for env_name, _ in harness.SELECTABLE_MODELS:
+        monkeypatch.delenv(env_name, raising=False)
+    assert harness.allowed_models() == get_args(AiModel)
+    assert harness.allowed_models() == (
+        "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol", "grok-4.7", "DeepSeek-V4-Pro",
+    )
+    assert harness.default_model() == DEFAULT_MODEL == "gpt-5.6-terra"
     assert set(get_args(AiModel)) <= set(_DEFAULT_MODEL_PRICES)
+
+    # The page's own list, read from source: there is no shared artefact
+    # between the Python and TypeScript sides, so this is the only place the
+    # three lists can be compared.
+    frontend = Path(__file__).resolve().parents[2] / "frontend" / "src"
+    if not frontend.is_dir():
+        pytest.skip("frontend sources not present next to backend/")
+    hook = (frontend / "hooks" / "useAiTurn.ts").read_text(encoding="utf-8")
+    declared = re.search(r"AI_MODELS: readonly AiModel\[\] = \[([^\]]*)\]", hook)
+    assert declared, "AI_MODELS declaration not found in useAiTurn.ts"
+    assert tuple(re.findall(r'"([^"]+)"', declared.group(1))) == get_args(AiModel)
+    page = (frontend / "pages" / "AiAssistant.tsx").read_text(encoding="utf-8")
+    assert tuple(re.findall(r'<SelectItem value="([^"]+)"', page)) == get_args(AiModel)
+
+
+def test_model_env_overrides_keep_their_names(monkeypatch):
+    """Deployments are renamed by env, not by code: the three names already in
+    use stay valid, and the two new models have their own."""
+    overrides = {
+        "AZURE_OPENAI_CHAT_MODEL": "a", "AI_AGENT_MODEL_DEEP": "b", "AI_AGENT_MODEL_FRONTIER": "c",
+        "AI_AGENT_MODEL_GROK": "d", "AI_AGENT_MODEL_DEEPSEEK": "e",
+    }
+    assert [env_name for env_name, _ in harness.SELECTABLE_MODELS] == list(overrides)
+    for env_name, value in overrides.items():
+        monkeypatch.setenv(env_name, value)
+    assert harness.allowed_models() == ("a", "b", "c", "d", "e")
+    assert harness.default_model() == "a"
+    # two entries pointed at one deployment collapse instead of duplicating
+    monkeypatch.setenv("AI_AGENT_MODEL_GROK", "a")
+    assert harness.allowed_models() == ("a", "b", "c", "e")
+
+
+def test_every_selectable_model_is_priced_above_zero(monkeypatch):
+    """A selectable model without a price row bills at $0, i.e. it does not
+    count against the daily cost quota. Checked through the real pricing
+    function and the real settings, not just the table's keys."""
+    from typing import get_args
+
+    from app.core.config import get_settings
+    from app.schemas.ai import AiModel
+    from app.services.ai_gateway_service import compute_cost_usd
+
+    monkeypatch.delenv("AI_MODEL_PRICES", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    for model in get_args(AiModel):
+        assert compute_cost_usd(settings, model, 1000, 0) > 0, model
+        assert compute_cost_usd(settings, model, 0, 1000) > 0, model
+        # cached input is never free and never dearer than fresh input
+        assert 0 < compute_cost_usd(settings, model, 1000, 0, 1000) < compute_cost_usd(settings, model, 1000, 0), model
+
+
+def test_cached_input_uses_the_models_own_price_when_it_has_one(monkeypatch):
+    """1 MTok in, all of it cache-read: the row's third value when present
+    (DeepSeek 0.145, not 10% of 1.74), else 10% of the input price."""
+    from app.core.config import get_settings
+    from app.services.ai_gateway_service import compute_cost_usd
+
+    monkeypatch.delenv("AI_MODEL_PRICES", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert compute_cost_usd(settings, "DeepSeek-V4-Pro", 1_000_000, 0, 1_000_000) == pytest.approx(0.145)
+    assert compute_cost_usd(settings, "grok-4.7", 1_000_000, 0, 1_000_000) == pytest.approx(0.5)
+    assert compute_cost_usd(settings, "gpt-5.6-terra", 1_000_000, 0, 1_000_000) == pytest.approx(0.2)
+    # 600k fresh + 400k cached + 200k out on DeepSeek
+    assert compute_cost_usd(settings, "DeepSeek-V4-Pro", 1_000_000, 200_000, 400_000) == pytest.approx(
+        0.6 * 1.74 + 0.4 * 0.145 + 0.2 * 3.48
+    )
+
+
+def test_model_prices_env_accepts_two_or_three_values(monkeypatch):
+    from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
+
+    parsed = _parse_model_prices('{"m": [1, 2], "n": [1, 2, 0.5]}')
+    assert parsed["m"] == (1.0, 2.0) and parsed["n"] == (1.0, 2.0, 0.5)
+    # a malformed row degrades to the defaults instead of raising
+    assert _parse_model_prices('{"m": [1]}') == _DEFAULT_MODEL_PRICES
+    assert _parse_model_prices('{"m": [1, 2, 3, 4]}') == _DEFAULT_MODEL_PRICES
+
+
+def test_model_prices_env_overlays_the_defaults():
+    """Setting one model's price must not zero-price the others: a selectable
+    model missing from the table bills at $0 and escapes the cost quota."""
+    from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
+
+    parsed = _parse_model_prices('{"gpt-5.6-terra": [9, 9]}')
+    assert parsed["gpt-5.6-terra"] == (9.0, 9.0)
+    for model, row in _DEFAULT_MODEL_PRICES.items():
+        if model != "gpt-5.6-terra":
+            assert parsed[model] == row
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"m": [0, 0]}',          # free
+        '{"m": [1, -2]}',         # negative
+        '{"m": [1, 2, 0]}',       # free cached input
+        '{"m": [NaN, 2]}',        # nan cost never reaches the limit
+        '{"m": [Infinity, 2]}',
+        '{"m": "12"}',            # a string is not a row
+        '{"m": {"in": 1}}',
+        '[["m", [1, 2]]]',        # not an object
+        '{}',
+    ],
+)
+def test_model_prices_env_rejects_rows_that_would_disable_the_quota(raw):
+    from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
+
+    assert _parse_model_prices(raw) == _DEFAULT_MODEL_PRICES
+
+
+def test_every_selectable_model_is_priced_even_with_a_partial_env(monkeypatch):
+    from app.core.config import get_settings
+    from app.services.ai_gateway_service import compute_cost_usd
+
+    monkeypatch.setenv("AI_MODEL_PRICES", '{"gpt-5.6-terra": [2, 12]}')
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        for model in harness.allowed_models():
+            assert compute_cost_usd(settings, model, 1_000_000, 1_000_000, 0) > 0, model
+    finally:
+        get_settings.cache_clear()
+
+
+# ── tool schemas (OPT-0075) ──────────────────────────────────────────────────
+
+FULL_CTX = CallerCtx(user_id=7, email="mgr@kohleservices.com", role="manager", allowed_modules=("ai", "risk"), scope=None, trace_id="t-2")
+RESTRICTED_CTX = CallerCtx(user_id=8, email="cs@kohleservices.com", role="user", allowed_modules=("ai",), scope=frozenset({1}), trace_id="t-3")
+
+
+async def _noop_emit(event, data):
+    return None
+
+
+def _schema_keys(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _schema_keys(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _schema_keys(item)
+
+
+@pytest.mark.parametrize("ctx", [FULL_CTX, CTX, RESTRICTED_CTX], ids=["ai+risk", "ai", "restricted"])
+def test_no_tool_schema_carries_ref_or_defs(ctx):
+    """grok-4.7 rejects the WHOLE request with a bare 400 when any tool schema
+    contains `$ref` / `$defs` (probed 2026-10-07). pydantic emits both for the
+    SubjectArg TypedDict, so build_tools must hand out inlined schemas."""
+    tools = harness.build_tools(ctx, _noop_emit)
+    assert tools
+    for t in tools:
+        keys = set(_schema_keys(t.parameters()))
+        assert not keys & {"$ref", "$defs"}, t.name
+        # and what the framework serialises from it
+        assert "$ref" not in str(t.to_json_schema_spec()) and "$defs" not in str(t.to_json_schema_spec()), t.name
+
+
+def test_the_full_caller_gets_every_tool_and_inlining_keeps_the_subject_shape():
+    tools = {t.name: t for t in harness.build_tools(FULL_CTX, _noop_emit)}
+    assert set(tools) == {
+        "get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts",
+        "get_economic_calendar", "rank_open_positions", "run_sql",
+        "get_risk_alerts", "get_alert_orders", "get_window_scan",
+    }
+    subject = tools["get_trade_activity"].parameters()["properties"]["subject"]
+    assert subject["type"] == "object"
+    assert subject["required"] == ["kind", "value"]
+    assert subject["properties"]["kind"]["enum"] == ["client_id", "login_sid"]
+    assert "exact id only" in subject["description"]  # the key next to the $ref survives
+    items = tools["get_client_overview"].parameters()["properties"]["subjects"]["items"]
+    assert items["properties"]["kind"]["enum"] == ["client_id", "login_sid"]
+
+
+@pytest.mark.anyio
+async def test_an_inlined_tool_still_validates_and_runs(monkeypatch):
+    """The rewrite touches the advertised schema only: a well-formed call
+    reaches the impl, a subject with a bad `kind` is still refused."""
+    seen = {}
+
+    async def impl(ctx, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "source": {"certified": True}, "data": {}}
+
+    monkeypatch.setitem(harness.TOOL_IMPLS, "get_risk_signals", impl)
+    tool = {t.name: t for t in harness.build_tools(FULL_CTX, _noop_emit)}["get_risk_signals"]
+    args = {"subject": {"kind": "client_id", "value": "1"}, "date_range": {"from": "2026-01-01", "to": "2026-01-02"}}
+    await tool.invoke(arguments=args)
+    assert seen["subject"] == {"kind": "client_id", "value": "1"}
+    with pytest.raises(Exception):
+        await tool.invoke(arguments={**args, "subject": {"kind": "email", "value": "1"}})
+
+
+def test_skill_tools_carry_no_ref_either():
+    provider = harness.build_skills_provider(FULL_CTX)
+    for t in provider._create_tools([]):
+        assert not set(_schema_keys(t.parameters())) & {"$ref", "$defs"}, t.name
+
+
+def test_inline_schema_refs_unit():
+    schema = {
+        "$defs": {"A": {"type": "object", "properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"type": "string", "title": "B"}},
+        "properties": {"x": {"$ref": "#/$defs/A", "description": "kept"}, "y": {"items": {"$ref": "#/$defs/B"}, "type": "array"}},
+        "type": "object",
+    }
+    out = harness.inline_schema_refs(schema)
+    assert out == {
+        "properties": {
+            "x": {"type": "object", "properties": {"b": {"type": "string", "title": "B"}}, "description": "kept"},
+            "y": {"items": {"type": "string", "title": "B"}, "type": "array"},
+        },
+        "type": "object",
+    }
+    assert "$defs" in schema  # the input is not mutated
+    assert harness.inline_schema_refs({"type": "object"}) == {"type": "object"}
+    with pytest.raises(ValueError):
+        harness.inline_schema_refs({"properties": {"x": {"$ref": "#/$defs/Missing"}}})
+    with pytest.raises(ValueError):
+        harness.inline_schema_refs({"$defs": {"A": {"properties": {"a": {"$ref": "#/$defs/A"}}}}, "properties": {"x": {"$ref": "#/$defs/A"}}})
