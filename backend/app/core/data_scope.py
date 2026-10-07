@@ -899,6 +899,8 @@ ROUTE_SCOPE: dict[str, str] = {
     # hide their own earlier answers from them.
     "/ai/sessions": OPEN,
     "/ai/sessions/{session_id}": OPEN,
+    # OPEN: picks one answer of the caller's own compare turn (OPT-0076).
+    "/ai/sessions/{session_id}/select": OPEN,
 }
 
 SCOPE_VALUES: frozenset[str] = frozenset({FILTER, LOOKUP, OPEN})
