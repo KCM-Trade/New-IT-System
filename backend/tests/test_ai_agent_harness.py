@@ -319,10 +319,57 @@ def test_cached_input_uses_the_models_own_price_when_it_has_one(monkeypatch):
 def test_model_prices_env_accepts_two_or_three_values(monkeypatch):
     from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
 
-    assert _parse_model_prices('{"m": [1, 2], "n": [1, 2, 0.5]}') == {"m": (1.0, 2.0), "n": (1.0, 2.0, 0.5)}
+    parsed = _parse_model_prices('{"m": [1, 2], "n": [1, 2, 0.5]}')
+    assert parsed["m"] == (1.0, 2.0) and parsed["n"] == (1.0, 2.0, 0.5)
     # a malformed row degrades to the defaults instead of raising
     assert _parse_model_prices('{"m": [1]}') == _DEFAULT_MODEL_PRICES
     assert _parse_model_prices('{"m": [1, 2, 3, 4]}') == _DEFAULT_MODEL_PRICES
+
+
+def test_model_prices_env_overlays_the_defaults():
+    """Setting one model's price must not zero-price the others: a selectable
+    model missing from the table bills at $0 and escapes the cost quota."""
+    from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
+
+    parsed = _parse_model_prices('{"gpt-5.6-terra": [9, 9]}')
+    assert parsed["gpt-5.6-terra"] == (9.0, 9.0)
+    for model, row in _DEFAULT_MODEL_PRICES.items():
+        if model != "gpt-5.6-terra":
+            assert parsed[model] == row
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"m": [0, 0]}',          # free
+        '{"m": [1, -2]}',         # negative
+        '{"m": [1, 2, 0]}',       # free cached input
+        '{"m": [NaN, 2]}',        # nan cost never reaches the limit
+        '{"m": [Infinity, 2]}',
+        '{"m": "12"}',            # a string is not a row
+        '{"m": {"in": 1}}',
+        '[["m", [1, 2]]]',        # not an object
+        '{}',
+    ],
+)
+def test_model_prices_env_rejects_rows_that_would_disable_the_quota(raw):
+    from app.core.config import _DEFAULT_MODEL_PRICES, _parse_model_prices
+
+    assert _parse_model_prices(raw) == _DEFAULT_MODEL_PRICES
+
+
+def test_every_selectable_model_is_priced_even_with_a_partial_env(monkeypatch):
+    from app.core.config import get_settings
+    from app.services.ai_gateway_service import compute_cost_usd
+
+    monkeypatch.setenv("AI_MODEL_PRICES", '{"gpt-5.6-terra": [2, 12]}')
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        for model in harness.allowed_models():
+            assert compute_cost_usd(settings, model, 1_000_000, 1_000_000, 0) > 0, model
+    finally:
+        get_settings.cache_clear()
 
 
 # ── tool schemas (OPT-0075) ──────────────────────────────────────────────────

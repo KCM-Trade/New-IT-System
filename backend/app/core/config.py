@@ -54,31 +54,40 @@ _DEFAULT_MODEL_PRICES: dict[str, tuple[float, ...]] = {
 def _parse_model_prices(raw: str | None) -> dict[str, tuple[float, ...]]:
     """Parse AI_MODEL_PRICES (JSON) tolerantly; fall back to the defaults.
 
+    The env value is an OVERLAY on the built-in table, not a replacement: a
+    deployment it does not mention keeps its default row. Replacing the table
+    would price every omitted model at zero, i.e. take it out of the daily
+    cost quota, and nobody editing one model's price means that.
+
     A malformed value must not take the whole app down at import time (this
     runs inside get_settings(), i.e. on the request hot path the first time),
     so it degrades to the built-in table with a log line rather than raising.
-    Unknown deployments simply price at zero downstream, which the usage event
-    makes visible as `cost_usd: 0` next to non-zero token counts.
+    A row must be a list of 2 or 3 finite numbers greater than zero: a zero,
+    negative or NaN price would silently disable the quota for that model.
     """
     if raw is None or not raw.strip():
         return dict(_DEFAULT_MODEL_PRICES)
     import json
     import logging
+    import math
 
     try:
         parsed = json.loads(raw)
-        out: dict[str, tuple[float, ...]] = {}
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("expected a non-empty object")
+        out: dict[str, tuple[float, ...]] = dict(_DEFAULT_MODEL_PRICES)
         for model, prices in parsed.items():
-            if len(prices) not in (2, 3):
+            if not isinstance(prices, (list, tuple)) or len(prices) not in (2, 3):
                 raise ValueError("expected [in, out] or [in, out, cached in]")
-            out[str(model)] = tuple(float(p) for p in prices)
-        if not out:
-            raise ValueError("empty price table")
+            row = tuple(float(p) for p in prices)
+            if not all(math.isfinite(p) and p > 0 for p in row):
+                raise ValueError("prices must be finite and greater than zero")
+            out[str(model)] = row
         return out
     except Exception:  # noqa: BLE001 — degrade, do not crash settings
         logging.getLogger(__name__).error(
             "AI_MODEL_PRICES is not valid JSON of {model: [in, out]} or "
-            "{model: [in, out, cached in]}; using defaults"
+            "{model: [in, out, cached in]} with finite prices > 0; using defaults"
         )
         return dict(_DEFAULT_MODEL_PRICES)
 
