@@ -109,6 +109,10 @@ AUDIT_ACTION = "ai.query.submit"
 AUDIT_SESSION_DELETE = "ai.session.delete"
 AUDIT_SESSION_RENAME = "ai.session.rename"
 AUDIT_COMPARE_SELECT = "ai.compare.select"
+# OPT-0078: one row per search_web call, written when its `tool_done` arrives.
+# A separate action rather than a key on ai.query.submit: that row is cut at
+# 2000 characters and the queries would be the first thing to go.
+AUDIT_WEB_SEARCH = "ai.web_search.query"
 
 SESSION_NOT_FOUND = "session not found"
 
@@ -120,6 +124,17 @@ AUDIT_QUESTION_CHARS = 500
 # many characters — the guard already refuses anything over 4000.
 RUN_SQL_TOOL = "run_sql"
 AUDIT_SQL_CHARS = 2000
+
+# search_web (OPT-0078). The caps below are re-applied here although the agent
+# already applies them: what is stored and audited must not depend on the
+# other container being the current version.
+SEARCH_WEB_TOOL = "search_web"
+WEB_QUERY_CHARS = 200
+AUDIT_WEB_QUERIES_MAX = 6
+STORED_WEB_QUERIES_MAX = 10
+STORED_CITATIONS_MAX = 10
+CITATION_TITLE_CHARS = 200
+CITATION_URL_CHARS = 500
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -185,29 +200,108 @@ def _subject_labels(tool_input: Any) -> list[str]:
     return labels
 
 
+def _clean_citations(raw: Any) -> list[dict[str, str]]:
+    """``tool_done.citations`` as it may be stored: http(s) links only,
+    de-duplicated by url, capped in count and length."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        if not isinstance(url, str) or len(url) > CITATION_URL_CHARS:
+            continue
+        if not url.lower().startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        title = item.get("title")
+        out.append({"title": title[:CITATION_TITLE_CHARS] if isinstance(title, str) else "", "url": url})
+        if len(out) >= STORED_CITATIONS_MAX:
+            break
+    return out
+
+
+def _clean_queries(raw: Any, limit: int) -> list[str]:
+    return [q[:WEB_QUERY_CHARS] for q in (raw if isinstance(raw, list) else []) if isinstance(q, str) and q][:limit]
+
+
+def _apply_tool_done(entry: dict[str, Any], done: dict) -> None:
+    entry["ok"] = bool(done.get("ok"))
+    entry["certified"] = bool(done.get("certified", False))
+    entry["source"] = done.get("source") if done.get("ok") else None
+    entry["error_code"] = None if done.get("ok") else str(done.get("error_code") or "error")
+    # Optional per-call results (OPT-0078). The keys are absent, not empty,
+    # when there is nothing to keep — readers treat them as optional.
+    citations = _clean_citations(done.get("citations"))
+    if citations:
+        entry["citations"] = citations
+    queries = _clean_queries(done.get("queries"), STORED_WEB_QUERIES_MAX)
+    if queries:
+        entry["queries"] = queries
+
+
+def _event_call_id(data: dict) -> Optional[str]:
+    call_id = data.get("call_id")
+    return call_id[:64] if isinstance(call_id, str) and call_id else None
+
+
 def _resolve_tool_entry(entries: list[dict[str, Any]], done: dict) -> None:
-    """Fold a ``tool_done`` event into the oldest still-pending entry of the
-    same name (the agent finishes tools in the order it started them — the
-    same rule the browser applies)."""
+    """Fold a ``tool_done`` event into the entry of the call it finishes.
+
+    Paired by ``call_id`` (OPT-0078): tools of one model response run
+    concurrently and finish in any order, and a search's ``tool_done`` carries
+    that call's own citations. An event without ``call_id`` — an agent from
+    before the id existed, during a rolling deploy — falls back to the oldest
+    still-pending entry of the same name, the rule that held while completion
+    order was assumed to equal start order.
+    """
     name = str(done.get("name") or "")
+    call_id = _event_call_id(done)
+    if call_id is not None:
+        for entry in entries:
+            if entry.get("call_id") == call_id and entry["ok"] is None:
+                _apply_tool_done(entry, done)
+                return
     for entry in entries:
-        if entry["name"] == name and entry["ok"] is None:
-            entry["ok"] = bool(done.get("ok"))
-            entry["certified"] = bool(done.get("certified", False))
-            entry["source"] = done.get("source") if done.get("ok") else None
-            entry["error_code"] = None if done.get("ok") else str(done.get("error_code") or "error")
+        if entry["name"] == name and entry["ok"] is None and (call_id is None or "call_id" not in entry):
+            _apply_tool_done(entry, done)
             return
     if name:
-        entries.append(
-            {
-                "name": name,
-                "ok": bool(done.get("ok")),
-                "certified": bool(done.get("certified", False)),
-                "source": done.get("source") if done.get("ok") else None,
-                "error_code": None if done.get("ok") else str(done.get("error_code") or "error"),
-                "input": None,
-            }
-        )
+        entry = {"name": name, "ok": None, "certified": False, "source": None, "error_code": None, "input": None}
+        if call_id is not None:
+            entry["call_id"] = call_id
+        _apply_tool_done(entry, done)
+        entries.append(entry)
+
+
+def _search_audit_value(done: dict, entry_input: Any, session_id: str) -> dict[str, Any]:
+    """``new_value`` of one ``ai.web_search.query`` row. Every string is capped
+    so the JSON stays far below the audit column's 2000 characters and is
+    never cut mid-document."""
+    search = done.get("search") if isinstance(done.get("search"), dict) else {}
+    query = search.get("query")
+    if not isinstance(query, str):
+        query = entry_input.get("query") if isinstance(entry_input, dict) else None
+    value: dict[str, Any] = {
+        "query": query[:WEB_QUERY_CHARS] if isinstance(query, str) else "",
+        "queries": _clean_queries(done.get("queries"), AUDIT_WEB_QUERIES_MAX),
+        "num_requests": _non_negative_int(search.get("num_requests")),
+        # Whether anything left for Bing. A call refused by the query guard or
+        # the per-turn limit is audited too, with sent=false.
+        "sent": bool(search.get("sent", False)),
+        "session_id": session_id,
+        "call_id": _event_call_id(done),
+    }
+    if done.get("ok") is False:
+        value["error_code"] = str(done.get("error_code") or "error")[:64]
+    return value
+
+
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 SESSION_BUSY = ai_usage_db.REFUSAL_SESSION_BUSY
@@ -253,6 +347,11 @@ class _Run:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cost_usd: float = 0.0
+    # search_web (OPT-0078): billed per call as each `tool_done` arrives and
+    # kept apart from the token counts above, which are the MAIN model's only.
+    # `cost_usd` includes `search_cost_usd`.
+    search_cost_usd: float = 0.0
+    search_requests: int = 0
     terminal_reason: str = "error"
     num_turns: int = 0
     error_code: Optional[str] = None
@@ -292,6 +391,8 @@ async def _consume_agent_stream(
     quota_uid: int,
     day: str,
     trace_id: str,
+    session_id: str,
+    audit: Auditor,
     emit_event: Callable[[str, Any], None],
     tick: Callable[[float], Optional[str]],
     fail: Callable[[str, str], None],
@@ -355,16 +456,18 @@ async def _consume_agent_stream(
                     name = str(data.get("name") or "")
                     if name:
                         run.tools_called.append(name)
-                        run.tool_entries.append(
-                            {
-                                "name": name,
-                                "ok": None,
-                                "certified": False,
-                                "source": None,
-                                "error_code": None,
-                                "input": data.get("input"),
-                            }
-                        )
+                        entry: dict[str, Any] = {
+                            "name": name,
+                            "ok": None,
+                            "certified": False,
+                            "source": None,
+                            "error_code": None,
+                            "input": data.get("input"),
+                        }
+                        call_id = _event_call_id(data)
+                        if call_id is not None:
+                            entry["call_id"] = call_id
+                        run.tool_entries.append(entry)
                     for label in _subject_labels(data.get("input")):
                         if label not in run.subjects:
                             run.subjects.append(label)
@@ -390,6 +493,20 @@ async def _consume_agent_stream(
                     continue
                 elif event == "tool_done" and isinstance(data, dict):
                     _resolve_tool_entry(run.tool_entries, data)
+                    if data.get("name") == SEARCH_WEB_TOOL:
+                        await _account_web_search(
+                            run,
+                            data,
+                            settings=settings,
+                            audit=audit,
+                            session_id=session_id,
+                            quota_uid=quota_uid,
+                            day=day,
+                            trace_id=trace_id,
+                        )
+                        # `search` is accounting for this hop only (02): the
+                        # browser gets the citations and queries, not the bill.
+                        data = {k: v for k, v in data.items() if k != "search"}
                     # Subjects the agent resolved server-side (get_alert_orders:
                     # alert → client). Only well-formed `client:<int>` labels.
                     for label in (data.get("subjects") or [])[:_MAX_LABELS_PER_CALL]:
@@ -422,7 +539,10 @@ async def _consume_agent_stream(
                     o = int(data.get("output_tokens") or 0)
                     c = int(data.get("cache_read_input_tokens") or 0)
                     usd = gateway.compute_cost_usd(settings, run.model, i, o, c)
-                    data = {**data, "cost_usd": usd}
+                    # The browser's figure is the whole turn: the main model's
+                    # tokens plus the searches already charged on arrival. The
+                    # token counts stay the main model's own.
+                    data = {**data, "cost_usd": round(usd + run.search_cost_usd, 6)}
                     run.input_tokens += i
                     run.output_tokens += o
                     run.cache_read_tokens += c
@@ -464,6 +584,64 @@ async def _consume_agent_stream(
     except Exception:  # noqa: BLE001 — the stream must end cleanly
         logger.exception("AI turn failed (trace_id=%s)", trace_id)
         fail("internal", "internal error")
+
+
+async def _account_web_search(
+    run: _Run,
+    done: dict,
+    *,
+    settings: Any,
+    audit: Auditor,
+    session_id: str,
+    quota_uid: int,
+    day: str,
+    trace_id: str,
+) -> None:
+    """Charge and audit ONE ``search_web`` call, the moment its ``tool_done``
+    arrives (OPT-0078).
+
+    Not at turn end like the token usage: Bing is billed per request whether
+    or not the turn finishes, and the turn-end ``usage`` event never arrives
+    after a Stop whose drain runs out, a wall-clock timeout or an agent crash.
+    Never raises — a failed write is logged and the turn carries on.
+    """
+    search = done.get("search")
+    if not isinstance(search, dict):
+        # Contract violation: every search_web `tool_done` carries `search`.
+        # Nothing to price; the audit row is still written from what is known.
+        logger.error("AI web search: tool_done without `search` accounting (trace_id=%s)", trace_id)
+        search = {}
+    try:
+        tokens_in = _non_negative_int(search.get("input_tokens"))
+        tokens_out = _non_negative_int(search.get("output_tokens"))
+        requests = _non_negative_int(search.get("num_requests"))
+        if tokens_in or tokens_out or requests:
+            usd = gateway.compute_search_cost_usd(
+                settings, str(search.get("model") or ""), tokens_in, tokens_out, requests
+            )
+            run.search_cost_usd += usd
+            run.search_requests += requests
+            run.cost_usd += usd
+            # Tokens are passed as 0: the daily counters' token columns are the
+            # main model's, and these were priced at another model's rate.
+            await anyio.to_thread.run_sync(ai_usage_db.add_usage, quota_uid, day, 0, 0, usd)
+    except Exception:  # noqa: BLE001
+        logger.error("AI web search: could not record the cost (trace_id=%s)", trace_id, exc_info=True)
+    try:
+        entry_input = next(
+            (
+                e.get("input")
+                for e in run.tool_entries
+                if e.get("call_id") is not None and e.get("call_id") == _event_call_id(done)
+            ),
+            None,
+        )
+        new_value = _search_audit_value(done, entry_input, session_id)
+        await anyio.to_thread.run_sync(
+            lambda: audit.record(AUDIT_WEB_SEARCH, target=f"ai_session:{session_id}", new_value=new_value)
+        )
+    except Exception:  # noqa: BLE001
+        logger.error("AI web search: could not write the audit row (trace_id=%s)", trace_id, exc_info=True)
 
 
 def _merge_unique(lists: list[list[str]]) -> list[str]:
@@ -579,7 +757,7 @@ async def turn(
         if not disconnected.is_set():
             frames.put_nowait(frame)
 
-    def _agent_payload(model: str) -> dict:
+    def _agent_payload(model: str, *, web_search: bool) -> dict:
         return {
             "caller": {
                 "user_id": user.user_id if user else None,
@@ -599,6 +777,11 @@ async def turn(
             # (02 §8.3). The agent restores it, runs the turn, and sends
             # the new state back as `session_state`.
             "session_blob": session_blob,
+            # OPT-0078: whether this run may register search_web. Always sent
+            # explicitly — the agent's default is False, so an older API in a
+            # rolling deploy can never switch it on. Effective only when the
+            # agent container's AI_WEB_SEARCH_ENABLED is also true.
+            "web_search": web_search,
         }
 
     async def _run_turn() -> None:
@@ -681,7 +864,7 @@ async def turn(
 
             await _consume_agent_stream(
                 run,
-                _agent_payload(body.model),
+                _agent_payload(body.model, web_search=True),
                 settings=settings,
                 token=token,
                 request=request,
@@ -689,6 +872,8 @@ async def turn(
                 quota_uid=quota_uid,
                 day=day,
                 trace_id=trace_id,
+                session_id=session_id,
+                audit=audit,
                 emit_event=lambda event, data: emit(sse(event, data)),
                 tick=_tick,
                 fail=_fail,
@@ -728,6 +913,10 @@ async def turn(
                     new_value["error_code"] = run.error_code
                 if run.sql_texts:
                     new_value["sql"] = run.sql_texts
+                if run.search_requests:
+                    # Bing requests of this turn; the queries themselves are
+                    # in the ai.web_search.query rows. Already in cost_usd.
+                    new_value["web_search_requests"] = run.search_requests
                 await anyio.to_thread.run_sync(
                     lambda: audit.record(
                         AUDIT_ACTION, target=f"ai_session:{session_id}", new_value=new_value
@@ -940,13 +1129,15 @@ async def turn(
                 return
             await anyio.to_thread.run_sync(ai_usage_db.increment_turn, quota_uid, day, len(models))
 
-            # Identical payloads except `model`, so tool gating and scope are
-            # decided by the caller alone, never by which column it is.
+            # Identical payloads except `model`, so scope and the caller-based
+            # tool gating never depend on which column it is. The one tool
+            # gated by the KIND of turn is search_web: no compare run gets it
+            # (OPT-0078, user decision 4), hence web_search=False for all.
             await asyncio.gather(
                 *(
                     _consume_agent_stream(
                         run,
-                        _agent_payload(run.model),
+                        _agent_payload(run.model, web_search=False),
                         settings=settings,
                         token=token,
                         request=request,
@@ -954,6 +1145,8 @@ async def turn(
                         quota_uid=quota_uid,
                         day=day,
                         trace_id=trace_id,
+                        session_id=session_id,
+                        audit=audit,
                         emit_event=_emit_for(run),
                         tick=_tick_for(run),
                         fail=_fail_for(run),
