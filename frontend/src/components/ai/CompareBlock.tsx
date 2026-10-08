@@ -71,6 +71,8 @@ export interface CompareBlockProps {
   mode?: "choose" | "alternatives"
   /** The model whose answer is being committed, if any. */
   selecting?: string | null
+  /** The session's clickable-link set at this turn, handed to every column. */
+  allowedLinks?: string
   onSelect?: (compareId: string, model: string) => void
 }
 
@@ -78,6 +80,7 @@ export const CompareBlock = memo(function CompareBlock({
   compare,
   mode = "choose",
   selecting = null,
+  allowedLinks,
   onSelect,
 }: CompareBlockProps) {
   const { t } = useI18n()
@@ -138,6 +141,7 @@ export const CompareBlock = memo(function CompareBlock({
               startedAt={compare.startedAt}
               uniqueTools={(unique[model] ?? []).join("|")}
               selecting={selecting == null ? null : selecting === model ? "this" : "other"}
+              allowedLinks={allowedLinks}
               onSelect={handleSelect}
             />
           )

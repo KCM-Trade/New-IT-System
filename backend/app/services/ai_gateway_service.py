@@ -148,6 +148,18 @@ def compute_search_cost_usd(
             tuple(fallback[:2]),
         )
         prices = fallback
+    usd = (
+        max(0, int(input_tokens or 0)) * float(prices[0])
+        + max(0, int(output_tokens or 0)) * float(prices[1])
+    ) / 1_000_000 + compute_search_requests_cost_usd(settings, num_requests)
+    return round(usd, 6)
+
+
+def compute_search_requests_cost_usd(settings: Settings, num_requests: int) -> float:
+    """The Bing part alone: ``num_requests`` at the per-request price. Used on
+    its own for a search whose result never arrived (no model, no token
+    counts). A missing or non-positive price is the built-in default, logged
+    at ERROR — never $0."""
     per_1k = _positive(getattr(settings, "AI_WEB_SEARCH_USD_PER_1K_REQUESTS", None))
     if per_1k is None:
         per_1k = DEFAULT_AI_WEB_SEARCH_USD_PER_1K_REQUESTS
@@ -156,11 +168,7 @@ def compute_search_cost_usd(
             "charging the default %s USD per 1,000 requests",
             per_1k,
         )
-    usd = (
-        max(0, int(input_tokens or 0)) * float(prices[0])
-        + max(0, int(output_tokens or 0)) * float(prices[1])
-    ) / 1_000_000 + max(0, int(num_requests or 0)) * per_1k / 1000
-    return round(usd, 6)
+    return round(max(0, int(num_requests or 0)) * per_1k / 1000, 6)
 
 
 def _parse_sse_block(block: str) -> tuple[str, Any] | None:

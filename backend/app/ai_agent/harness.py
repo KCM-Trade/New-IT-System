@@ -337,6 +337,15 @@ def build_tools(
         try:
             envelope = await TOOL_IMPLS[name](ctx, query, budget=search_budget, meta=meta)
         except asyncio.CancelledError:
+            # If the main API has already stopped reading, the tool_done below
+            # never arrives and this search is neither billed nor audited
+            # there. This line is how such a search is found afterwards.
+            logger.warning(
+                "AI web search cancelled mid-call call_id=%s trace=%s user=%s sent=%s requests=%s "
+                "input_tokens=%s output_tokens=%s model=%s",
+                call_id, ctx.trace_id, ctx.user_id, meta.get("sent"), meta.get("num_requests"),
+                meta.get("input_tokens"), meta.get("output_tokens"), meta.get("model"),
+            )
             await emit(
                 "tool_done",
                 {"name": name, "call_id": call_id, "ok": False, "source": None, "certified": False,

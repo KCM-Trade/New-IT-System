@@ -131,6 +131,13 @@ AUDIT_SQL_CHARS = 2000
 SEARCH_WEB_TOOL = "search_web"
 WEB_QUERY_CHARS = 200
 AUDIT_WEB_QUERIES_MAX = 6
+# A search whose `tool_done` never arrived (stream closed at a deadline, agent
+# died) may or may not have reached Bing, and its request count is unknown.
+# It is charged as this many requests: the inner call's max_tool_calls is 4
+# and a light question bills 1-3, so 4 errs on the paying side without
+# pretending to know. Tokens are unknown and not charged.
+UNSETTLED_SEARCH_ASSUMED_REQUESTS = 4
+UNSETTLED_SEARCH_ERROR_CODE = "no_result"
 STORED_WEB_QUERIES_MAX = 10
 STORED_CITATIONS_MAX = 10
 CITATION_TITLE_CHARS = 200
@@ -352,6 +359,10 @@ class _Run:
     # `cost_usd` includes `search_cost_usd`.
     search_cost_usd: float = 0.0
     search_requests: int = 0
+    # id() of every search_web tool entry that already has its audit row and
+    # its charge — the guard behind "exactly one ai.web_search.query row per
+    # call" between the `tool_done` path and the end-of-stream sweep.
+    searches_settled: set[int] = field(default_factory=set)
     terminal_reason: str = "error"
     num_turns: int = 0
     error_code: Optional[str] = None
@@ -425,6 +436,7 @@ async def _consume_agent_stream(
         # rank_accounts over a month, cold starts) killed the turn
         # (2026-09-28, trace req-4e221b39). asyncio.wait() never cancels.
         pending: Optional[asyncio.Task] = None
+        over_quota: Optional[str] = None
         try:
             while True:
                 now = time.monotonic()
@@ -504,6 +516,7 @@ async def _consume_agent_stream(
                             day=day,
                             trace_id=trace_id,
                         )
+                        over_quota = await _cost_quota_message(settings, quota_uid, day, trace_id)
                         # `search` is accounting for this hop only (02): the
                         # browser gets the citations and queries, not the bill.
                         data = {k: v for k, v in data.items() if k != "search"}
@@ -561,6 +574,19 @@ async def _consume_agent_stream(
                 emit_event(event, data)
                 if run.saw_done:
                     break
+                if over_quota is not None:
+                    # Searches are charged mid-turn, so the daily cost limit is
+                    # re-checked after each one instead of only before the
+                    # turn. The turn ends here like a pre-turn refusal; the
+                    # worst overshoot is one search (plus the main model's
+                    # tokens of this turn, as before). Searches still in
+                    # flight are settled by the sweep below.
+                    logger.warning(
+                        "AI turn stopped mid-turn: daily cost limit reached after a web search (trace_id=%s)",
+                        trace_id,
+                    )
+                    fail("quota_exceeded", over_quota)
+                    break
         finally:
             # A read still in flight (deadline / drain exit) must be
             # cancelled and awaited first: aclose() on a generator that is
@@ -584,6 +610,104 @@ async def _consume_agent_stream(
     except Exception:  # noqa: BLE001 — the stream must end cleanly
         logger.exception("AI turn failed (trace_id=%s)", trace_id)
         fail("internal", "internal error")
+    finally:
+        # Every way out of the stream — normal end, drain deadline, turn
+        # timeout, mid-turn quota stop, agent death, an exception above.
+        await _settle_unfinished_searches(
+            run,
+            settings=settings,
+            audit=audit,
+            session_id=session_id,
+            quota_uid=quota_uid,
+            day=day,
+            trace_id=trace_id,
+        )
+
+
+def _quota_message(usage: dict, settings: Any) -> str:
+    return (
+        f"Daily quota reached ({usage['turns']}/{settings.AI_DAILY_TURNS_LIMIT} "
+        f"turns, ${usage['cost_usd']:.2f}/${settings.AI_DAILY_COST_LIMIT_USD:.2f}). "
+        "Resets at midnight Hong Kong time."
+    )
+
+
+async def _cost_quota_message(settings: Any, quota_uid: int, day: str, trace_id: str) -> Optional[str]:
+    """The refusal text when the caller's daily COST limit is now reached,
+    else None. Turn count is not re-checked: it only moves at turn start.
+    A failed read is not a reason to end a paid-for turn — it returns None."""
+    try:
+        usage = await anyio.to_thread.run_sync(ai_usage_db.get_usage, quota_uid, day)
+    except Exception:  # noqa: BLE001
+        logger.error("AI web search: could not re-check the daily quota (trace_id=%s)", trace_id, exc_info=True)
+        return None
+    if usage["cost_usd"] >= settings.AI_DAILY_COST_LIMIT_USD:
+        return _quota_message(usage, settings)
+    return None
+
+
+async def _settle_unfinished_searches(
+    run: _Run,
+    *,
+    settings: Any,
+    audit: Auditor,
+    session_id: str,
+    quota_uid: int,
+    day: str,
+    trace_id: str,
+) -> None:
+    """Audit and charge every ``search_web`` call of this stream that started
+    (``tool_use`` seen) and never reported back (no ``tool_done``).
+
+    The agent cannot deliver a ``tool_done`` once this side has stopped
+    reading (drain deadline, turn timeout, quota stop) or once it has died,
+    yet the query may already have left for Bing. Without this sweep that
+    query would have no audit row at all. ``sent`` is null — unknown, not
+    false — and the charge is an assumption (see the constant).
+
+    Residual, accepted: if THIS process dies mid-turn nothing here runs; the
+    query is then only in the agent container's log.
+    Never raises.
+    """
+    for entry in run.tool_entries:
+        if entry.get("name") != SEARCH_WEB_TOOL or entry.get("ok") is not None or id(entry) in run.searches_settled:
+            continue
+        run.searches_settled.add(id(entry))
+        call_id = entry.get("call_id")
+        logger.warning(
+            "AI web search: call %s ended without a result; auditing it as sent=unknown and "
+            "charging %d assumed requests (trace_id=%s)",
+            call_id or "-",
+            UNSETTLED_SEARCH_ASSUMED_REQUESTS,
+            trace_id,
+        )
+        try:
+            usd = gateway.compute_search_requests_cost_usd(settings, UNSETTLED_SEARCH_ASSUMED_REQUESTS)
+            run.search_cost_usd += usd
+            run.search_requests += UNSETTLED_SEARCH_ASSUMED_REQUESTS
+            run.cost_usd += usd
+            await anyio.to_thread.run_sync(ai_usage_db.add_usage, quota_uid, day, 0, 0, usd)
+        except Exception:  # noqa: BLE001
+            logger.error("AI web search: could not record the assumed cost (trace_id=%s)", trace_id, exc_info=True)
+        try:
+            entry_input = entry.get("input")
+            query = entry_input.get("query") if isinstance(entry_input, dict) else None
+            new_value = {
+                "query": query[:WEB_QUERY_CHARS] if isinstance(query, str) else "",
+                "queries": [],
+                "num_requests": UNSETTLED_SEARCH_ASSUMED_REQUESTS,
+                "sent": None,
+                "session_id": session_id,
+                "call_id": call_id,
+                "error_code": UNSETTLED_SEARCH_ERROR_CODE,
+            }
+            await anyio.to_thread.run_sync(
+                lambda value=new_value: audit.record(
+                    AUDIT_WEB_SEARCH, target=f"ai_session:{session_id}", new_value=value
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.error("AI web search: could not write the audit row (trace_id=%s)", trace_id, exc_info=True)
 
 
 async def _account_web_search(
@@ -605,6 +729,17 @@ async def _account_web_search(
     after a Stop whose drain runs out, a wall-clock timeout or an agent crash.
     Never raises — a failed write is logged and the turn carries on.
     """
+    # The entry this `tool_done` was just folded into (or created as): from
+    # here on the end-of-stream sweep must leave it alone.
+    done_call_id = _event_call_id(done)
+    for entry in run.tool_entries:
+        if entry.get("name") != SEARCH_WEB_TOOL or id(entry) in run.searches_settled:
+            continue
+        if (done_call_id is not None and entry.get("call_id") == done_call_id) or (
+            done_call_id is None and entry.get("ok") is not None
+        ):
+            run.searches_settled.add(id(entry))
+            break
     search = done.get("search")
     if not isinstance(search, dict):
         # Contract violation: every search_web `tool_done` carries `search`.
@@ -853,12 +988,7 @@ async def turn(
                 usage["turns"] >= settings.AI_DAILY_TURNS_LIMIT
                 or usage["cost_usd"] >= settings.AI_DAILY_COST_LIMIT_USD
             ):
-                _fail(
-                    "quota_exceeded",
-                    f"Daily quota reached ({usage['turns']}/{settings.AI_DAILY_TURNS_LIMIT} "
-                    f"turns, ${usage['cost_usd']:.2f}/${settings.AI_DAILY_COST_LIMIT_USD:.2f}). "
-                    "Resets at midnight Hong Kong time.",
-                )
+                _fail("quota_exceeded", _quota_message(usage, settings))
                 return
             await anyio.to_thread.run_sync(ai_usage_db.increment_turn, quota_uid, day)
 

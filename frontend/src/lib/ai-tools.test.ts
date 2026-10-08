@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 import type { ToolCall } from "@/hooks/useAiTurn"
 import {
   appendToolUse,
-  linkAllowlist,
+  parseLinkAllowlist,
+  sessionLinkAllowlists,
   normalizeLinkUrl,
   resolveToolDone,
   safeHttpUrl,
@@ -78,10 +79,66 @@ describe("citation URLs", () => {
     expect(normalizeLinkUrl("https://A.example/p#frag")).toBe(normalizeLinkUrl("https://a.example/p"))
     expect(normalizeLinkUrl("https://a.example/p?d=1")).not.toBe(normalizeLinkUrl("https://a.example/p"))
   })
+})
 
-  it("has no allow-list for a message without a web search, an empty one before results arrive", () => {
-    expect(linkAllowlist([])).toBeUndefined()
-    expect(linkAllowlist(appendToolUse([], { name: "run_sql" }, "k"))).toBeUndefined()
-    expect(linkAllowlist(twoPending(true))?.size).toBe(0)
+describe("session link allow-list", () => {
+  const search = (url: string, ok: boolean | null = true): ToolCall => ({
+    key: `search_web#${url}`,
+    name: "search_web",
+    ok,
+    certified: false,
+    source: WEB,
+    ...(ok ? { citations: [{ title: "t", url }] } : {}),
+  })
+  const sql: ToolCall = { key: "run_sql#0", name: "run_sql", ok: true, certified: false, source: null }
+  const A = "https://a.example/x"
+  const B = "https://b.example/y"
+
+  it("is undefined until the conversation searches, then restricts every later message", () => {
+    const lists = sessionLinkAllowlists([
+      { tools: [] }, // user
+      { tools: [sql] }, // before the first search: unchanged
+      { tools: [] },
+      { tools: [search(A)] },
+      { tools: [] },
+      { tools: [sql] }, // follow-up that searched nothing
+    ])
+    expect(lists.slice(0, 3)).toEqual([undefined, undefined, undefined])
+    expect([...parseLinkAllowlist(lists[3])!]).toEqual([A])
+    expect([...parseLinkAllowlist(lists[5])!]).toEqual([A])
+    // Unchanged set → the very same string, so memoised rows do not re-render.
+    expect(lists[5]).toBe(lists[3])
+  })
+
+  it("grows with later searches and never lets a message use citations from its future", () => {
+    const lists = sessionLinkAllowlists([{ tools: [search(A)] }, { tools: [search(B)] }])
+    expect(parseLinkAllowlist(lists[0])!.has(B)).toBe(false)
+    expect([...parseLinkAllowlist(lists[1])!].sort()).toEqual([A, B])
+  })
+
+  it("is empty while the first search is still running, earlier citations only while a later one runs", () => {
+    expect(parseLinkAllowlist(sessionLinkAllowlists([{ tools: twoPending(true) }])[0])?.size).toBe(0)
+    const lists = sessionLinkAllowlists([{ tools: [search(A)] }, { tools: [search(B, null)] }])
+    expect([...parseLinkAllowlist(lists[1])!]).toEqual([A])
+  })
+
+  it("restricts a compare turn after an earlier search, and counts searches inside compare runs", () => {
+    const run = (tools: ToolCall[]) => ({ tools })
+    const after = sessionLinkAllowlists([{ tools: [search(A)] }, { tools: [], compare: { runs: [run([sql]), run([])] } }])
+    expect([...parseLinkAllowlist(after[1])!]).toEqual([A])
+    const inside = sessionLinkAllowlists([{ tools: [], compare: { runs: [run([search(B)])] } }, { tools: [] }])
+    expect([...parseLinkAllowlist(inside[1])!]).toEqual([B])
+  })
+
+  it("gives a replayed session the same lists as the live one", () => {
+    // Replay rebuilds ToolCall rows from `tools_json`; keys differ, content does not.
+    const live = [{ tools: [search(A)] }, { tools: [sql] }]
+    const replayed = [{ tools: [{ ...search(A), key: "t0", callId: "tc_1" }] }, { tools: [{ ...sql, key: "t0" }] }]
+    expect(sessionLinkAllowlists(replayed)).toEqual(sessionLinkAllowlists(live))
+  })
+
+  it("round-trips: undefined stays unrestricted, an empty key allows nothing", () => {
+    expect(parseLinkAllowlist(undefined)).toBeUndefined()
+    expect(parseLinkAllowlist("")?.size).toBe(0)
   })
 })

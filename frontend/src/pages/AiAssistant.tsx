@@ -37,6 +37,7 @@ import {
   type AiCompare,
   type CompareReason,
 } from "@/lib/ai-compare"
+import { sessionLinkAllowlists } from "@/lib/ai-tools"
 import {
   readStoredSessionId,
   sessionModel,
@@ -186,6 +187,9 @@ export default function AiAssistantPage() {
       },
     })
   const hasConversation = messages.length > 0
+  // Which links each message may render as clickable: session-scoped once any
+  // message has searched the web (see `sessionLinkAllowlists`).
+  const linkAllowlists = useMemo(() => sessionLinkAllowlists(messages), [messages])
   // An unresolved compare turn owns the conversation: nothing can be asked
   // until an answer is chosen. Independent of the switch on purpose.
   const awaitingChoice = pendingCompare !== null && !streaming
@@ -558,10 +562,11 @@ export default function AiAssistantPage() {
         className="min-h-0 flex-1 overflow-y-auto"
       >
         <div className="flex flex-col gap-6 py-4">
-          {messages.map((m) => (
+          {messages.map((m, i) => (
             <MessageRow
               key={m.id}
               message={m}
+              allowedLinks={linkAllowlists[i]}
               streaming={streaming}
               selecting={selecting}
               onSelect={chooseAnswer}
@@ -613,12 +618,15 @@ function ModelOption({ label, desc }: { label: string; desc: string }) {
 // only around a choice, and the two callbacks are stable.
 const MessageRow = memo(function MessageRow({
   message,
+  allowedLinks,
   streaming,
   selecting,
   onSelect,
   onReason,
 }: {
   message: AiMessage
+  /** The session's clickable-link set at this message (a string, so the memo holds). */
+  allowedLinks: string | undefined
   streaming: boolean
   selecting: string | null
   onSelect: (compareId: string, model: string) => void
@@ -642,7 +650,7 @@ const MessageRow = memo(function MessageRow({
 
   // Still generating, or waiting for a choice: the runs are the answer.
   if (compare && isOpenCompare(compare)) {
-    return <CompareBlock compare={compare} mode="choose" selecting={selecting} onSelect={onSelect} />
+    return <CompareBlock compare={compare} mode="choose" selecting={selecting} allowedLinks={allowedLinks} onSelect={onSelect} />
   }
 
   const isLive = streaming && !message.error && !message.stopped
@@ -658,7 +666,7 @@ const MessageRow = memo(function MessageRow({
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           {message.text && (
-            <MarkdownMessage text={message.text} tools={message.tools} />
+            <MarkdownMessage text={message.text} allowedLinks={allowedLinks} />
           )}
           {showThinking && <p className="text-sm text-muted-foreground">{t("ai.thinking")}</p>}
           {message.tools.length > 0 && (
@@ -710,7 +718,7 @@ const MessageRow = memo(function MessageRow({
       {others && othersOpen && (
         // Same k-column rule as the live block; read-only, no select buttons.
         <div className="mt-3">
-          <CompareBlock compare={others} mode="alternatives" />
+          <CompareBlock compare={others} mode="alternatives" allowedLinks={allowedLinks} />
         </div>
       )}
     </div>

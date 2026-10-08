@@ -164,25 +164,55 @@ export function resolveToolDone(tools: readonly ToolCall[], payload: ToolDonePay
   return next
 }
 
+/** What `sessionLinkAllowlists` reads from a message: its own calls and, on a compare turn, every run's. */
+export interface LinkScopeMessage {
+  tools?: readonly ToolCall[]
+  compare?: { runs: readonly { tools: readonly ToolCall[] }[] }
+}
+
+const ALLOWLIST_SEPARATOR = "\n"
+
 /**
- * The links a message may render as clickable, or `undefined` when the message
- * made no web search (then links behave as they always did).
+ * Per message, the links it may render as clickable — `undefined` while the
+ * conversation has made no web search (links then behave as they always did).
  *
- * A message that searched the web has read attacker-controllable text; an
- * injected instruction can make the model write a link whose query string
- * carries data from its context. Only URLs the search itself returned as
- * citations stay clickable; everything else is shown as text.
+ * Scope is the SESSION, not the message: web content is attacker-controllable
+ * and stays in the model's context after the turn that fetched it, so an
+ * injected instruction can surface as `[details](https://x/?d=<data>)` in a
+ * later answer that searched nothing — or in a compare column, which never
+ * searches. From the first message with a `search_web` call onwards, every
+ * message (its compare runs included) is limited to the union of the citations
+ * seen in the session up to and including that message. A search still running
+ * contributes nothing yet, so the set is whatever earlier searches cited.
+ *
+ * Each entry is the normalised URLs joined by a newline (sorted; "" = restricted
+ * to nothing). A string rather than a Set so memoised rows keep a stable prop
+ * while a later message streams; `parseLinkAllowlist` turns it back.
  */
-export function linkAllowlist(tools: readonly ToolCall[] | undefined): ReadonlySet<string> | undefined {
-  if (!tools?.some((t) => t.name === WEB_SEARCH_TOOL)) return undefined
+export function sessionLinkAllowlists(messages: readonly LinkScopeMessage[]): (string | undefined)[] {
   const allowed = new Set<string>()
-  for (const t of tools) {
-    for (const c of t.citations ?? []) {
-      const n = normalizeLinkUrl(c.url)
-      if (n) allowed.add(n)
+  let searched = false
+  let key = ""
+  return messages.map((message) => {
+    const before = allowed.size
+    const calls = [...(message.tools ?? []), ...(message.compare?.runs ?? []).flatMap((r) => r.tools)]
+    for (const call of calls) {
+      if (call.name === WEB_SEARCH_TOOL) searched = true
+      for (const c of call.citations ?? []) {
+        const n = normalizeLinkUrl(c.url)
+        if (n) allowed.add(n)
+      }
     }
-  }
-  return allowed
+    if (!searched) return undefined
+    if (allowed.size !== before) key = [...allowed].sort().join(ALLOWLIST_SEPARATOR)
+    return key
+  })
+}
+
+/** The Set form of one `sessionLinkAllowlists` entry; `undefined` stays `undefined` (unrestricted). */
+export function parseLinkAllowlist(key: string | undefined): ReadonlySet<string> | undefined {
+  if (key === undefined) return undefined
+  return new Set(key ? key.split(ALLOWLIST_SEPARATOR) : [])
 }
 
 export function isWebSource(tool: Pick<ToolCall, "source">): boolean {
