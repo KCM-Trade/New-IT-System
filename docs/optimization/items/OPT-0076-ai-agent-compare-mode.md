@@ -460,4 +460,4 @@ Refactoring UI 建议：
 - 同一模型无变化的重复 select 不写审计行，`AuditMissing` 会记一条 WARNING。
 - 没有测试覆盖：N 个 run 共用整轮时限、`AUTH_ENABLED=false` 下的对比、多 worker 真并发抢对比名额。
 - 模型多选框仍是硬编码的 `AI_MODELS`，等 OPT-0077 的 `GET /ai/models`。
-- dev 的后端镜像缺 `openpyxl`（与本单无关，8001 起不来），需要重建 dev 镜像。
+- dev 的后端镜像缺 `openpyxl`（与本单无关，8001 起不来），需要重建 dev 镜像。**2026-10-08 已重建，8001 恢复。**
