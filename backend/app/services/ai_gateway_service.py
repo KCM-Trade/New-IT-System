@@ -17,13 +17,18 @@ Contract for the internal hop: docs/ai-agent/02-contracts.md §4.2 / §4.3.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, AsyncIterator
 
 from app.core.sse import SSE_KEEPALIVE_SECONDS, SSE_PING, sse as _sse
 
 import httpx
 
-from app.core.config import Settings
+from app.core.config import (
+    DEFAULT_AI_WEB_SEARCH_FALLBACK_PRICE,
+    DEFAULT_AI_WEB_SEARCH_USD_PER_1K_REQUESTS,
+    Settings,
+)
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -98,6 +103,72 @@ def compute_cost_usd(
         + max(0, int(output_tokens or 0)) * price_out
     ) / 1_000_000
     return round(usd, 6)
+
+
+def _positive(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def compute_search_cost_usd(
+    settings: Settings,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    num_requests: int,
+) -> float:
+    """Price ONE ``search_web`` call (OPT-0078): the inner model's tokens at
+    that model's own price row, plus the Bing requests at the per-request
+    price.
+
+    Unlike ``compute_cost_usd`` this never prices at $0 for missing
+    configuration. The search model is not one of the selectable models, so
+    the "every selectable model has a price row" test does not cover it; a
+    model without a row is charged the configured fallback row and logged at
+    ERROR. A missing or non-positive Bing price falls back to the built-in
+    default the same way.
+    """
+    prices = settings.AI_MODEL_PRICES.get(model)
+    if prices is None or _positive(prices[0]) is None or _positive(prices[1]) is None:
+        fallback = getattr(settings, "AI_WEB_SEARCH_FALLBACK_PRICE", None)
+        if (
+            not isinstance(fallback, (tuple, list))
+            or len(fallback) < 2
+            or _positive(fallback[0]) is None
+            or _positive(fallback[1]) is None
+        ):
+            fallback = DEFAULT_AI_WEB_SEARCH_FALLBACK_PRICE
+        logger.error(
+            "AI web search: no price row for search model %r in AI_MODEL_PRICES; "
+            "charging the fallback %s USD/MTok — add the row",
+            model,
+            tuple(fallback[:2]),
+        )
+        prices = fallback
+    usd = (
+        max(0, int(input_tokens or 0)) * float(prices[0])
+        + max(0, int(output_tokens or 0)) * float(prices[1])
+    ) / 1_000_000 + compute_search_requests_cost_usd(settings, num_requests)
+    return round(usd, 6)
+
+
+def compute_search_requests_cost_usd(settings: Settings, num_requests: int) -> float:
+    """The Bing part alone: ``num_requests`` at the per-request price. Used on
+    its own for a search whose result never arrived (no model, no token
+    counts). A missing or non-positive price is the built-in default, logged
+    at ERROR — never $0."""
+    per_1k = _positive(getattr(settings, "AI_WEB_SEARCH_USD_PER_1K_REQUESTS", None))
+    if per_1k is None:
+        per_1k = DEFAULT_AI_WEB_SEARCH_USD_PER_1K_REQUESTS
+        logger.error(
+            "AI web search: AI_WEB_SEARCH_USD_PER_1K_REQUESTS is missing or not > 0; "
+            "charging the default %s USD per 1,000 requests",
+            per_1k,
+        )
+    return round(max(0, int(num_requests or 0)) * per_1k / 1000, 6)
 
 
 def _parse_sse_block(block: str) -> tuple[str, Any] | None:

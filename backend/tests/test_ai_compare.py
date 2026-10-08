@@ -579,9 +579,13 @@ def test_two_models_mean_two_agent_calls_differing_only_in_model(make_client, ag
     calls = agent["calls"]
     assert len(calls) == 2
     assert sorted(c["model"] for c in calls) == sorted([TERRA, GROK])
-    # The internal interface is unchanged: same keys as a single-model turn.
+    # Same keys as a single-model turn. `web_search` (OPT-0078) is the one
+    # value that differs from it: no compare run may register search_web.
     for payload in calls:
-        assert set(payload) == {"caller", "scope", "session_id", "message", "model", "trace_id", "session_blob"}
+        assert set(payload) == {
+            "caller", "scope", "session_id", "message", "model", "trace_id", "session_blob", "web_search",
+        }
+        assert payload["web_search"] is False
     first, second = ({k: v for k, v in c.items() if k != "model"} for c in calls)
     assert first == second
     assert first["session_id"] == "fan"

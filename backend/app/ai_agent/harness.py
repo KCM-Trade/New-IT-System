@@ -41,6 +41,7 @@ import asyncio
 import os
 import re
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, Optional
 
@@ -75,6 +76,8 @@ from .tools.client_overview import MAX_SUBJECTS as OVERVIEW_MAX_SUBJECTS
 from .tools.common import has_module, risk_tools_enabled
 from .tools.run_sql import DATABASES as RUN_SQL_DATABASES, MAX_LIMIT as RUN_SQL_MAX_LIMIT
 from .tools.run_sql import run_sql as run_sql_impl
+from .tools.web_search import MAX_QUERY_CHARS as WEB_QUERY_MAX_CHARS
+from .tools.web_search import SearchBudget, web_search_env_enabled
 
 logger = get_logger(__name__)
 
@@ -242,7 +245,9 @@ def inline_tool_schemas(tools: list) -> list:
 # No per-tool call budget (removed 2026-09-28 at the user's request, after a
 # 2-then-6 cap kept turning "check these 9 clients" into a refusal). A turn is
 # bounded by MAX_MODEL_ITERATIONS and TURN_WALL_CLOCK_SECONDS instead; each DB
-# round trip keeps its own timeout.
+# round trip keeps its own timeout. The one exception is search_web
+# (OPT-0078): each call costs Bing requests, so it has its own per-turn budget
+# (tools.web_search.SearchBudget, owned by run_turn).
 
 
 def run_sql_enabled(ctx: CallerCtx) -> bool:
@@ -252,22 +257,58 @@ def run_sql_enabled(ctx: CallerCtx) -> bool:
     return ctx.scope is None
 
 
-def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None) -> list:
+def web_search_enabled(requested: bool) -> bool:
+    """Whether search_web is registered for this turn: the main API asked for
+    it (it does not for a compare run) AND the container switch is on. One
+    function so the tool and the prompt's web block can never disagree. Not a
+    function of the caller: the tool touches no client data, so a restricted
+    scope gets it too (user decision 2026-10-07).
+
+    A conversation may therefore hold search_web calls in its history on a
+    turn where the tool is absent; all five deployments accept that (probed
+    2026-10-08), which is why it is left unregistered rather than registered
+    and refused."""
+    return bool(requested) and web_search_env_enabled()
+
+
+def new_call_id() -> str:
+    return "tc_" + uuid.uuid4().hex[:16]
+
+
+def build_tools(
+    ctx: CallerCtx,
+    emit: Emit,
+    *,
+    risk_tools: Optional[bool] = None,
+    web_search: bool = False,
+    search_budget: Optional[SearchBudget] = None,
+) -> list:
     """Per-request tool closures. ``emit`` publishes tool_use / tool_done.
+    Both events carry a ``call_id`` minted here, so a consumer can pair them
+    without assuming calls finish in the order they started (the framework
+    runs the function calls of one model response concurrently).
 
     ``risk_tools``: whether the three Risk control tools are registered
     (``tools.common.risk_tools_enabled``); ``run_turn`` computes it once and
     passes the same value to the system prompt so tools and prompt block can
     never disagree. ``None`` = compute here.
+
+    ``web_search``: whether search_web is registered — already the final
+    answer (``web_search_enabled``), same single-boolean rule as above.
+    ``search_budget`` is the per-turn counter ``run_turn`` owns.
     """
     if risk_tools is None:
         risk_tools = risk_tools_enabled(ctx)
+    if search_budget is None:
+        search_budget = SearchBudget()
 
     async def _run(name: str, impl, **kwargs: Any) -> dict:
-        await emit("tool_use", {"name": name, "input": kwargs})
+        call_id = new_call_id()
+        await emit("tool_use", {"name": name, "input": kwargs, "call_id": call_id})
         envelope = await impl(ctx, **kwargs)
         done: dict[str, Any] = {
             "name": name,
+            "call_id": call_id,
             "ok": bool(envelope.get("ok")),
             "source": envelope.get("source") if envelope.get("ok") else None,
             "certified": bool((envelope.get("source") or {}).get("certified", False)),
@@ -280,6 +321,55 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
             # (30 d) while audit_log keeps 365 d (cold review #5).
             ids = {a.get("client_id") for a in (envelope.get("data") or {}).get("alerts") or []}
             done["subjects"] = [f"client:{int(i)}" for i in sorted(i for i in ids if i is not None)]
+        await emit("tool_done", done)
+        return envelope
+
+    async def _run_search(query: str) -> dict:
+        """search_web's own wrapper: its tool_done ALWAYS carries ``search``
+        (what the main API bills and audits — refused calls included, with
+        sent=false), and it is emitted even when the turn is cancelled
+        mid-search, because the Bing requests already made are still owed."""
+        name = "search_web"
+        call_id = new_call_id()
+        shown = query[:WEB_QUERY_MAX_CHARS] if isinstance(query, str) else ""
+        await emit("tool_use", {"name": name, "input": {"query": shown}, "call_id": call_id})
+        meta: dict[str, Any] = {}
+        try:
+            envelope = await TOOL_IMPLS[name](ctx, query, budget=search_budget, meta=meta)
+        except asyncio.CancelledError:
+            # If the main API has already stopped reading, the tool_done below
+            # never arrives and this search is neither billed nor audited
+            # there. This line is how such a search is found afterwards.
+            logger.warning(
+                "AI web search cancelled mid-call call_id=%s trace=%s user=%s sent=%s requests=%s "
+                "input_tokens=%s output_tokens=%s model=%s",
+                call_id, ctx.trace_id, ctx.user_id, meta.get("sent"), meta.get("num_requests"),
+                meta.get("input_tokens"), meta.get("output_tokens"), meta.get("model"),
+            )
+            await emit(
+                "tool_done",
+                {"name": name, "call_id": call_id, "ok": False, "source": None, "certified": False,
+                 "error_code": "web_search_timeout", "search": dict(meta)},
+            )
+            raise
+        ok = bool(envelope.get("ok"))
+        done: dict[str, Any] = {
+            "name": name,
+            "call_id": call_id,
+            "ok": ok,
+            "source": envelope.get("source") if ok else None,
+            "certified": bool((envelope.get("source") or {}).get("certified", False)),
+        }
+        if ok:
+            data = envelope.get("data") or {}
+            # Optional on the wire: absent when empty, never an empty list.
+            if data.get("citations"):
+                done["citations"] = data["citations"]
+            if data.get("queries"):
+                done["queries"] = data["queries"]
+        else:
+            done["error_code"] = (envelope.get("error") or {}).get("code", "internal")
+        done["search"] = dict(meta)
         await emit("tool_done", done)
         return envelope
 
@@ -461,6 +551,18 @@ def build_tools(ctx: CallerCtx, emit: Emit, *, risk_tools: Optional[bool] = None
             )
 
         tools.extend([get_risk_alerts, get_alert_orders, get_window_scan])
+
+    # OPT-0078: the only tool that reaches outside. Registered per TURN, not
+    # per caller (see web_search_enabled); absent means absent from the
+    # model's context, and the prompt's web block goes with it.
+    if web_search:
+        @tool(name="search_web", description=TOOL_DOCSTRINGS["search_web"])
+        async def search_web(
+            query: Annotated[str, f"ONE short generic public question, <= {WEB_QUERY_MAX_CHARS} characters, no client identifiers"],
+        ) -> dict:
+            return await _run_search(query)
+
+        tools.append(search_web)
 
     return inline_tool_schemas(tools)
 
@@ -822,6 +924,7 @@ async def run_turn(
     message: str,
     model: str,
     session_blob: Optional[dict] = None,
+    web_search: bool = False,
 ) -> AsyncIterator[tuple[str, dict]]:
     """Yield ``(event, data)`` pairs for one turn: text / tool_use / tool_done,
     then ``session_state`` (always — a failed turn must not lose the history
@@ -829,6 +932,10 @@ async def run_turn(
 
     ``session_blob`` is the previous turn's ``AgentSession.to_dict()`` from the
     main API's store, or None for a new conversation (02 §8.3).
+
+    ``web_search`` is the main API's request for search_web on this turn
+    (False for a compare run); it takes effect only with the container switch
+    on (``web_search_enabled``).
     """
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -839,9 +946,11 @@ async def run_turn(
     # tools must appear together or not at all.
     risk_tools = risk_tools_enabled(ctx)
     run_sql = run_sql_enabled(ctx)
+    web = web_search_enabled(web_search)
+    search_budget = SearchBudget()
     # Instructions travel as a per-call option, not as a stored message:
     # the "## Today" tail changes daily and must not accumulate in the blob.
-    instructions = system_prompt(risk_tools=risk_tools, run_sql=run_sql)
+    instructions = system_prompt(risk_tools=risk_tools, run_sql=run_sql, web_search=web)
 
     async def on_skill(skill: str, resource: Optional[str]) -> None:
         # Not forwarded to the browser by the main API; it only feeds the
@@ -852,7 +961,7 @@ async def run_turn(
         client=get_client(model),
         name="risk-analyst",
         instructions=instructions,
-        tools=build_tools(ctx, emit, risk_tools=risk_tools),
+        tools=build_tools(ctx, emit, risk_tools=risk_tools, web_search=web, search_budget=search_budget),
         default_options=dict(SESSION_CHAT_OPTIONS),
         context_providers=[
             *build_context_providers(),
@@ -911,6 +1020,13 @@ async def run_turn(
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+    # A turn stopped by the wall clock may have cut a search_web call short;
+    # its wrapper put a tool_done (carrying the Bing requests already made)
+    # on the queue while being cancelled. Hand those on — they are the bill.
+    while not queue.empty():
+        item = queue.get_nowait()
+        if item is not _END and item[0] == "tool_done" and "search" in item[1]:
+            yield item
 
     # The blob goes back BEFORE usage/done so the main API always has it when
     # the terminal event arrives, on the error path too (02 §8.3).

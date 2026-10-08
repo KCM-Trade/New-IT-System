@@ -16,7 +16,6 @@
 | [OPT-0057](./items/OPT-0057-risk-watchlist-copy-rewrite.md) | opt/risk-watchlist-copy-rewrite | 2026-07-25 | 阻塞：待用户在 items/OPT-0057-...-copy-review.md 填新文案后实施 |
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
 | [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | main（原 opt/trade-ip-profit-attribution） | 2026-09-22 | Phase 1–3 + 定点查找（2026-09-24 `78882c0`…`16cc5d3`）均在 main/prod。列表固定「同 IP ≥5 客户」；lookup = Client/账户/开仓 IP → peers + 琥珀色共用 IP。剩 cs-only 抽查 + Phase 1 时间项（可选） |
-| [OPT-0078](./items/OPT-0078-ai-agent-web-search-tool.md) | opt/ai-agent-web-search-tool | 2026-10-08 | 第一步两个探针（孤儿调用 / max_tool_calls），结论决定注册方式 |
 
 ## ✅ 待领取（Ready）
 

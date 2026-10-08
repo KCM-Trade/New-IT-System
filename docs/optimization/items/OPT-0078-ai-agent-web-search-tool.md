@@ -1,7 +1,7 @@
 ---
 id: OPT-0078
 title: AI 助手联网搜索 —— 函数工具 search_web 包一层 Azure 内置 web_search
-status: wip
+status: done
 priority: P2
 area: mixed
 effort: L
@@ -351,6 +351,95 @@ Bing 单价缺失不按 $0、内层 token 不进主 `input_tokens`；每次调�
 
 初版与本版的差异：effort M → L（多了关联 id、到达即计费、独立审计行、链接降级四块）。
 
+## 实施记录
+
+### 探针结论（2026-10-08，dev 容器）
+
+脚本 `docs/ai-agent/probes/2026-10-08-web-search-orphan-and-cap-probe.py`。
+
+1. **孤儿调用：五个可选部署全部接受**（input 里有 `search_web` 的 function_call / output，tools 列表里没有它；
+   「注册了别的工具」与「完全不带 tools」两种都试了）。→ 采用「**不注册**」，不需要 `web_search_disabled` 错误码。
+   回滚后旧代码续聊含搜索的会话也不受影响。
+2. **`max_tool_calls` 生效**，限制的是内层 `web_search_call` 的个数（流里 `web_search_call.completed` 次数 = 上限）。
+   → 设 4。⚠ 但**计费单位不是调用个数**：一次 search 动作可带多条 `queries`（实测 1–5 条），
+   `tool_usage.web_search.num_requests` = 各 search 动作的 queries 条数之和（上限 4 时实测 10，上限 3 时 8，不设时 11）。
+   所以流被取消时的估算按「已完成 search 动作的 queries 条数之和」，不是 `completed` 事件数。
+3. 顺带发现：
+   - **luna 部署限额 = 100,000 token/分钟、100 请求/分钟**（响应头 `x-ratelimit-limit-*`）。一次重问题的内层调用吃
+     16k–28k 输入 token，连跑 3 次后第 4 次就 429。即全公司每分钟约 4–6 次重搜索，且与 compaction 摘要器共用。
+   - 内层响应可能 `status=incomplete`、`reason=content_filter`（一次轻问题 + 上限 2 时出现，只有 95 个输出 token）。
+     要当成一种失败形态处理。
+   - `open_page` 动作再次出现（不计入 `num_requests`）。
+
+### 冻结的跨层契约（2026-10-08，三个并行 worker 以此为准）
+
+- 内部请求（主 API → agent）：`web_search: bool = False`。生效 = 该值 AND 容器 env `AI_WEB_SEARCH_ENABLED`。
+- `tool_use`：`{name, input, call_id}`。`search_web` 的 `input.query` 截到 200 字符。
+- `tool_done`：原有字段 + `call_id`；`search_web` 另有
+  - `citations?: [{title, url}]`、`queries?: [str]` —— 为空时字段不出现；
+  - `search: {model, input_tokens, output_tokens, num_requests, sent, query}` —— **每次 `search_web` 调用都带**
+    （被守卫 / 上限拒掉的 `sent=false`、其余为 0）。主 API 用它计费 + 写审计，**转发浏览器前剥掉**。
+- 信封：`data = {answer, citations, queries, num_requests}`；`source = {service: "web", certified: false}`。
+- 错误码（四个）：`query_rejected` / `search_limit_reached` / `web_search_timeout` / `web_search_unavailable`。
+- 审计：action `ai.web_search.query`，每次调用一行，
+  `new_value = {query, queries, num_requests, sent, error_code?, session_id, call_id}`。
+- `ai_messages.tools_json` 每个工具条目可多出 `call_id` / `citations` / `queries`（可选）。
+- env：agent 容器 `AI_WEB_SEARCH_ENABLED`（代码缺省 false，compose 写 true）、`AI_AGENT_MODEL_SEARCH`（缺省 `gpt-5.6-luna`）；
+  主 API 配置 Bing 单价（缺省 14.0 USD / 1,000 次）。
+
 ## 结果
 
-（未开始）
+2026-10-08 完成。交付与「方案」一致，下列为出入与补充。
+
+### 与方案的出入
+
+- 探针 1 通过 → 采用「不注册」，**没有** `web_search_disabled` 错误码（新错误码四个）。
+- 四个新错误码的应对写在联网条件块里，不在基础规则 4 里（不联网的轮次 prompt 不提 `search_web`）。
+  基础 prompt 的两句字面量（"no file, shell or web capability" / "There is no per-tool call limit"）在不联网时仍成立，
+  联网时由 `system_prompt(web_search=True)` 换掉；两种形态各有测试。
+- 没用 `run_async_with_timeout`（它写死 `upstream_timeout`），工具自己用 `anyio.fail_after(60)`。
+- 过长的引用 URL 直接丢弃而不是截断（截断后是另一个 URL）。信封字节上限 `MAX_RESULT_BYTES = 16,000`。
+- `definition.day_basis` 对网页结果为 `null`。
+- 主 API 两个新配置：`AI_WEB_SEARCH_USD_PER_1K_REQUESTS`（14.0）、`AI_WEB_SEARCH_FALLBACK_PRICE`（`5,30`）。
+- 转发给浏览器的 `usage.cost_usd` 与 `ai.query.submit.cost_usd` 含搜索费用；后者在有搜索时多 `web_search_requests`。
+
+### 冷审（2026-10-08，merge 前，独立 reviewer）处理记录 —— 用户逐条选「当场修」，commit `3a75ff7`
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | 查询词可带 URL，内层会 `open_page` → 数据可送到任意服务器 | 守卫拒绝 `://`、`www.`、搜索操作符、域名形态；内层说明禁止打开问题里的 URL |
+| 2 | 链接白名单按单条消息算，搜索后的下一轮与对比列任意链接可点 | 改成按会话：首次搜索之后所有消息只有已引用的链接可点 |
+| 3 | 数字守卫可用分隔符绕过 | NFKC + 去零宽字符，跨分隔符数位数；日期 / 年份 / ≤4 位整数带小数的价格放行；拒绝拼写式邮箱 |
+| 4 | 主 API 关流时进行中的搜索不计费不审计 | 流结束时清扫：`sent: null` / `no_result` 审计行 + 按 4 次请求计费 + WARNING |
+| 5 | 被拒调用不占额度 | 每轮最多 3 次拒绝 |
+| 6 | 被中断的搜索少计费 | 取上报值与估算值的较大者 |
+| 7 | 与摘要器共用 luna 100k token/分钟，无并发上限 | agent 进程内同时最多 2 个内层搜索 |
+| 8 | 费用配额只在轮前检查 | 每次搜索入账后复查，超限以 `quota_exceeded` 结束本轮；内层加 `max_output_tokens=4000` |
+| 9–11 | dev/prod 共用库的窗口、引用标题由网页决定、部分行为只对假对象断言 | 见 follow-up |
+
+### 09 §6 五问
+
+1. 一次调用 + 一个工具能不能答？不能——何时搜、搜什么、搜完是否再查内部数据由模型决定。
+2. 步骤固定吗？不固定。
+3. 模式 7，四条护栏的落点：迭代上限（40 次 / 520s 不变）+ 本工具每轮 3 次；工具白名单（注册门控，对比与开关关闭时不存在）；
+   出参封顶（答案 4,000 字符、引用 10 条、信封 16,000 字节）；审计（每次调用一行）。
+4. 会让模型「写内容再执行」吗？会（出网）。执行侧防线 = 查询守卫 + 每轮上限 + 内层只收查询词 + 进程级并发上限；UI 标「外部来源 · 未核实」。
+5. 改状态吗？不改。
+
+### 验证
+
+- `./verify.sh` 绿（不含 `slow`）。
+- dev 容器活体：五个可选模型各一轮含 `search_web` 的问题成功；受限 scope 可用；搜过之后同会话以 grok / DeepSeek、不注册该工具续问成功。
+- 经主 API 端到端（真实 agent、临时库）：`search` 未到浏览器、`tools_json` 含查询词与来源、费用入当日 `cost_usd`、审计行写入；
+  同会话对比轮不出网；含 `1-8522845` 与含 URL 的查询词被拒且未出网。
+- **未做**：浏览器里目视徽章弹层与链接降级（只有单元测试）；墙钟超时与 Stop 下的计费只有单元测试。
+
+### Follow-up
+
+- **luna 限额 100k token/分钟**：顺序连搜 3 次重问题仍会 429（并发上限管不了每分钟 token）。建议在 Azure 上调高限额或给搜索单独建部署（`AI_AGENT_MODEL_SEARCH`）。
+- 守卫的已知缺口：客户姓名；把一个 id 拆到多次调用；写成价格形态的 6 位数（`1530.34`）。带千分位的数字（`254,000`）与 `XAUUSD.pro` 这类带字母后缀的品种名会被误拒。
+- Bing 使用条款原文未读（用户 2026-10-08：不阻塞上线）。
+- `open_page` 读缓存还是实时页面未验证。
+- 主模型 token 仍只在 `usage` 到达时入账（既有缺口，配额中止的轮次不计主模型 token）。
+- dev / prod 共用 `ai_agent.db`：旧前端会把含搜索的会话里所有链接渲染成可点，部署时三个镜像一起上。
+- 取消传播、`max_tool_calls`、`tool_usage` 形状只在探针与活体里验过，没有自动化断言；SDK 升级（现钉 `openai==3.24.0`）后重跑探针。

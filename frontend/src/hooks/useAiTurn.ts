@@ -34,6 +34,7 @@ import {
   type CompareReason,
   type CompareRun,
 } from "@/lib/ai-compare";
+import { appendToolUse, resolveToolDone, type ToolCitation } from "@/lib/ai-tools";
 import { createDeltaBuffer, type DeltaBuffer } from "@/lib/delta-buffer";
 import { sessionTranscript, type AiSessionDetail } from "@/lib/ai-session";
 import { apiFetch } from "@/lib/fetch";
@@ -67,6 +68,12 @@ export interface ToolCall {
    * uncertified number with no visible query behind it is not reviewable.
    */
   input?: unknown;
+  /** The agent's per-call id; pairs `tool_done` with its `tool_use`. Absent on old sessions. */
+  callId?: string;
+  /** `search_web` only: the sources the search returned (http(s) only). Absent when empty. */
+  citations?: ToolCitation[];
+  /** `search_web` only: the queries actually sent to the search engine. Absent when empty. */
+  queries?: string[];
 }
 
 export interface TurnError {
@@ -155,13 +162,18 @@ interface InitEvent {
   compare?: { compare_id?: string; models?: string[] };
 }
 interface TextEvent { delta: string }
-interface ToolUseEvent { name: string; input?: unknown }
+interface ToolUseEvent { name: string; input?: unknown; call_id?: string }
 interface ToolDoneEvent {
   name: string;
   ok: boolean;
   source: ToolSource | null;
   certified: boolean;
   error_code?: string;
+  /** Pairs with the `tool_use` of the same id; absent from an older agent. */
+  call_id?: string;
+  /** `search_web` only; absent when empty. */
+  citations?: ToolCitation[];
+  queries?: string[];
 }
 interface ErrorEvent { code: string; message: string; trace_id?: string }
 
@@ -581,33 +593,16 @@ export function useAiTurn(options: UseAiTurnOptions = {}): UseAiTurnResult {
               const p = parseFrameJson<ToolUseEvent>(frame);
               if (!p?.name) break;
               const key = `${p.name}#${toolSeq++}`;
-              patchAssistant(assistantId, (m) => ({
-                ...m,
-                tools: [...m.tools, { key, name: p.name, ok: null, certified: false, source: null, input: p.input }],
-              }));
+              patchAssistant(assistantId, (m) => ({ ...m, tools: appendToolUse(m.tools, p, key) }));
               break;
             }
             case "tool_done": {
               const p = parseFrameJson<ToolDoneEvent>(frame);
               if (!p?.name) break;
-              patchAssistant(assistantId, (m) => {
-                // Resolve the oldest still-pending call of this name; the agent
-                // finishes tools in the order it started them.
-                const idx = m.tools.findIndex((t) => t.name === p.name && t.ok === null);
-                const done: ToolCall = {
-                  key: idx === -1 ? `${p.name}#${toolSeq++}` : m.tools[idx].key,
-                  name: p.name,
-                  ok: p.ok,
-                  certified: Boolean(p.certified),
-                  source: p.source ?? null,
-                  errorCode: p.ok ? undefined : p.error_code ?? "error",
-                  input: idx === -1 ? undefined : m.tools[idx].input,
-                };
-                const tools = [...m.tools];
-                if (idx === -1) tools.push(done);
-                else tools[idx] = done;
-                return { ...m, tools };
-              });
+              // Paired by `call_id`; without one, the oldest pending call of
+              // this name (see resolveToolDone).
+              const fallbackKey = `${p.name}#${toolSeq++}`;
+              patchAssistant(assistantId, (m) => ({ ...m, tools: resolveToolDone(m.tools, p, fallbackKey) }));
               break;
             }
             case "usage": {

@@ -264,3 +264,25 @@ describe("sumUsage", () => {
     ).toBeNull()
   })
 })
+
+describe("applyRunEvent — call_id pairing (OPT-0078)", () => {
+  it("resolves the call named by call_id, whatever order the calls finish in", () => {
+    let run = newCompare(["grok-4.7", "gpt-5.6-terra"]).runs[0]
+    run = applyRunEvent(run, "tool_use", { name: "search_web", input: { query: "A" }, call_id: "c1" })
+    run = applyRunEvent(run, "tool_use", { name: "search_web", input: { query: "B" }, call_id: "c2" })
+    run = applyRunEvent(run, "tool_done", {
+      name: "search_web", ok: true, call_id: "c2", citations: [{ title: "B", url: "https://b.example/" }],
+    })
+    expect(run.tools[0].ok).toBeNull()
+    expect(run.tools[1]).toMatchObject({ ok: true, input: { query: "B" } })
+    expect(run.tools[1].citations?.[0].url).toBe("https://b.example/")
+  })
+
+  it("without call_id resolves the oldest pending call of that name", () => {
+    let run = newCompare(["grok-4.7", "gpt-5.6-terra"]).runs[0]
+    run = applyRunEvent(run, "tool_use", { name: "run_sql", input: { sql: "select 1" } })
+    run = applyRunEvent(run, "tool_use", { name: "run_sql", input: { sql: "select 2" } })
+    run = applyRunEvent(run, "tool_done", { name: "run_sql", ok: true })
+    expect(run.tools.map((t) => t.ok)).toEqual([true, null])
+  })
+})

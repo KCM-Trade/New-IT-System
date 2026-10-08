@@ -10,6 +10,7 @@ Append-only 日志。最新的写在最上面。
 
 | 日期 | ID | Commit | 标题 |
 |------|----|--------|------|
+| 2026-10-08 | [OPT-0078](./items/OPT-0078-ai-agent-web-search-tool.md) | — | AI 助手联网搜索 `search_web`：函数工具包一层 Azure 内置 `web_search`（内层只收查询词）；执行侧查询守卫、每轮 3 次、到达即计费、每次一行审计、链接按会话白名单；对比模式不联网 |
 | 2026-10-07 | [OPT-0076](./items/OPT-0076-ai-agent-compare-mode.md) | — | AI agent 多模型对比模式：一次提问并发 2–3 个模型、并排显示、用户选一个继续；候选表 + select 接口 + `ai.compare.select` 审计；回答标出模型名 |
 | 2026-10-07 | [OPT-0064](./items/OPT-0064-ai-agent-slice1.md) | `ac21437` | AI 分析 agent 第一刀（独立容器 + `/api/v1/ai/*` + 三个受信工具 + 审计 + 配额）；09-27 已上 prod，本行是补 close |
 | 2026-10-07 | [OPT-0075](./items/OPT-0075-ai-agent-grok-deepseek.md) | — | AI agent 加 grok-4.7 + DeepSeek-V4-Pro 可选模型（都走 Responses API）：工具 schema 展开 `$ref`、五模型清单、按模型的缓存单价、价格 env 改叠加 |

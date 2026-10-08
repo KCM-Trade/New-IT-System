@@ -10,6 +10,7 @@
  */
 
 import type { AiMessage, AiModel, ToolCall, ToolSource, TurnUsage } from "@/hooks/useAiTurn"
+import { webFields } from "@/lib/ai-tools"
 import { COMPARE_REASONS, type AiCompare, type CompareReason, type CompareRun } from "@/lib/ai-compare"
 
 export interface AiSessionSummary {
@@ -32,6 +33,11 @@ export interface AiSessionToolRow {
   error_code?: string | null
   /** The model's arguments (subject, date range, later the SQL text). */
   input?: unknown
+  /** Per-call id (OPT-0078); absent on rows stored before it. */
+  call_id?: string | null
+  /** `search_web` only; absent when empty. */
+  citations?: { title: string; url: string }[] | null
+  queries?: string[] | null
 }
 
 export interface AiSessionMessageRow {
@@ -93,7 +99,7 @@ export const AI_SESSION_STORAGE_KEY = "AI_ASSISTANT_SESSION_ID"
 function mapToolRows(rows: AiSessionToolRow[] | null | undefined, keyPrefix: string): ToolCall[] {
   return (rows ?? []).map((t, i) => {
     const ok = t.ok === true
-    return {
+    const call: ToolCall = {
       key: `${keyPrefix}#${i}`,
       name: t.name,
       ok: t.ok === null || t.ok === undefined ? false : t.ok,
@@ -101,7 +107,10 @@ function mapToolRows(rows: AiSessionToolRow[] | null | undefined, keyPrefix: str
       source: t.source ?? null,
       errorCode: ok ? undefined : t.error_code ?? "error",
       input: t.input,
+      ...webFields(t.citations, t.queries),
     }
+    if (t.call_id) call.callId = t.call_id
+    return call
   })
 }
 

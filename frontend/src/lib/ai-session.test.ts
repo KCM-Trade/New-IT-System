@@ -305,3 +305,44 @@ describe("sessionTranscript", () => {
     expect(other[3].compare?.runs[0].text).toBe("")
   })
 })
+
+describe("mapSessionMessages — web search rows (OPT-0078)", () => {
+  const web = { service: "web", function: "search_web", as_of: null, certified: false }
+  const out = mapSessionMessages([
+    {
+      seq: 1,
+      role: "assistant",
+      text: "see [Fed](https://www.federalreserve.gov/x)",
+      tools: [
+        {
+          name: "search_web",
+          ok: true,
+          certified: false,
+          source: web,
+          input: { query: "fomc decision" },
+          call_id: "c1",
+          queries: ["fomc decision october"],
+          citations: [
+            { title: "Fed", url: "https://www.federalreserve.gov/x" },
+            { title: "bad", url: "javascript:alert(1)" },
+          ],
+        },
+        { name: "get_client_overview", ok: true, certified: true, source: null },
+      ],
+      usage: null,
+      error_code: null,
+      at: "2026-10-08T00:00:00Z",
+    },
+  ])
+
+  it("a reloaded search keeps its queries and sources, minus non-http(s) URLs", () => {
+    const [search, other] = out[0].tools
+    expect(search.callId).toBe("c1")
+    expect(search.queries).toEqual(["fomc decision october"])
+    expect(search.citations).toEqual([{ title: "Fed", url: "https://www.federalreserve.gov/x" }])
+    expect(search.source?.service).toBe("web")
+    expect("citations" in other).toBe(false)
+    expect("queries" in other).toBe(false)
+    expect("callId" in other).toBe(false)
+  })
+})

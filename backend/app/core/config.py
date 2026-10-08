@@ -92,6 +92,57 @@ def _parse_model_prices(raw: str | None) -> dict[str, tuple[float, ...]]:
         return dict(_DEFAULT_MODEL_PRICES)
 
 
+# OPT-0078: Bing grounding is billed per request, not per token. Source:
+# microsoft.com/bing/apis/grounding-pricing as read on 2026-10-07 (not yet
+# checked against an invoice).
+DEFAULT_AI_WEB_SEARCH_USD_PER_1K_REQUESTS = 14.0
+# Price row [input, output] (USD per MTok) charged for the tokens of a web
+# search whose reported model has no row in AI_MODEL_PRICES. Deliberately at
+# the top of the table: an unknown deployment must cost MORE than any known
+# one, never $0 (which would take it out of the daily cost quota).
+DEFAULT_AI_WEB_SEARCH_FALLBACK_PRICE: tuple[float, float] = (5.0, 30.0)
+
+
+def _parse_positive_float(name: str, raw: str | None, default: float) -> float:
+    """A price that must be finite and > 0. Unset = the default, silently; a
+    present but unusable value (zero, negative, NaN, text) = the default with
+    an ERROR line — it must never become a free search."""
+    if raw is None or not raw.strip():
+        return default
+    import logging
+    import math
+
+    try:
+        value = float(raw.strip())
+        if not (math.isfinite(value) and value > 0):
+            raise ValueError("must be finite and greater than zero")
+        return value
+    except ValueError:
+        logging.getLogger(__name__).error(
+            "%s is not a finite number greater than zero; using the default %s", name, default
+        )
+        return default
+
+
+def _parse_fallback_price(raw: str | None) -> tuple[float, float]:
+    """Parse AI_WEB_SEARCH_FALLBACK_PRICE ("in,out", USD per MTok)."""
+    if raw is None or not raw.strip():
+        return DEFAULT_AI_WEB_SEARCH_FALLBACK_PRICE
+    import logging
+    import math
+
+    try:
+        parts = [float(x) for x in raw.replace(";", ",").split(",") if x.strip()]
+        if len(parts) != 2 or not all(math.isfinite(x) and x > 0 for x in parts):
+            raise ValueError("expected two finite prices greater than zero")
+        return (parts[0], parts[1])
+    except ValueError:
+        logging.getLogger(__name__).error(
+            "AI_WEB_SEARCH_FALLBACK_PRICE is not 'in,out' with finite prices > 0; using the default"
+        )
+        return DEFAULT_AI_WEB_SEARCH_FALLBACK_PRICE
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     """Read a boolean env var tolerantly.
 
@@ -207,6 +258,8 @@ class Settings:
     AI_DAILY_COST_LIMIT_USD: float
     AI_COMPARE_MAX_CONCURRENT: int
     AI_MODEL_PRICES: dict[str, tuple[float, ...]]
+    AI_WEB_SEARCH_USD_PER_1K_REQUESTS: float
+    AI_WEB_SEARCH_FALLBACK_PRICE: tuple[float, float]
     AI_SESSION_RETENTION_DAYS: int
     FRED_API_KEY: str
 
@@ -726,6 +779,17 @@ class Settings:
         # the model's third price when it has one, otherwise at 10% of the
         # input price, which is Azure OpenAI's published discount.
         self.AI_MODEL_PRICES = _parse_model_prices(os.environ.get("AI_MODEL_PRICES"))
+        # OPT-0078: the search_web tool. Each call reports its own inner-model
+        # tokens and Bing request count on `tool_done`; both are priced here.
+        # Neither value may resolve to zero — see the parsers.
+        self.AI_WEB_SEARCH_USD_PER_1K_REQUESTS = _parse_positive_float(
+            "AI_WEB_SEARCH_USD_PER_1K_REQUESTS",
+            os.environ.get("AI_WEB_SEARCH_USD_PER_1K_REQUESTS"),
+            DEFAULT_AI_WEB_SEARCH_USD_PER_1K_REQUESTS,
+        )
+        self.AI_WEB_SEARCH_FALLBACK_PRICE = _parse_fallback_price(
+            os.environ.get("AI_WEB_SEARCH_FALLBACK_PRICE")
+        )
         # OPT-0065 §8.2: how long a soft-deleted conversation (ai_sessions +
         # ai_messages) is kept before the daily sweep hard-deletes it. Same
         # convention as the users.db retention knobs: 0 = keep forever, NOT

@@ -86,14 +86,14 @@ BASE = ["get_client_overview", "get_trade_activity", "get_risk_signals", "rank_a
         "rank_open_positions"]
 
 
-def _names(c):
+def _names(c, web_search=False):
     pytest.importorskip("agent_framework")
     from app.ai_agent import harness
 
     async def _emit(_e, _d):
         pass
 
-    return [t.name for t in harness.build_tools(c, _emit)]
+    return [t.name for t in harness.build_tools(c, _emit, web_search=web_search)]
 
 
 def test_build_tools_three_lists():
@@ -109,13 +109,20 @@ def test_build_tools_three_lists():
     # cs-only + unrestricted: still no risk tools
     assert not RISK_TOOLS & set(_names(ctx(["ai", "cs"])))
     assert not RISK_TOOLS & set(_names(ctx([])))
+    # search_web follows the turn, not the caller: a restricted caller gets it
+    # too (it touches no client data), and nobody gets it when not asked for.
+    assert _names(ctx(["ai", "risk"], frozenset({1})), web_search=True) == BASE + ["search_web"]
+    assert _names(ctx(["ai"]), web_search=True) == BASE + ["run_sql", "search_web"]
+    assert "search_web" not in star
 
 
 def test_tool_registries_agree():
     from app.ai_agent.prompt import TOOL_DOCSTRINGS
     from app.ai_agent.tools import TOOL_IMPLS
 
-    everything = set(_names(ctx(["*"])))
+    # search_web is registered per turn (OPT-0078), so ask for it here.
+    everything = set(_names(ctx(["*"]), web_search=True))
+    assert everything - set(_names(ctx(["*"]))) == {"search_web"}
     # run_sql is registered straight from its module, not via TOOL_IMPLS.
     assert set(TOOL_IMPLS) | {"run_sql"} == everything
     assert set(TOOL_DOCSTRINGS) == everything
