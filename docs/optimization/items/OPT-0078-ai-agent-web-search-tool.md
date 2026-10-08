@@ -351,6 +351,42 @@ Bing 单价缺失不按 $0、内层 token 不进主 `input_tokens`；每次调�
 
 初版与本版的差异：effort M → L（多了关联 id、到达即计费、独立审计行、链接降级四块）。
 
+## 实施记录
+
+### 探针结论（2026-10-08，dev 容器）
+
+脚本 `docs/ai-agent/probes/2026-10-08-web-search-orphan-and-cap-probe.py`。
+
+1. **孤儿调用：五个可选部署全部接受**（input 里有 `search_web` 的 function_call / output，tools 列表里没有它；
+   「注册了别的工具」与「完全不带 tools」两种都试了）。→ 采用「**不注册**」，不需要 `web_search_disabled` 错误码。
+   回滚后旧代码续聊含搜索的会话也不受影响。
+2. **`max_tool_calls` 生效**，限制的是内层 `web_search_call` 的个数（流里 `web_search_call.completed` 次数 = 上限）。
+   → 设 4。⚠ 但**计费单位不是调用个数**：一次 search 动作可带多条 `queries`（实测 1–5 条），
+   `tool_usage.web_search.num_requests` = 各 search 动作的 queries 条数之和（上限 4 时实测 10，上限 3 时 8，不设时 11）。
+   所以流被取消时的估算按「已完成 search 动作的 queries 条数之和」，不是 `completed` 事件数。
+3. 顺带发现：
+   - **luna 部署限额 = 100,000 token/分钟、100 请求/分钟**（响应头 `x-ratelimit-limit-*`）。一次重问题的内层调用吃
+     16k–28k 输入 token，连跑 3 次后第 4 次就 429。即全公司每分钟约 4–6 次重搜索，且与 compaction 摘要器共用。
+   - 内层响应可能 `status=incomplete`、`reason=content_filter`（一次轻问题 + 上限 2 时出现，只有 95 个输出 token）。
+     要当成一种失败形态处理。
+   - `open_page` 动作再次出现（不计入 `num_requests`）。
+
+### 冻结的跨层契约（2026-10-08，三个并行 worker 以此为准）
+
+- 内部请求（主 API → agent）：`web_search: bool = False`。生效 = 该值 AND 容器 env `AI_WEB_SEARCH_ENABLED`。
+- `tool_use`：`{name, input, call_id}`。`search_web` 的 `input.query` 截到 200 字符。
+- `tool_done`：原有字段 + `call_id`；`search_web` 另有
+  - `citations?: [{title, url}]`、`queries?: [str]` —— 为空时字段不出现；
+  - `search: {model, input_tokens, output_tokens, num_requests, sent, query}` —— **每次 `search_web` 调用都带**
+    （被守卫 / 上限拒掉的 `sent=false`、其余为 0）。主 API 用它计费 + 写审计，**转发浏览器前剥掉**。
+- 信封：`data = {answer, citations, queries, num_requests}`；`source = {service: "web", certified: false}`。
+- 错误码（四个）：`query_rejected` / `search_limit_reached` / `web_search_timeout` / `web_search_unavailable`。
+- 审计：action `ai.web_search.query`，每次调用一行，
+  `new_value = {query, queries, num_requests, sent, error_code?, session_id, call_id}`。
+- `ai_messages.tools_json` 每个工具条目可多出 `call_id` / `citations` / `queries`（可选）。
+- env：agent 容器 `AI_WEB_SEARCH_ENABLED`（代码缺省 false，compose 写 true）、`AI_AGENT_MODEL_SEARCH`（缺省 `gpt-5.6-luna`）；
+  主 API 配置 Bing 单价（缺省 14.0 USD / 1,000 次）。
+
 ## 结果
 
 （未开始）
