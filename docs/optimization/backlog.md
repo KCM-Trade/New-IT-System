@@ -16,6 +16,7 @@
 | [OPT-0057](./items/OPT-0057-risk-watchlist-copy-rewrite.md) | opt/risk-watchlist-copy-rewrite | 2026-07-25 | 阻塞：待用户在 items/OPT-0057-...-copy-review.md 填新文案后实施 |
 | [OPT-0059](./items/OPT-0059-fund-flow-blocking-async-routes.md) | opt/fund-flow-blocking-async-routes | 2026-08-19 | 8 个 async def → def；该模块零测试，验收靠手测 8 个端点 |
 | [OPT-0063](./items/OPT-0063-trade-ip-profit-attribution.md) | main（原 opt/trade-ip-profit-attribution） | 2026-09-22 | Phase 1–3 + 定点查找（2026-09-24 `78882c0`…`16cc5d3`）均在 main/prod。列表固定「同 IP ≥5 客户」；lookup = Client/账户/开仓 IP → peers + 琥珀色共用 IP。剩 cs-only 抽查 + Phase 1 时间项（可选） |
+| [OPT-0078](./items/OPT-0078-ai-agent-web-search-tool.md) | opt/ai-agent-web-search-tool | 2026-10-08 | 第一步两个探针（孤儿调用 / max_tool_calls），结论决定注册方式 |
 
 ## ✅ 待领取（Ready）
 
@@ -23,7 +24,6 @@
 
 | ID | 优先级 | 区域 | 工作量 | 标题 |
 |----|--------|------|--------|------|
-| [OPT-0078](./items/OPT-0078-ai-agent-web-search-tool.md) | P2 | mixed | L | AI 助手联网搜索：函数工具 `search_web` 包一层 Azure 内置 `web_search`（内层固定 luna、只收 query）；全网、所有 `ai` 持有者、对比模式不开放；推翻 OPT-0071（用户 2026-10-07 接受查询词出境）；立项冷审 12 条已并入，实施第一步是两个探针 |
 | [OPT-0077](./items/OPT-0077-ai-agent-model-registry-hardening.md) | P2 | mixed | M | AI agent 模型注册表 hardening（OPT-0075 冷审）：逻辑名→部署名注册表、`GET /ai/models`、schema 展开在请求构造处、请求级超时 + 报错带模型名 |
 | [OPT-0073](./items/OPT-0073-ai-agent-skills-hardening.md) | P2 | backend | M | AI agent Skills hardening（OPT-0069 冷审 #5–#11）：token 上限/压缩、审计粒度、sqlglot 测试、MAF 锁定、skill 审核、事件白名单 |
 | [OPT-0067](./items/OPT-0067-ai-agent-slice3-hardening.md) | P2 | backend | S | AI agent 第三刀 hardening：agent 内 SQLite 读加语句级截止（progress handler / interrupt，工具超时后线程仍跑完）；原第 2 项「老工具每轮上限」已作废（上限 09-28 取消） |

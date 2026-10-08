@@ -1,7 +1,7 @@
 ---
 id: OPT-0078
 title: AI 助手联网搜索 —— 函数工具 search_web 包一层 Azure 内置 web_search
-status: ready
+status: wip
 priority: P2
 area: mixed
 effort: L
