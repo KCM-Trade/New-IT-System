@@ -658,7 +658,7 @@ const MessageRow = memo(function MessageRow({
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           {message.text && (
-            <MarkdownMessage text={message.text} />
+            <MarkdownMessage text={message.text} tools={message.tools} />
           )}
           {showThinking && <p className="text-sm text-muted-foreground">{t("ai.thinking")}</p>}
           {message.tools.length > 0 && (

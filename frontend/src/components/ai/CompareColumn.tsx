@@ -96,7 +96,7 @@ export const CompareColumn = memo(function CompareColumn({
       )}
 
       <div className="min-w-0 flex-1 space-y-2 px-3 py-3">
-        {run.text && <MarkdownMessage text={run.text} />}
+        {run.text && <MarkdownMessage text={run.text} tools={run.tools} />}
         {running && !run.text && toolsSettled && (
           <p className="text-sm text-muted-foreground">
             {detached ? t("ai.compare.finishing") : t("ai.thinking")}

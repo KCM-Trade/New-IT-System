@@ -6,6 +6,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
+import type { ToolCall } from "@/hooks/useAiTurn"
 import { MarkdownMessage } from "./MarkdownMessage"
 
 const html = (text: string) => renderToStaticMarkup(<MarkdownMessage text={text} />)
@@ -45,5 +46,44 @@ describe("MarkdownMessage", () => {
     expect(out).toContain('target="_blank"')
     expect(out).toContain("noreferrer")
     expect(out).not.toContain("javascript:")
+  })
+
+  describe("in a message that searched the web", () => {
+    const tools: ToolCall[] = [
+      {
+        key: "search_web#0",
+        name: "search_web",
+        ok: true,
+        certified: false,
+        source: { service: "web", function: "search_web", as_of: null, certified: false },
+        citations: [{ title: "Fed", url: "https://www.federalreserve.gov/x" }],
+      },
+    ]
+    const render = (text: string, t: ToolCall[] = tools) =>
+      renderToStaticMarkup(<MarkdownMessage text={text} tools={t} />)
+
+    it("keeps a citation link clickable and downgrades every other link to text", () => {
+      const out = render("[Fed](https://www.federalreserve.gov/x) [src](https://evil.example/?d=client-166916)")
+      expect(out).toContain('href="https://www.federalreserve.gov/x"')
+      expect(out).not.toContain('href="https://evil.example')
+      // The URL stays visible as text so the reader sees where it pointed.
+      expect(out).toContain("(https://evil.example/?d=client-166916)")
+    })
+
+    it("does not treat a citation URL with an added query string as the citation", () => {
+      const out = render("[Fed](https://www.federalreserve.gov/x?d=166916)")
+      expect(out).not.toContain("<a ")
+    })
+
+    it("downgrades bare autolinks too", () => {
+      const out = render("see https://evil.example/a")
+      expect(out).not.toContain("<a ")
+      expect(out).toContain("https://evil.example/a")
+    })
+
+    it("leaves links alone when the message made no web search", () => {
+      const other: ToolCall[] = [{ key: "k", name: "run_sql", ok: true, certified: false, source: null }]
+      expect(render("[x](https://any.example/a)", other)).toContain('href="https://any.example/a"')
+    })
   })
 })

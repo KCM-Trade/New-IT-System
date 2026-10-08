@@ -1,4 +1,4 @@
-import { IconCircleCheck, IconAlertCircle, IconAlertTriangle, IconLoader2 } from "@tabler/icons-react"
+import { IconCircleCheck, IconAlertCircle, IconAlertTriangle, IconLoader2, IconWorld } from "@tabler/icons-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -6,16 +6,21 @@ import { useI18n } from "@/components/i18n-provider"
 import { cn } from "@/lib/utils"
 import type { ToolCall } from "@/hooks/useAiTurn"
 import { formatHk } from "@/lib/hk-time"
+import { citationDomain, isWebSource, queryOf, safeHttpUrl, WEB_SEARCH_TOOL } from "@/lib/ai-tools"
 
 /**
  * The provenance badge next to a tool result.
  *
- * Three states (docs/ai-agent/02 §2.5 / §10.3):
+ * Four states (docs/ai-agent/02 §2.5 / §10.3):
  *   ✓ certified   — "✓ 认证口径 · <function>", the one accent colour on the page
  *   ⚠ uncertified — "⚠ 即时 SQL · 未认证 · run_sql", amber: the number came from
  *                   SQL the model wrote itself. The popover shows that SQL
  *                   verbatim — an uncertified figure with no visible query
  *                   behind it would not be reviewable, so the SQL is never hidden.
+ *   ◎ web         — "外部来源 · 未核实 · search_web", sky: public web content
+ *                   the model searched for. Neither a certified definition nor
+ *                   SQL, so it gets its own wording; the popover lists the
+ *                   queries sent and the sources returned.
  *   ✗ failed      — neutral, reads as a fact ("scope denied"), not an alarm.
  *
  * The wire `tool_done` carries `source` only (service / function / as_of); the
@@ -32,6 +37,9 @@ const UNIQUE_RING = "ring-2 ring-foreground/30 ring-offset-1 ring-offset-backgro
 export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?: boolean }) {
   const { t } = useI18n()
 
+  // Shown while running too: what is being sent out is the thing to see.
+  const webQuery = tool.name === WEB_SEARCH_TOOL ? queryOf(tool.input) : null
+
   if (tool.ok === null) {
     return (
       <Badge
@@ -41,16 +49,27 @@ export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?:
       >
         <IconLoader2 className="animate-spin" />
         {t("ai.querying", { tool: tool.name })}
+        {webQuery && (
+          <span title={webQuery} className="max-w-[18rem] truncate text-foreground/70">
+            {webQuery}
+          </span>
+        )}
       </Badge>
     )
   }
 
-  const certified = tool.ok && tool.certified
-  const uncertified = tool.ok && !tool.certified
+  const certified = tool.ok && tool.certified && !isWebSource(tool)
+  // A web result is never "certified", and never "ad-hoc SQL" either.
+  const web = tool.ok === true && isWebSource(tool)
+  const uncertified = tool.ok && !tool.certified && !web
   const sql = sqlOf(tool.input)
+  const queries = tool.queries ?? []
+  const citations = (tool.citations ?? []).filter((c) => safeHttpUrl(c.url))
+  const wide = Boolean(sql) || web
 
   let label: string
-  if (certified) label = `${t("ai.badgeCertified")} · ${tool.name}`
+  if (web) label = `${t("ai.badgeWeb")} · ${tool.name}`
+  else if (certified) label = `${t("ai.badgeCertified")} · ${tool.name}`
   else if (uncertified) label = `${t("ai.badgeUncertified")} · ${tool.name}`
   else label = `${tool.name} · ${tool.errorCode ?? "error"}`
 
@@ -60,7 +79,7 @@ export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?:
         <button
           type="button"
           title={
-            (uncertified ? t("ai.badgeUncertifiedTooltip") : t("ai.badgeTooltip")) +
+            (web ? t("ai.badgeWebTooltip") : uncertified ? t("ai.badgeUncertifiedTooltip") : t("ai.badgeTooltip")) +
             (unique ? ` · ${t("ai.compare.onlyThisModel")}` : "")
           }
           className={cn(
@@ -76,15 +95,17 @@ export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?:
                 "border-emerald-600/40 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-950/40 dark:text-emerald-300",
               uncertified &&
                 "border-amber-600/40 bg-amber-50 text-amber-800 dark:border-amber-400/40 dark:bg-amber-950/40 dark:text-amber-300",
-              !certified && !uncertified && "text-muted-foreground",
+              web &&
+                "border-sky-600/40 bg-sky-50 text-sky-800 dark:border-sky-400/40 dark:bg-sky-950/40 dark:text-sky-300",
+              !certified && !uncertified && !web && "text-muted-foreground",
             )}
           >
-            {certified ? <IconCircleCheck /> : uncertified ? <IconAlertTriangle /> : <IconAlertCircle />}
+            {web ? <IconWorld /> : certified ? <IconCircleCheck /> : uncertified ? <IconAlertTriangle /> : <IconAlertCircle />}
             {label}
           </Badge>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className={cn("text-sm", sql ? "w-[28rem] max-w-[90vw]" : "w-80")}>
+      <PopoverContent align="start" className={cn("text-sm", wide ? "w-[28rem] max-w-[90vw]" : "w-80")}>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("ai.sourceTitle")}
         </p>
@@ -111,6 +132,45 @@ export function SourceBadge({ tool, unique = false }: { tool: ToolCall; unique?:
         )}
         {uncertified && (
           <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">{t("ai.uncertifiedNote")}</p>
+        )}
+        {web && <p className="mt-2 text-xs text-sky-800 dark:text-sky-300">{t("ai.webNote")}</p>}
+        {(webQuery || queries.length > 0) && (
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("ai.webQueries")}
+            </p>
+            <ul className="space-y-1 text-xs leading-5">
+              {(queries.length > 0 ? queries : [webQuery as string]).map((q, i) => (
+                <li key={i} className="break-words rounded-md bg-muted px-2 py-1 font-mono">
+                  {q}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {citations.length > 0 && (
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("ai.webSources")}
+            </p>
+            <ul className="max-h-60 space-y-1.5 overflow-auto text-xs leading-5">
+              {citations.map((c) => (
+                <li key={c.url} className="min-w-0">
+                  {/* href was validated as http(s) and length-capped above. */}
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                    title={c.url}
+                    className="block min-w-0 hover:underline"
+                  >
+                    <span className="font-medium text-primary">{citationDomain(c.url)}</span>
+                    {c.title && <span className="text-muted-foreground"> · {c.title}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {sql && (
           <div className="mt-3">

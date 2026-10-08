@@ -13,7 +13,8 @@
  * runtime; `visibleColumnCount` is the same formula for tests and docs.
  */
 
-import type { ToolCall, ToolSource, TurnError, TurnUsage } from "@/hooks/useAiTurn"
+import type { ToolCall, TurnError, TurnUsage } from "@/hooks/useAiTurn"
+import { appendToolUse, resolveToolDone, type ToolDonePayload, type ToolUsePayload } from "@/lib/ai-tools"
 
 export type CompareReason = "numbers" | "clearer" | "faster" | "other"
 export const COMPARE_REASONS: readonly CompareReason[] = ["numbers", "clearer", "faster", "other"]
@@ -99,14 +100,6 @@ export function newCompare(models: readonly string[], startedAt?: number): AiCom
   }
 }
 
-interface ToolUsePayload { name?: string; input?: unknown }
-interface ToolDonePayload {
-  name?: string
-  ok?: boolean
-  source?: ToolSource | null
-  certified?: boolean
-  error_code?: string
-}
 interface UsagePayload {
   input_tokens?: number
   output_tokens?: number
@@ -133,32 +126,17 @@ export function applyRunEvent(run: CompareRun, event: string, payload: unknown):
       return typeof delta === "string" ? appendRunText(run, delta) : run
     }
     case "tool_use": {
-      const { name, input } = p as ToolUsePayload
-      if (!name) return run
+      const u = p as ToolUsePayload
+      if (!u.name) return run
       // Tools only ever append, so the current length is a stable sequence.
-      const key = `${name}#${run.tools.length}`
-      return { ...run, tools: [...run.tools, { key, name, ok: null, certified: false, source: null, input }] }
+      return { ...run, tools: appendToolUse(run.tools, u, `${u.name}#${run.tools.length}`) }
     }
     case "tool_done": {
       const d = p as ToolDonePayload
       if (!d.name) return run
-      // Resolve the oldest still-pending call of this name; the agent finishes
-      // tools in the order it started them.
-      const idx = run.tools.findIndex((t) => t.name === d.name && t.ok === null)
-      const ok = d.ok === true
-      const done: ToolCall = {
-        key: idx === -1 ? `${d.name}#${run.tools.length}` : run.tools[idx].key,
-        name: d.name,
-        ok,
-        certified: Boolean(d.certified),
-        source: d.source ?? null,
-        errorCode: ok ? undefined : d.error_code ?? "error",
-        input: idx === -1 ? undefined : run.tools[idx].input,
-      }
-      const tools = [...run.tools]
-      if (idx === -1) tools.push(done)
-      else tools[idx] = done
-      return { ...run, tools }
+      // Paired by `call_id`; without one, the oldest pending call of this
+      // name (see resolveToolDone).
+      return { ...run, tools: resolveToolDone(run.tools, d, `${d.name}#${run.tools.length}`) }
     }
     case "usage": {
       const u = p as UsagePayload
