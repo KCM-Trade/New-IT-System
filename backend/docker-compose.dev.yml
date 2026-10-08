@@ -152,6 +152,9 @@ services:
       - REDIS_HOST=new-it-redis
       - REDIS_PORT=6379
       - AI_AGENT_INTERNAL_TOKEN=${AI_AGENT_INTERNAL_TOKEN:?AI_AGENT_INTERNAL_TOKEN must be set in backend/.env (dev) / .env (prod)}
+      # OPT-0078: search_web switch. Code default is off; incident command:
+      # set false + `up -d ai-agent` (not `restart`, which keeps the old env).
+      - AI_WEB_SEARCH_ENABLED=true
       # fxbackoffice replica (MySQL)
       - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT:-3306}

@@ -397,8 +397,8 @@ def test_no_tool_schema_carries_ref_or_defs(ctx):
     """grok-4.7 rejects the WHOLE request with a bare 400 when any tool schema
     contains `$ref` / `$defs` (probed 2026-10-07). pydantic emits both for the
     SubjectArg TypedDict, so build_tools must hand out inlined schemas."""
-    tools = harness.build_tools(ctx, _noop_emit)
-    assert tools
+    tools = harness.build_tools(ctx, _noop_emit, web_search=True)
+    assert tools and "search_web" in {t.name for t in tools}
     for t in tools:
         keys = set(_schema_keys(t.parameters()))
         assert not keys & {"$ref", "$defs"}, t.name
@@ -407,12 +407,16 @@ def test_no_tool_schema_carries_ref_or_defs(ctx):
 
 
 def test_the_full_caller_gets_every_tool_and_inlining_keeps_the_subject_shape():
-    tools = {t.name: t for t in harness.build_tools(FULL_CTX, _noop_emit)}
+    tools = {t.name: t for t in harness.build_tools(FULL_CTX, _noop_emit, web_search=True)}
     assert set(tools) == {
         "get_client_overview", "get_trade_activity", "get_risk_signals", "rank_accounts",
         "get_economic_calendar", "rank_open_positions", "run_sql",
-        "get_risk_alerts", "get_alert_orders", "get_window_scan",
+        "get_risk_alerts", "get_alert_orders", "get_window_scan", "search_web",
     }
+    # search_web is per turn: absent unless asked for (compare run / switch off).
+    assert "search_web" not in {t.name for t in harness.build_tools(FULL_CTX, _noop_emit)}
+    assert tools["search_web"].parameters()["required"] == ["query"]
+    assert set(tools["search_web"].parameters()["properties"]) == {"query"}
     subject = tools["get_trade_activity"].parameters()["properties"]["subject"]
     assert subject["type"] == "object"
     assert subject["required"] == ["kind", "value"]

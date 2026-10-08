@@ -2,7 +2,8 @@
 
 Reads the ``econ_calendar_cache`` table the MAIN API refreshes daily
 (``services/econ_calendar_service.refresh_calendar``); this container never
-fetches anything itself (read-only data mount, no network tool by design).
+fetches anything itself (read-only data mount; the only tool that reaches
+the network is search_web, which never feeds this table).
 Every row carries the official ``source_url``, which is what makes the answer
 ``certified: true`` — the date came from the Fed / FRED, not from the model.
 

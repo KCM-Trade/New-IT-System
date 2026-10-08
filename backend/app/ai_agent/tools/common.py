@@ -198,6 +198,12 @@ ERROR_CODES = frozenset(
         # Not in the contract table because the contract assumes valid input;
         # a structured answer is still better than a framework tool error.
         "invalid_argument",
+        # search_web (OPT-0078). Own codes rather than upstream_timeout: that
+        # one tells the model to retry, and a retried search is billed twice.
+        "query_rejected",
+        "search_limit_reached",
+        "web_search_timeout",
+        "web_search_unavailable",
     }
 )
 

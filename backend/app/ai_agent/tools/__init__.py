@@ -12,6 +12,7 @@ from .rank_accounts import rank_accounts
 from .risk_alerts import get_risk_alerts
 from .risk_signals import get_risk_signals
 from .trade_activity import get_trade_activity
+from .web_search import search_web
 from .window_scan import get_window_scan
 
 TOOL_IMPLS = {
@@ -28,6 +29,10 @@ TOOL_IMPLS = {
     "get_risk_alerts": get_risk_alerts,
     "get_alert_orders": get_alert_orders,
     "get_window_scan": get_window_scan,
+    # OPT-0078 — registered ONLY when harness.web_search_enabled(...) (the
+    # request's flag AND the container switch). The harness calls it with the
+    # per-turn budget and a meta dict; the rest of the signature is the usual.
+    "search_web": search_web,
 }
 
 # The three tools that need the `risk` module on top of `ai` (11 §0 T1).
@@ -48,4 +53,5 @@ __all__ = [
     "get_window_scan",
     "rank_accounts",
     "rank_open_positions",
+    "search_web",
 ]

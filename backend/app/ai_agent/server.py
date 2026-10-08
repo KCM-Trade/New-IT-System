@@ -71,6 +71,11 @@ class TurnRequest(BaseModel):
     # starts a new conversation (02 §8.3). Opaque here: this process never
     # persists it, it only rehydrates, runs, and hands the new one back.
     session_blob: Optional[dict[str, Any]] = None
+    # OPT-0078: the main API asks for search_web on this turn. Default False
+    # on purpose — during a deploy a new agent may serve an old API, and a
+    # compare run must never go online because a field was missing. Effective
+    # only with AI_WEB_SEARCH_ENABLED on in this container.
+    web_search: bool = False
 
 
 # One serialiser for every SSE hop (core/sse.py); the main API relays these
@@ -113,7 +118,7 @@ async def turn(
         async def pump() -> None:
             try:
                 async for event, data in harness.run_turn(
-                    ctx, body.message, body.model, session_blob=body.session_blob
+                    ctx, body.message, body.model, session_blob=body.session_blob, web_search=body.web_search
                 ):
                     await queue.put((event, data))
             except Exception as exc:  # noqa: BLE001 — the stream must end cleanly

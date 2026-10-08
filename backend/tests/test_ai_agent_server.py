@@ -44,8 +44,9 @@ def scripted_turn(monkeypatch):
 
     seen: dict = {}
 
-    async def fake_run_turn(ctx, message, model, session_blob=None):
+    async def fake_run_turn(ctx, message, model, session_blob=None, web_search=False):
         seen["ctx"] = ctx
+        seen["web_search"] = web_search
         seen["message"] = message
         seen["model"] = model
         seen["session_blob"] = session_blob
@@ -117,7 +118,7 @@ def test_turn_passes_session_blob_through_opaque(client, scripted_turn):
 def test_turn_crash_ends_with_error_and_done(client, monkeypatch):
     from app.ai_agent import harness
 
-    async def boom(ctx, message, model, session_blob=None):
+    async def boom(ctx, message, model, session_blob=None, web_search=False):
         yield ("text", {"delta": "partial"})
         raise RuntimeError("secret connection string")
 
@@ -135,3 +136,12 @@ def test_turn_503_when_token_not_configured(monkeypatch):
 
     with TestClient(server.app) as c:
         assert c.post("/v1/turn", json=BODY, headers={"X-Internal-Token": "short"}).status_code == 503
+
+
+def test_web_search_flag_defaults_to_false_and_is_passed_through(client, scripted_turn):
+    """OPT-0078: an old main API that does not send the field must not put a
+    turn online (a new agent can serve an old API during a deploy)."""
+    r = client.post("/v1/turn", json=BODY, headers={"X-Internal-Token": TOKEN})
+    assert r.status_code == 200 and scripted_turn["web_search"] is False
+    r = client.post("/v1/turn", json={**BODY, "web_search": True}, headers={"X-Internal-Token": TOKEN})
+    assert r.status_code == 200 and scripted_turn["web_search"] is True
