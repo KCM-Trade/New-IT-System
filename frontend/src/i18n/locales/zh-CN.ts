@@ -107,7 +107,7 @@ export const zhCN = {
     modelStandardDesc: "GPT-5.6 Terra · 日常查询，快、便宜",
     modelDeepDesc: "GPT-5.6 Sol · 旗舰模型，复杂多步分析更稳，费用约 2 倍",
     modelFrontier: "GPT-6.1",
-    modelFrontierDesc: "GPT-6.1 Sol · 最新一代模型，刚接入，可与其他模型对比效果",
+    modelFrontierDesc: "GPT-6.1 Sol · 默认模型，最新一代，分析更稳",
     modelGrok: "Grok 4.7",
     modelGrokDesc: "xAI Grok 4.7 · 非 OpenAI 模型，刚接入，数字请与其他模型对照",
     modelDeepSeek: "DeepSeek V4 Pro",

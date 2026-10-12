@@ -372,6 +372,9 @@ def _insert_compare(
 
 
 def _turn(client: TestClient, sid: str, **body: Any):
+    # Pin terra: the scripted agent, prices and blobs below are keyed by model,
+    # and these tests are about compare mode, not about the default model.
+    body.setdefault("model", TERRA)
     return client.post("/api/v1/ai/turn", json={"message": QUESTION, **body}, headers=_bearer(sid))
 
 

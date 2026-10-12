@@ -106,6 +106,7 @@ CITE_B = [{"title": "ECB decision", "url": "https://www.ecb.europa.eu/b"}]
 
 
 def _turn(client, sid, **body):
+    body.setdefault("model", TERRA)  # prices below are keyed by model; default model is not under test here
     return client.post("/api/v1/ai/turn", json={"message": "what moved gold today?", **body}, headers=_bearer(sid))
 
 

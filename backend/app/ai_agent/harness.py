@@ -105,8 +105,8 @@ if "OPENAI_API_KEY" in os.environ:
 
 
 # The deployments a caller may pick, as (env override name, default deployment
-# name on kcm-ai-agent-east-us). Order is the picker's order; the first entry
-# is the default analyst. All five go through the same Responses API client:
+# name on kcm-ai-agent-east-us). Order is the picker's order; the default
+# analyst is DEFAULT_MODEL_ENV (gpt-6.1-sol since 2026-10-12). All five go through the same Responses API client:
 # grok-4.7 (xAI) and DeepSeek-V4-Pro were probed 2026-10-07 and accept function
 # tools, ``store: false`` and each other's session history, so a conversation
 # may switch model between turns.
@@ -120,9 +120,13 @@ SELECTABLE_MODELS: tuple[tuple[str, str], ...] = (
 )
 
 
+# Keep in sync with schemas.ai.DEFAULT_MODEL and the frontend DEFAULT_AI_MODEL (tested).
+DEFAULT_MODEL_ENV = "AI_AGENT_MODEL_FRONTIER"
+
+
 def default_model() -> str:
-    env_name, deployment = SELECTABLE_MODELS[0]
-    return os.environ.get(env_name, deployment)
+    deployment = dict(SELECTABLE_MODELS)[DEFAULT_MODEL_ENV]
+    return os.environ.get(DEFAULT_MODEL_ENV, deployment)
 
 
 def summary_model() -> str:

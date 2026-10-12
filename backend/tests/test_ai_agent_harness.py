@@ -244,7 +244,7 @@ def test_selectable_models_agree_across_layers(monkeypatch):
     assert harness.allowed_models() == (
         "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol", "grok-4.7", "DeepSeek-V4-Pro",
     )
-    assert harness.default_model() == DEFAULT_MODEL == "gpt-5.6-terra"
+    assert harness.default_model() == DEFAULT_MODEL == "gpt-6.1-sol"
     assert set(get_args(AiModel)) <= set(_DEFAULT_MODEL_PRICES)
 
     # The page's own list, read from source: there is no shared artefact
@@ -257,6 +257,8 @@ def test_selectable_models_agree_across_layers(monkeypatch):
     declared = re.search(r"AI_MODELS: readonly AiModel\[\] = \[([^\]]*)\]", hook)
     assert declared, "AI_MODELS declaration not found in useAiTurn.ts"
     assert tuple(re.findall(r'"([^"]+)"', declared.group(1))) == get_args(AiModel)
+    default = re.search(r'DEFAULT_AI_MODEL: AiModel = "([^"]+)"', hook)
+    assert default and default.group(1) == DEFAULT_MODEL
     page = (frontend / "pages" / "AiAssistant.tsx").read_text(encoding="utf-8")
     assert tuple(re.findall(r'<SelectItem value="([^"]+)"', page)) == get_args(AiModel)
 
@@ -272,7 +274,7 @@ def test_model_env_overrides_keep_their_names(monkeypatch):
     for env_name, value in overrides.items():
         monkeypatch.setenv(env_name, value)
     assert harness.allowed_models() == ("a", "b", "c", "d", "e")
-    assert harness.default_model() == "a"
+    assert harness.default_model() == "c"  # DEFAULT_MODEL_ENV = AI_AGENT_MODEL_FRONTIER
     # two entries pointed at one deployment collapse instead of duplicating
     monkeypatch.setenv("AI_AGENT_MODEL_GROK", "a")
     assert harness.allowed_models() == ("a", "b", "c", "e")
