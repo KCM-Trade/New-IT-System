@@ -11,16 +11,16 @@ from pydantic import BaseModel, Field, field_validator, model_serializer
 from typing import Any
 
 # The deployments the UI may pick between. Values are Azure OpenAI
-# DEPLOYMENT names on kcm-ai-agent-east-us, not model families: `terra` is the
-# default analyst, `sol` is the "deep analysis" toggle (01 C13), `gpt-6.1-sol`
-# is the newest-generation option (added 2026-10-05), `grok-4.7` (xAI) and
+# DEPLOYMENT names on kcm-ai-agent-east-us, not model families: `gpt-6.1-sol`
+# is the default analyst since 2026-10-12 (added 2026-10-05), `terra` is the
+# cheaper everyday option, `sol` is the "deep analysis" toggle (01 C13), `grok-4.7` (xAI) and
 # `DeepSeek-V4-Pro` are the non-OpenAI options (added 2026-10-07, OPT-0075).
 # `luna` exists for background jobs and is deliberately not selectable from
 # the page.
 # Keep in sync with ai_agent.harness.allowed_models() and the frontend AI_MODELS.
 AiModel = Literal["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol", "grok-4.7", "DeepSeek-V4-Pro"]
 
-DEFAULT_MODEL: AiModel = "gpt-5.6-terra"
+DEFAULT_MODEL: AiModel = "gpt-6.1-sol"
 
 # Compare mode (OPT-0076): how many models one question may be sent to.
 COMPARE_MIN_MODELS = 2

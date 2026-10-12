@@ -82,7 +82,7 @@ def test_first_turn_creates_the_row_and_hands_the_agent_no_blob(
     row = conn.execute("SELECT * FROM ai_sessions WHERE session_id = ?", (session_id,)).fetchone()
     assert row is not None
     assert len(row["title"]) == 60  # first 60 chars of the question
-    assert row["model"] == "gpt-5.6-terra"
+    assert row["model"] == "gpt-6.1-sol"  # schemas.ai.DEFAULT_MODEL
     assert row["deleted_at"] is None
     assert row["created_at"].endswith("Z") and row["updated_at"].endswith("Z")
     value = json.loads(_audit_rows(tmp_path)[0]["new_value"])
@@ -267,7 +267,7 @@ def test_detail_returns_the_transcript_but_never_the_blob(make_client, scripted_
     assert msgs[1]["error_code"] is None
     assert msgs[1]["usage"] == {
         "input_tokens": 1000, "output_tokens": 200,
-        "cache_read_input_tokens": 400, "cost_usd": pytest.approx(0.00368),
+        "cache_read_input_tokens": 400, "cost_usd": pytest.approx(0.00328),
     }
     tools = msgs[1]["tools"]
     assert [t["name"] for t in tools] == ["get_client_overview", "get_risk_signals"]

@@ -44,7 +44,7 @@ export type AiModel = "gpt-5.6-terra" | "gpt-5.6-sol" | "gpt-6.1-sol" | "grok-4.
 
 // Keep in sync with the backend's schemas.ai.AiModel (a backend test reads this line).
 export const AI_MODELS: readonly AiModel[] = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-sol", "grok-4.7", "DeepSeek-V4-Pro"];
-export const DEFAULT_AI_MODEL: AiModel = "gpt-5.6-terra";
+export const DEFAULT_AI_MODEL: AiModel = "gpt-6.1-sol";
 
 export interface ToolSource {
   service: string;

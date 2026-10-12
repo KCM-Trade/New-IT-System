@@ -360,18 +360,18 @@ def test_a_missing_session_id_is_minted_and_echoed(make_client, scripted_agent):
 
 
 def test_usage_cost_is_priced_here_not_by_the_agent(make_client, scripted_agent):
-    """1000 in (400 cached) + 200 out on terra = 600*2 + 400*0.2 + 200*12
-    per MTok = 0.0012 + 0.00008 + 0.0024 = 0.00368 USD."""
+    """1000 in (400 cached) + 200 out on the default gpt-6.1-sol = 600*2 + 400*0.2
+    + 200*10 per MTok = 0.0012 + 0.00008 + 0.002 = 0.00328 USD."""
     client = make_client()
     sid = _mint(STAFF, allowed_modules='["ai"]')
     r = _turn(client, sid)
     usage = [d for e, d in _parse(r.text) if e == "usage"][0]
-    assert usage["cost_usd"] == pytest.approx(0.00368)
+    assert usage["cost_usd"] == pytest.approx(0.00328)
     today = client.get("/api/v1/ai/usage/today", headers=_bearer(sid)).json()
     assert today["turns"] == 1
     assert today["input_tokens"] == 1000
     assert today["output_tokens"] == 200
-    assert today["cost_usd"] == pytest.approx(0.00368, abs=1e-4)
+    assert today["cost_usd"] == pytest.approx(0.00328, abs=1e-4)
     assert today["turns_limit"] == 100
     assert today["cost_limit_usd"] == 20.0
     assert set(today) == {
@@ -418,7 +418,7 @@ def test_the_third_turn_is_refused_at_a_limit_of_two_and_never_forwarded(
 def test_cost_limit_is_enforced_too(make_client, scripted_agent):
     client = make_client(AI_DAILY_COST_LIMIT_USD="0.003")
     sid = _mint(STAFF, allowed_modules='["ai"]')
-    assert _turn(client, sid).status_code == 200  # spends 0.00368
+    assert _turn(client, sid).status_code == 200  # spends 0.00328
     r = _turn(client, sid)
     assert dict(_parse(r.text))["error"]["code"] == "quota_exceeded"
     assert len(scripted_agent["calls"]) == 1
@@ -443,13 +443,13 @@ def test_every_turn_leaves_exactly_one_audit_row_with_the_contract_fields(
     assert row["target"] == "ai_session:sess-1"
     value = json.loads(row["new_value"])
     assert value["question"] == "how is client 123?"
-    assert value["model"] == "gpt-5.6-terra"
+    assert value["model"] == "gpt-6.1-sol"  # schemas.ai.DEFAULT_MODEL
     assert value["tools_called"] == ["get_client_overview", "get_risk_signals"]
     assert value["subjects"] == ["client:123", "login:1-8522845"]
     assert value["terminal_reason"] == "end_turn"
     assert value["input_tokens"] == 1000
     assert value["output_tokens"] == 200
-    assert value["cost_usd"] == pytest.approx(0.00368)
+    assert value["cost_usd"] == pytest.approx(0.00328)
     assert value["scope_denied_count"] == 1
     assert value["skills_loaded"] == []  # OPT-0069: always present, empty when none loaded
     assert "error_code" not in value

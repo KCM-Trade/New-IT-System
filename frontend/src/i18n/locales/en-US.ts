@@ -98,7 +98,7 @@ export const enUS = {
     modelStandardDesc: "GPT-5.6 Terra · everyday questions, fast and cheap",
     modelDeepDesc: "GPT-5.6 Sol · flagship, steadier on complex multi-step analysis, about 2× the cost",
     modelFrontier: "GPT-6.1",
-    modelFrontierDesc: "GPT-6.1 Sol · newest generation, newly added — compare its answers with the others",
+    modelFrontierDesc: "GPT-6.1 Sol · default, newest generation, steadier analysis",
     modelGrok: "Grok 4.7",
     modelGrokDesc: "xAI Grok 4.7 · non-OpenAI model, newly added — check its figures against another model",
     modelDeepSeek: "DeepSeek V4 Pro",
