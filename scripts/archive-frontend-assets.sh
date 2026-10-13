@@ -64,9 +64,13 @@ find "$MANIFESTS" -maxdepth 1 -name '*.list' | LC_ALL=C sort | head -n -"$KEEP" 
 done
 
 # --- 3. Garbage-collect merged/: delete files referenced by no kept manifest.
+# comm must collate the same way the lists were sorted: under en_US.UTF-8 it
+# ignores punctuation/case and rejects C-sorted input ("not in sorted order"),
+# which under pipefail aborted the script here on every deploy — manifests
+# were pruned but merged/ was never GC'd.
 find "$MANIFESTS" -maxdepth 1 -name '*.list' -exec cat {} + | LC_ALL=C sort -u > "$TMP/keep.list"
 (cd "$MERGED" && find . -type f | LC_ALL=C sort) > "$TMP/have.list"
-comm -23 "$TMP/have.list" "$TMP/keep.list" | while read -r stale; do
+LC_ALL=C comm -23 "$TMP/have.list" "$TMP/keep.list" | while read -r stale; do
   rm -f "$MERGED/$stale"
 done
 # Drop now-empty subdirectories (Vite can nest e.g. fonts under assets/).
