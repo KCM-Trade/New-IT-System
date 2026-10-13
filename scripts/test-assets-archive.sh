@@ -50,9 +50,19 @@ trap cleanup EXIT
 # --- Build fixtures: 5 fake Vite builds. vendor-AAAA1111.js keeps the same
 # hashed name+content across builds (tests the single-copy merged pool);
 # page-vN-*.js is unique per build (tests retention + GC).
+# Collation trap (real names from the 2026-10-13 incident): under LC_ALL=C
+# the shared chunks sort index-B-gT6Xaa.js < index-B-vN-*.js < index-B1G_-MNO.js,
+# but en_US.UTF-8 ignores punctuation and puts index-B1G_-MNO.js first. Once
+# the pruned builds' index-B-v1/v2 files sit between the two shared names in
+# merged/, a comm that collates under the host locale rejects the input
+# ("not in sorted order", exit 1 under pipefail) and its set difference is no
+# longer trustworthy — in prod it deleted kept chunks.
 for v in 1 2 3 4 5; do
   mkdir -p "$WORK/build-v$v/assets"
   echo "shared vendor chunk" > "$WORK/build-v$v/assets/vendor-AAAA1111.js"
+  echo "shared chunk A" > "$WORK/build-v$v/assets/index-B-gT6Xaa.js"
+  echo "shared chunk B" > "$WORK/build-v$v/assets/index-B1G_-MNO.js"
+  echo "per-build chunk between A and B" > "$WORK/build-v$v/assets/index-B-v$v-HASH$v.js"
   echo "page chunk of build v$v" > "$WORK/build-v$v/assets/page-v$v-HASH$v.js"
   echo "<html>build v$v</html>" > "$WORK/build-v$v/index.html"
 done
@@ -63,7 +73,12 @@ simulate_deploy() { # simulate_deploy <version>  — old container serves build 
   docker run -d --name "$FAKE_FE" alpine:latest sleep 600 >/dev/null
   docker exec "$FAKE_FE" mkdir -p /usr/share/nginx/html
   docker cp "$WORK/build-v$v/assets" "$FAKE_FE:/usr/share/nginx/html/assets" >/dev/null
-  "$ARCHIVE_SCRIPT" "$FAKE_FE" "$ARCHIVE_ROOT" 3
+  # Run under the locale prod deploys use, so the collation regression above
+  # is exercised even when this test is launched from a C/POSIX shell.
+  # A non-zero exit is reported but must not abort the run: the checks that
+  # follow are what say which invariant broke.
+  LC_ALL=en_US.UTF-8 "$ARCHIVE_SCRIPT" "$FAKE_FE" "$ARCHIVE_ROOT" 3 \
+    || { FAIL=$((FAIL + 1)); echo "  FAIL: archive script exited non-zero on deploy#$v"; }
 }
 
 echo "=== Part 1: retention / pruning / dedup logic ==="
@@ -90,12 +105,23 @@ check "v2 chunk garbage-collected" "$(test -f "$ARCHIVE_ROOT/merged/page-v2-HASH
 check "v3 chunk retained" "$(test -f "$ARCHIVE_ROOT/merged/page-v3-HASH3.js" && echo yes)" yes
 check "v5 chunk retained" "$(test -f "$ARCHIVE_ROOT/merged/page-v5-HASH5.js" && echo yes)" yes
 check "vendor chunk survived GC" "$(test -f "$ARCHIVE_ROOT/merged/vendor-AAAA1111.js" && echo yes)" yes
+check "locale-sensitive chunk names survived GC" \
+  "$(test -f "$ARCHIVE_ROOT/merged/index-B-gT6Xaa.js" && test -f "$ARCHIVE_ROOT/merged/index-B1G_-MNO.js" && echo yes || echo no)" yes
+# Pool invariant: merged/ holds exactly the union of the kept manifests.
+check "every kept-manifest file is in merged/" \
+  "$(cat "$ARCHIVE_ROOT"/manifests/*.list | LC_ALL=C sort -u | while read -r f; do test -f "$ARCHIVE_ROOT/merged/$f" || echo "$f"; done | wc -l)" 0
+check "merged/ has no file outside the kept manifests" \
+  "$( (cd "$ARCHIVE_ROOT/merged" && find . -type f | LC_ALL=C sort) | LC_ALL=C comm -23 - <(cat "$ARCHIVE_ROOT"/manifests/*.list | LC_ALL=C sort -u) | wc -l)" 0
 
 echo ""
 echo "=== Part 2: real nginx.conf serves archive fallback ==="
 # The current "image" is build v5; builds v3/v4 exist only in the archive.
 # Dummy api/mkdocs containers give nginx resolvable upstreams for proxy_pass.
 sed 's/__BACKEND_API_KEY__/test-key/g' "$NGINX_CONF_SRC" > "$WORK/default.conf"
+# nginx.conf writes its access log to /var/log/nginx-audit (prod bind-mounts
+# ./logs/nginx-prod there). Without the directory nginx exits with [emerg] at
+# startup and every HTTP check below reads 000.
+mkdir -p "$WORK/nginx-audit"
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$PREFIX-api"    --network "$NET" --network-alias api    alpine:latest sleep 600 >/dev/null
@@ -104,6 +130,7 @@ docker run -d --name "$NGINX_CT" --network "$NET" -p "127.0.0.1:$PORT:80" \
   -v "$WORK/build-v5:/usr/share/nginx/html:ro" \
   -v "$ARCHIVE_ROOT/merged:/opt/assets-archive/assets:ro" \
   -v "$WORK/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+  -v "$WORK/nginx-audit:/var/log/nginx-audit" \
   nginx:alpine >/dev/null
 
 for _ in $(seq 1 20); do
