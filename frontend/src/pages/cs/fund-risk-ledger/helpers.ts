@@ -98,13 +98,17 @@ export function parseTransactionId(text: string): number | null {
  * Editable form state. Text inputs hold strings ("" = empty); the payload
  * builder turns empty strings into null. Must stay a flat object of
  * primitives — dirty detection compares it field by field.
+ *
+ * The last six fields have no control in the form. They are still part of the
+ * state because PUT replaces every staff field: a record that carries them
+ * (imported legacy rows do) must get the stored value sent back verbatim, so
+ * they are held exactly as stored (string | null) and never normalised.
  */
 export type LedgerForm = {
   reportedDate: string; // YYYY-MM-DD or ""
   transferSucceeded: TransferSucceeded;
   frozenScope: FrozenScope;
-  freezeDaysText: string;
-  freezeDaysUnknown: boolean;
+  freezeDaysText: string; // "" = not known yet
   freezeNote: string;
   authority: Authority;
   clientSource: ClientSource | "";
@@ -112,14 +116,15 @@ export type LedgerForm = {
   clientBankCity: string;
   traderBankProvince: string;
   traderBankCity: string;
-  idProvince: string;
-  idCity: string;
-  ipRegion: string;
-  pwaDomain: string;
-  accountType: string;
-  venueOverride: string;
   eventText: string;
   resultText: string;
+  // Hidden pass-through fields (see above).
+  idProvince: string | null;
+  idCity: string | null;
+  ipRegion: string | null;
+  pwaDomain: string | null;
+  accountType: string | null;
+  venueOverride: string | null;
 };
 
 /**
@@ -140,7 +145,6 @@ export function emptyForm(today: Date, txnStatus?: string | null): LedgerForm {
       txnStatus === undefined ? "unknown" : defaultTransferSucceeded(txnStatus),
     frozenScope: "unknown",
     freezeDaysText: "",
-    freezeDaysUnknown: true,
     freezeNote: "",
     authority: "unknown",
     clientSource: "",
@@ -148,14 +152,14 @@ export function emptyForm(today: Date, txnStatus?: string | null): LedgerForm {
     clientBankCity: "",
     traderBankProvince: "",
     traderBankCity: "",
-    idProvince: "",
-    idCity: "",
-    ipRegion: "",
-    pwaDomain: "",
-    accountType: "",
-    venueOverride: "",
     eventText: "",
     resultText: "",
+    idProvince: null,
+    idCity: null,
+    ipRegion: null,
+    pwaDomain: null,
+    accountType: null,
+    venueOverride: null,
   };
 }
 
@@ -166,7 +170,6 @@ export function incidentToForm(row: IncidentFields): LedgerForm {
     transferSucceeded: row.transfer_succeeded,
     frozenScope: row.frozen_scope,
     freezeDaysText: row.freeze_days === null ? "" : String(row.freeze_days),
-    freezeDaysUnknown: row.freeze_days === null,
     freezeNote: row.freeze_note ?? "",
     authority: row.authority,
     clientSource: row.client_source ?? "",
@@ -174,21 +177,22 @@ export function incidentToForm(row: IncidentFields): LedgerForm {
     clientBankCity: row.client_bank_city ?? "",
     traderBankProvince: row.trader_bank_province ?? "",
     traderBankCity: row.trader_bank_city ?? "",
-    idProvince: row.id_province ?? "",
-    idCity: row.id_city ?? "",
-    ipRegion: row.ip_region ?? "",
-    pwaDomain: row.pwa_domain ?? "",
-    accountType: row.account_type ?? "",
-    venueOverride: row.venue_override ?? "",
     eventText: row.event_text ?? "",
     resultText: row.result_text ?? "",
+    idProvince: row.id_province,
+    idCity: row.id_city,
+    ipRegion: row.ip_region,
+    pwaDomain: row.pwa_domain,
+    accountType: row.account_type,
+    venueOverride: row.venue_override,
   };
 }
 
 /**
  * Form for the next order of the same incident: the event description, the
  * findings, the authority and the reported date describe the incident and are
- * carried over; everything that belongs to one order is reset.
+ * carried over; everything that belongs to one order is reset (the hidden
+ * pass-through fields included, so a new record is created with them null).
  */
 export function carryOverForm(
   prev: LedgerForm,
@@ -216,11 +220,10 @@ export type FreezeDaysResult =
   | { ok: false; error: string };
 
 /**
- * 封卡天数: the 「尚不知」 checkbox or an empty box both mean unknown (null);
- * otherwise a whole number of days within the backend's range.
+ * 封卡天数: an empty box means not known yet (null); otherwise a whole number
+ * of days within the backend's range.
  */
-export function parseFreezeDays(text: string, unknown: boolean): FreezeDaysResult {
-  if (unknown) return { ok: true, value: null };
+export function parseFreezeDays(text: string): FreezeDaysResult {
   const t = text.trim();
   if (t === "") return { ok: true, value: null };
   if (!/^\d+$/.test(t)) {
@@ -240,7 +243,7 @@ function textOrNull(s: string): string | null {
 
 /** Form -> IncidentFields. Throws an Error with a user-facing message. */
 export function buildFields(form: LedgerForm): IncidentFields {
-  const days = parseFreezeDays(form.freezeDaysText, form.freezeDaysUnknown);
+  const days = parseFreezeDays(form.freezeDaysText);
   if (!days.ok) throw new Error(days.error);
   if (form.reportedDate !== "" && !fromYmd(form.reportedDate)) {
     throw new Error("登记日期格式不正确");
@@ -257,14 +260,13 @@ export function buildFields(form: LedgerForm): IncidentFields {
     client_bank_city: textOrNull(form.clientBankCity),
     trader_bank_province: textOrNull(form.traderBankProvince),
     trader_bank_city: textOrNull(form.traderBankCity),
-    id_province: textOrNull(form.idProvince),
-    id_city: textOrNull(form.idCity),
-    ip_region: textOrNull(form.ipRegion),
-    pwa_domain: textOrNull(form.pwaDomain),
-    account_type: textOrNull(form.accountType),
-    // Venues are upper-cased by the backend when read from the CRM; keep the
-    // manual correction in the same form so the two compare equal.
-    venue_override: textOrNull(form.venueOverride)?.toUpperCase() ?? null,
+    // No control in the form: sent back exactly as stored.
+    id_province: form.idProvince,
+    id_city: form.idCity,
+    ip_region: form.ipRegion,
+    pwa_domain: form.pwaDomain,
+    account_type: form.accountType,
+    venue_override: form.venueOverride,
     event_text: textOrNull(form.eventText),
     result_text: textOrNull(form.resultText),
   };

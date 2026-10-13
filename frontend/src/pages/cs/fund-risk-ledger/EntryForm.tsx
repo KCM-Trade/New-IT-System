@@ -22,8 +22,6 @@ import {
 } from "react";
 import {
   Calendar as CalendarIcon,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Plus,
   Search,
@@ -35,11 +33,6 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -50,12 +43,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { apiFetch } from "@/lib/fetch";
 import { formatHk } from "@/lib/hk-time";
+import { cn } from "@/lib/utils";
 import { readErrorDetail } from "@/pages/risk-alert-mail/helpers";
 
+import {
+  CONTROL_CLASS,
+  SELECT_LIKE_TRIGGER_CLASS,
+  TEXTAREA_CLASS,
+  TRIGGER_ICON_CLASS,
+  TXN_BAR_CLASS,
+} from "./controlStyles";
 import { ProvinceCombobox } from "./ProvinceCombobox";
 import { RecentList } from "./RecentList";
 import {
@@ -89,10 +96,8 @@ import {
 import {
   AUTHORITIES,
   CLIENT_SOURCES,
-  FREEZE_DAYS_MAX,
   FREEZE_NOTE_MAX,
   FROZEN_SCOPES,
-  PWA_DOMAIN_MAX,
   SHORT_MAX,
   TEXT_MAX,
   TRANSFER_SUCCEEDED,
@@ -125,31 +130,67 @@ interface EntryFormProps {
 /** The incident group a new order will join, for the header chip. */
 type GroupContext = { id: number; nextIndex: number };
 
-const PILL_GROUP = "inline-flex max-w-full flex-wrap items-center rounded-full bg-muted p-0.5";
-const PILL_ITEM =
-  "flex-1 whitespace-nowrap rounded-full px-3 py-1 text-center text-sm text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow";
 const AMBER_NOTE =
   "rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-300";
 const TXN_INPUT_ID = "frl-txn";
 const TXN_ERROR_ID = "frl-txn-error";
 
-function Field({
+/** Width shared by the transaction-id bar and the form, so they line up. */
+const FORM_WIDTH = "max-w-2xl";
+/** Radix Select cannot hold an empty-string item; stands for "not filled in". */
+const NONE_VALUE = "__none__";
+
+/**
+ * One form row: label in a fixed 8rem column, control in the rest. Every
+ * staff-entered field uses this and nothing else, so labels and controls line
+ * up. The label is as tall as a control (h-9) to sit on the first text line.
+ */
+function Row({
   label,
   htmlFor,
-  hint,
   children,
 }: {
   label: string;
   htmlFor?: string;
-  hint?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="min-w-0 space-y-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-[8rem_minmax(0,1fr)]">
+      <Label htmlFor={htmlFor} className="font-normal text-muted-foreground sm:h-9">
+        {label}
+      </Label>
+      <div className="min-w-0">{children}</div>
     </div>
+  );
+}
+
+/** A dropdown over a fixed list of enum values, sized like every other control. */
+function EnumSelect<T extends string>({
+  id,
+  value,
+  options,
+  labels,
+  onChange,
+}: {
+  id: string;
+  value: T;
+  options: readonly T[];
+  labels: Record<T, string>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as T)}>
+      <SelectTrigger id={id} className={CONTROL_CLASS}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((v) => (
+          <SelectItem key={v} value={v}>
+            {labels[v]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -203,7 +244,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
   const [duplicateId, setDuplicateId] = useState<number | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
-  const [otherOpen, setOtherOpen] = useState(false);
 
   // 最近登记
   const [recent, setRecent] = useState<Incident[]>([]);
@@ -240,7 +280,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     setStaleConflict(false);
     setDuplicateId(null);
     setConfirmCancel(false);
-    setOtherOpen(false);
     setRecordLoading(false);
   };
 
@@ -268,16 +307,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     const next = incidentToForm(record);
     setForm(next);
     setBaseline(next);
-    // Open the secondary group when it already holds something.
-    setOtherOpen(
-      Boolean(
-        record.id_province ||
-          record.id_city ||
-          record.ip_region ||
-          record.pwa_domain ||
-          record.account_type,
-      ),
-    );
   }, []);
 
   /** Open a stored record for editing (history row action / recent list). */
@@ -533,8 +562,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       setAlreadyRecorded(false);
       setApplyToGroup(false);
       setStaleConflict(false);
-      setOtherOpen(false);
-      setGroup({
+        setGroup({
         id: saved.incident_group_id,
         nextIndex: Math.max(saved.group_size, 1) + 1,
       });
@@ -597,16 +625,17 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
           <h2 className="mb-4 text-center text-sm font-medium text-muted-foreground">
             出入金风控登记
           </h2>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {/* Input and button are one unit: same height, radius and text size. */}
+          <div className="flex items-center gap-2">
             <Input
               {...txnInputProps}
               aria-label="订单号（CRM transaction id）"
               placeholder="输入订单号，例如 985343"
-              className="h-12 flex-1 text-lg tabular-nums md:text-lg"
+              className={cn(TXN_BAR_CLASS.hero, "flex-1 tabular-nums")}
             />
             <Button
               type="button"
-              className="h-12 px-6 text-base"
+              className={TXN_BAR_CLASS.hero}
               onClick={() => void handleLookup()}
               disabled={lookupBusy}
             >
@@ -658,18 +687,18 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       {/* Transaction id — compact, on top */}
       {!isEdit && !recordLoading && (
         <div className="space-y-1.5">
-          <div className="flex max-w-xl flex-wrap items-center gap-2">
+          <div className={cn("flex flex-wrap items-center gap-2", FORM_WIDTH)}>
             <Input
               {...txnInputProps}
               aria-label="订单号（CRM transaction id）"
               placeholder="订单号，例如 985343"
-              className="h-9 min-w-[160px] flex-1 tabular-nums"
+              className={cn(TXN_BAR_CLASS.compact, "min-w-[160px] flex-1 tabular-nums")}
             />
             {order ? (
               <Button
                 type="button"
                 variant="outline"
-                className="h-9 w-[112px]"
+                className={cn(TXN_BAR_CLASS.compact, "w-[112px]")}
                 onClick={handleChangeOrder}
                 disabled={saving}
               >
@@ -679,7 +708,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
               <>
                 <Button
                   type="button"
-                  className="h-9 w-[112px]"
+                  className={cn(TXN_BAR_CLASS.compact, "w-[112px]")}
                   onClick={() => void handleLookup()}
                   disabled={lookupBusy}
                 >
@@ -691,7 +720,12 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                   确认
                 </Button>
                 {/* No form below yet, so its 取消 button is not there either. */}
-                <Button type="button" variant="ghost" className="h-9" onClick={requestCancel}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={TXN_BAR_CLASS.compact}
+                  onClick={requestCancel}
+                >
                   取消
                 </Button>
               </>
@@ -805,156 +839,28 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             </p>
           )}
 
-          {/* The fields the CRM does not have */}
-          <div className="space-y-5 rounded-xl border bg-card px-4 py-4 md:px-6 md:py-5">
-            <div className="grid grid-cols-1 gap-x-8 gap-y-4 xl:grid-cols-2">
-              {/* Bank locations */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="客户银行所在省">
-                  <ProvinceCombobox
-                    aria-label="客户银行所在省"
-                    value={form.clientBankProvince}
-                    onChange={(v) => patch({ clientBankProvince: v })}
-                  />
-                </Field>
-                <Field label="客户银行所在市" htmlFor="frl-client-city">
-                  <Input
-                    id="frl-client-city"
-                    className="h-9"
-                    maxLength={SHORT_MAX}
-                    value={form.clientBankCity}
-                    onChange={(e) => patch({ clientBankCity: e.target.value })}
-                  />
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="交易员卡所在省">
-                  <ProvinceCombobox
-                    aria-label="交易员卡所在省"
-                    value={form.traderBankProvince}
-                    onChange={(v) => patch({ traderBankProvince: v })}
-                  />
-                </Field>
-                <Field label="交易员卡所在市" htmlFor="frl-trader-city">
-                  <Input
-                    id="frl-trader-city"
-                    className="h-9"
-                    maxLength={SHORT_MAX}
-                    value={form.traderBankCity}
-                    onChange={(e) => patch({ traderBankCity: e.target.value })}
-                  />
-                </Field>
-              </div>
-
-              {/* Freeze */}
-              <Field label="被封资料">
-                <ToggleGroup
-                  type="single"
-                  value={form.frozenScope}
-                  onValueChange={(v) => v && patch({ frozenScope: v as FrozenScope })}
-                  className={PILL_GROUP}
-                >
-                  {FROZEN_SCOPES.map((v) => (
-                    <ToggleGroupItem key={v} value={v} className={PILL_ITEM}>
-                      {FROZEN_SCOPE_LABELS[v]}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </Field>
-              <Field label="封卡单位">
-                <ToggleGroup
-                  type="single"
-                  value={form.authority}
-                  onValueChange={(v) => v && patch({ authority: v as Authority })}
-                  className={PILL_GROUP}
-                >
-                  {AUTHORITIES.map((v) => (
-                    <ToggleGroupItem key={v} value={v} className={PILL_ITEM}>
-                      {AUTHORITY_LABELS[v]}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </Field>
-
-              <Field label="封卡天数" htmlFor="frl-days">
-                <div className="flex items-center gap-3">
-                  <Input
-                    id="frl-days"
-                    type="number"
-                    min={0}
-                    max={FREEZE_DAYS_MAX}
-                    step={1}
-                    className="h-9 w-28 tabular-nums"
-                    value={form.freezeDaysUnknown ? "" : form.freezeDaysText}
-                    disabled={form.freezeDaysUnknown}
-                    onChange={(e) => patch({ freezeDaysText: e.target.value })}
-                  />
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={form.freezeDaysUnknown}
-                      onCheckedChange={(c) => patch({ freezeDaysUnknown: c === true })}
-                    />
-                    尚不知
-                  </label>
-                </div>
-              </Field>
-              <Field
-                label="封卡备注"
-                htmlFor="frl-freeze-note"
-                hint="天数说不清时写在这里，例如「半年后复核」"
-              >
-                <Input
-                  id="frl-freeze-note"
-                  className="h-9"
-                  maxLength={FREEZE_NOTE_MAX}
-                  value={form.freezeNote}
-                  onChange={(e) => patch({ freezeNote: e.target.value })}
-                />
-              </Field>
-
-              <Field label="客户来源" hint="再点一次已选项可取消选择">
-                <ToggleGroup
-                  type="single"
-                  value={form.clientSource}
-                  // Optional field: an empty value (deselect) is allowed.
-                  onValueChange={(v) => patch({ clientSource: v as ClientSource | "" })}
-                  className={PILL_GROUP}
-                >
-                  {CLIENT_SOURCES.map((v) => (
-                    <ToggleGroupItem key={v} value={v} className={PILL_ITEM}>
-                      {CLIENT_SOURCE_LABELS[v]}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </Field>
-              <Field label="是否成功转账">
-                <ToggleGroup
-                  type="single"
-                  value={form.transferSucceeded}
-                  onValueChange={(v) =>
-                    v && patch({ transferSucceeded: v as TransferSucceeded })
-                  }
-                  className={PILL_GROUP}
-                >
-                  {TRANSFER_SUCCEEDED.map((v) => (
-                    <ToggleGroupItem key={v} value={v} className={PILL_ITEM}>
-                      {TRANSFER_SUCCEEDED_LABELS[v]}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </Field>
-
-              <Field label="登记日期">
+          {/* The fields the CRM does not have: one field per row, one row shape. */}
+          <div
+            className={cn(
+              "space-y-4 rounded-xl border bg-card px-4 py-4 md:px-6 md:py-5",
+              FORM_WIDTH,
+            )}
+          >
+            <div className="space-y-3">
+              <Row label="登记日期" htmlFor="frl-date">
                 <Popover open={dateOpen} onOpenChange={setDateOpen}>
                   <PopoverTrigger asChild>
-                    <Button
+                    <button
+                      id="frl-date"
                       type="button"
-                      variant="outline"
-                      className="h-9 w-full justify-start gap-2 font-normal"
+                      className={cn(
+                        SELECT_LIKE_TRIGGER_CLASS,
+                        !form.reportedDate && "text-muted-foreground",
+                      )}
                     >
-                      <CalendarIcon className="h-4 w-4 shrink-0" />
                       <span className="tabular-nums">{form.reportedDate || "未填"}</span>
-                    </Button>
+                      <CalendarIcon className={TRIGGER_ICON_CLASS} />
+                    </button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <Calendar
@@ -968,118 +874,155 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                     />
                   </PopoverContent>
                 </Popover>
-              </Field>
-              <Field
-                label="场地修正（可选）"
-                htmlFor="frl-venue"
-                hint="留空则使用 CRM 当前的场地标签"
-              >
-                <Input
-                  id="frl-venue"
-                  className="h-9"
-                  maxLength={SHORT_MAX}
-                  placeholder={order?.venue ?? ""}
-                  value={form.venueOverride}
-                  onChange={(e) => patch({ venueOverride: e.target.value })}
+              </Row>
+
+              <Row label="是否成功转账" htmlFor="frl-transfer">
+                <EnumSelect<TransferSucceeded>
+                  id="frl-transfer"
+                  value={form.transferSucceeded}
+                  options={TRANSFER_SUCCEEDED}
+                  labels={TRANSFER_SUCCEEDED_LABELS}
+                  onChange={(v) => patch({ transferSucceeded: v })}
                 />
-              </Field>
+              </Row>
+
+              <Row label="被封资料" htmlFor="frl-scope">
+                <EnumSelect<FrozenScope>
+                  id="frl-scope"
+                  value={form.frozenScope}
+                  options={FROZEN_SCOPES}
+                  labels={FROZEN_SCOPE_LABELS}
+                  onChange={(v) => patch({ frozenScope: v })}
+                />
+              </Row>
+
+              <Row label="封卡天数" htmlFor="frl-days">
+                <Input
+                  id="frl-days"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={5}
+                  placeholder="留空 = 尚不知"
+                  className={cn(CONTROL_CLASS, "tabular-nums")}
+                  value={form.freezeDaysText}
+                  onChange={(e) => patch({ freezeDaysText: e.target.value })}
+                />
+              </Row>
+
+              <Row label="封卡备注" htmlFor="frl-freeze-note">
+                <Input
+                  id="frl-freeze-note"
+                  className={CONTROL_CLASS}
+                  maxLength={FREEZE_NOTE_MAX}
+                  placeholder="天数说不清时写在这里，例如「半年后复核」"
+                  value={form.freezeNote}
+                  onChange={(e) => patch({ freezeNote: e.target.value })}
+                />
+              </Row>
+
+              <Row label="封卡单位" htmlFor="frl-authority">
+                <EnumSelect<Authority>
+                  id="frl-authority"
+                  value={form.authority}
+                  options={AUTHORITIES}
+                  labels={AUTHORITY_LABELS}
+                  onChange={(v) => patch({ authority: v })}
+                />
+              </Row>
+
+              <Row label="客户来源" htmlFor="frl-source">
+                {/* Optional field: 「未填」 maps back to the empty value. */}
+                <Select
+                  value={form.clientSource === "" ? NONE_VALUE : form.clientSource}
+                  onValueChange={(v) =>
+                    patch({ clientSource: v === NONE_VALUE ? "" : (v as ClientSource) })
+                  }
+                >
+                  <SelectTrigger
+                    id="frl-source"
+                    className={cn(
+                      CONTROL_CLASS,
+                      form.clientSource === "" && "text-muted-foreground",
+                    )}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>未填</SelectItem>
+                    {CLIENT_SOURCES.map((v) => (
+                      <SelectItem key={v} value={v}>
+                        {CLIENT_SOURCE_LABELS[v]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Row>
+
+              <Row label="客户银行省市" htmlFor="frl-client-province">
+                <div className="grid grid-cols-2 gap-2">
+                  <ProvinceCombobox
+                    id="frl-client-province"
+                    placeholder="省"
+                    value={form.clientBankProvince}
+                    onChange={(v) => patch({ clientBankProvince: v })}
+                  />
+                  <Input
+                    aria-label="客户银行所在市"
+                    className={CONTROL_CLASS}
+                    maxLength={SHORT_MAX}
+                    placeholder="市"
+                    value={form.clientBankCity}
+                    onChange={(e) => patch({ clientBankCity: e.target.value })}
+                  />
+                </div>
+              </Row>
+
+              <Row label="交易员银行卡省市" htmlFor="frl-trader-province">
+                <div className="grid grid-cols-2 gap-2">
+                  <ProvinceCombobox
+                    id="frl-trader-province"
+                    placeholder="省"
+                    value={form.traderBankProvince}
+                    onChange={(v) => patch({ traderBankProvince: v })}
+                  />
+                  <Input
+                    aria-label="交易员银行卡所在市"
+                    className={CONTROL_CLASS}
+                    maxLength={SHORT_MAX}
+                    placeholder="市"
+                    value={form.traderBankCity}
+                    onChange={(e) => patch({ traderBankCity: e.target.value })}
+                  />
+                </div>
+              </Row>
+
+              <Row label="事件" htmlFor="frl-event">
+                <Textarea
+                  id="frl-event"
+                  rows={4}
+                  className={TEXTAREA_CLASS}
+                  maxLength={TEXT_MAX}
+                  placeholder="银行卡号和手机号保存时会自动遮盖；请不要填写客户姓名、出生日期和完整 IP。"
+                  value={form.eventText}
+                  onChange={(e) => patch({ eventText: e.target.value })}
+                />
+              </Row>
+
+              <Row label="查询结果" htmlFor="frl-result">
+                <Textarea
+                  id="frl-result"
+                  rows={4}
+                  className={TEXTAREA_CLASS}
+                  maxLength={TEXT_MAX}
+                  placeholder="暂时没有结果可以留空，之后再补。"
+                  value={form.resultText}
+                  onChange={(e) => patch({ resultText: e.target.value })}
+                />
+              </Row>
             </div>
 
-            {/* Free text — full width */}
-            <Field
-              label="事件"
-              htmlFor="frl-event"
-              hint="银行卡号和手机号保存时会自动遮盖；请不要填写客户姓名、出生日期和完整 IP。"
-            >
-              <Textarea
-                id="frl-event"
-                rows={4}
-                maxLength={TEXT_MAX}
-                value={form.eventText}
-                onChange={(e) => patch({ eventText: e.target.value })}
-              />
-            </Field>
-            <Field label="查询结果" htmlFor="frl-result" hint="暂时没有结果可以留空，之后再补。">
-              <Textarea
-                id="frl-result"
-                rows={4}
-                maxLength={TEXT_MAX}
-                value={form.resultText}
-                onChange={(e) => patch({ resultText: e.target.value })}
-              />
-            </Field>
-
-            {/* Secondary fields, collapsed by default */}
-            <Collapsible open={otherOpen} onOpenChange={setOtherOpen}>
-              <CollapsibleTrigger asChild>
-                <Button type="button" variant="ghost" size="sm" className="-ml-2 gap-1">
-                  {otherOpen ? (
-                    <ChevronDown className="h-4 w-4" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4" />
-                  )}
-                  其他信息
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="grid grid-cols-1 gap-x-8 gap-y-4 pt-2 xl:grid-cols-2">
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field label="身份证所在省">
-                      <ProvinceCombobox
-                        aria-label="身份证所在省"
-                        value={form.idProvince}
-                        onChange={(v) => patch({ idProvince: v })}
-                      />
-                    </Field>
-                    <Field label="身份证所在市" htmlFor="frl-id-city">
-                      <Input
-                        id="frl-id-city"
-                        className="h-9"
-                        maxLength={SHORT_MAX}
-                        value={form.idCity}
-                        onChange={(e) => patch({ idCity: e.target.value })}
-                      />
-                    </Field>
-                  </div>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field
-                      label="IP 所在地区"
-                      htmlFor="frl-ip-region"
-                      hint="只写地区，不要写完整 IP"
-                    >
-                      <Input
-                        id="frl-ip-region"
-                        className="h-9"
-                        maxLength={SHORT_MAX}
-                        value={form.ipRegion}
-                        onChange={(e) => patch({ ipRegion: e.target.value })}
-                      />
-                    </Field>
-                    <Field label="账户类型" htmlFor="frl-account-type">
-                      <Input
-                        id="frl-account-type"
-                        className="h-9"
-                        maxLength={SHORT_MAX}
-                        value={form.accountType}
-                        onChange={(e) => patch({ accountType: e.target.value })}
-                      />
-                    </Field>
-                  </div>
-                  <Field label="PWA 域名" htmlFor="frl-pwa">
-                    <Input
-                      id="frl-pwa"
-                      className="h-9"
-                      maxLength={PWA_DOMAIN_MAX}
-                      value={form.pwaDomain}
-                      onChange={(e) => patch({ pwaDomain: e.target.value })}
-                    />
-                  </Field>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-
             {isEdit && editing.group_size > 1 && (
-              <label className="flex items-start gap-2 text-sm">
+              <label className="flex items-start gap-2 text-sm sm:pl-36">
                 <Checkbox
                   className="mt-0.5"
                   checked={applyToGroup}

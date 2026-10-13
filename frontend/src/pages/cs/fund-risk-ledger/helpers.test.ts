@@ -101,24 +101,34 @@ describe("default transfer_succeeded", () => {
 });
 
 describe("freeze days", () => {
-  it("maps the unknown checkbox and an empty box to null", () => {
-    expect(parseFreezeDays("15", true)).toEqual({ ok: true, value: null });
-    expect(parseFreezeDays("  ", false)).toEqual({ ok: true, value: null });
+  it("maps an empty box to null (not known yet)", () => {
+    expect(parseFreezeDays("")).toEqual({ ok: true, value: null });
+    expect(parseFreezeDays("  ")).toEqual({ ok: true, value: null });
   });
 
   it("accepts whole days in range, including zero", () => {
-    expect(parseFreezeDays("0", false)).toEqual({ ok: true, value: 0 });
-    expect(parseFreezeDays(" 180 ", false)).toEqual({ ok: true, value: 180 });
-    expect(parseFreezeDays("36500", false)).toEqual({ ok: true, value: 36500 });
+    expect(parseFreezeDays("0")).toEqual({ ok: true, value: 0 });
+    expect(parseFreezeDays(" 180 ")).toEqual({ ok: true, value: 180 });
+    expect(parseFreezeDays("36500")).toEqual({ ok: true, value: 36500 });
   });
 
   it("rejects anything else", () => {
-    expect(parseFreezeDays("-1", false).ok).toBe(false);
-    expect(parseFreezeDays("1.5", false).ok).toBe(false);
-    expect(parseFreezeDays("半年", false).ok).toBe(false);
-    expect(parseFreezeDays("36501", false).ok).toBe(false);
+    expect(parseFreezeDays("-1").ok).toBe(false);
+    expect(parseFreezeDays("1.5").ok).toBe(false);
+    expect(parseFreezeDays("半年").ok).toBe(false);
+    expect(parseFreezeDays("36501").ok).toBe(false);
   });
 });
+
+/** The staff fields that have no control in the form. */
+const nullHidden = {
+  id_province: null,
+  id_city: null,
+  ip_region: null,
+  pwa_domain: null,
+  account_type: null,
+  venue_override: null,
+};
 
 describe("form -> payload", () => {
   it("serialises an untouched form to the contract defaults", () => {
@@ -145,11 +155,10 @@ describe("form -> payload", () => {
     });
   });
 
-  it("trims text, nulls empties and upper-cases the venue correction", () => {
+  it("trims text and nulls empties", () => {
     const fields = buildFields({
       ...emptyForm(TODAY, "approved"),
       frozenScope: "one_card",
-      freezeDaysUnknown: false,
       freezeDaysText: "30",
       freezeNote: "  半年后复核 ",
       authority: "bank",
@@ -157,7 +166,6 @@ describe("form -> payload", () => {
       clientBankProvince: "广东",
       clientBankCity: " 深圳 ",
       traderBankCity: "   ",
-      venueOverride: " gz01 ",
       eventText: " 客户来电 ",
     });
     expect(fields.transfer_succeeded).toBe("yes");
@@ -169,14 +177,13 @@ describe("form -> payload", () => {
     expect(fields.client_bank_province).toBe("广东");
     expect(fields.client_bank_city).toBe("深圳");
     expect(fields.trader_bank_city).toBeNull();
-    expect(fields.venue_override).toBe("GZ01");
     expect(fields.event_text).toBe("客户来电");
     expect(fields.result_text).toBeNull();
   });
 
   it("throws a readable message on invalid days", () => {
     expect(() =>
-      buildFields({ ...emptyForm(TODAY), freezeDaysUnknown: false, freezeDaysText: "x" }),
+      buildFields({ ...emptyForm(TODAY), freezeDaysText: "x" }),
     ).toThrow(/封卡天数/);
   });
 
@@ -217,13 +224,78 @@ describe("form -> payload", () => {
       result_text: null,
     };
     const form = incidentToForm(stored);
-    expect(form.freezeDaysUnknown).toBe(false);
     expect(form.freezeDaysText).toBe("0");
     expect(buildFields(form)).toEqual(stored);
 
     const unknownDays = incidentToForm({ ...stored, freeze_days: null });
-    expect(unknownDays.freezeDaysUnknown).toBe(true);
+    expect(unknownDays.freezeDaysText).toBe("");
     expect(buildFields(unknownDays).freeze_days).toBeNull();
+  });
+
+  it("sends the fields without a form control back untouched on edit", () => {
+    // Imported legacy rows carry these; PUT replaces every staff field, so an
+    // edit of the visible fields must not clear or normalise them.
+    const stored: IncidentFields = {
+      reported_date: "2025-03-02",
+      transfer_succeeded: "unknown",
+      frozen_scope: "unknown",
+      freeze_days: null,
+      freeze_note: null,
+      authority: "unknown",
+      client_source: null,
+      client_bank_province: null,
+      client_bank_city: null,
+      trader_bank_province: null,
+      trader_bank_city: null,
+      id_province: "黑龙江省 ",
+      id_city: " 哈尔滨",
+      ip_region: "广东 深圳",
+      pwa_domain: "App.Example.com/path ",
+      account_type: "std ",
+      venue_override: " gz01",
+      event_text: null,
+      result_text: null,
+    };
+    const hidden = {
+      id_province: stored.id_province,
+      id_city: stored.id_city,
+      ip_region: stored.ip_region,
+      pwa_domain: stored.pwa_domain,
+      account_type: stored.account_type,
+      venue_override: stored.venue_override,
+    };
+    // What staff can do in the form: change visible fields only.
+    const edited = {
+      ...incidentToForm(stored),
+      frozenScope: "one_card" as const,
+      freezeDaysText: "30",
+      clientBankProvince: "广东",
+      eventText: "补充事件",
+    };
+    const update = buildUpdatePayload(edited, 3, false);
+    expect(update).toMatchObject(hidden);
+    expect(update.frozen_scope).toBe("one_card");
+    expect(update.freeze_days).toBe(30);
+
+    // Null stays null (not ""), and an untouched form is not dirty.
+    const nulls = incidentToForm({ ...stored, ...nullHidden });
+    expect(buildUpdatePayload(nulls, 1, false)).toMatchObject(nullHidden);
+    expect(isFormDirty(incidentToForm(stored), incidentToForm(stored))).toBe(false);
+  });
+
+  it("creates new records with the hidden fields null", () => {
+    expect(buildCreatePayload(emptyForm(TODAY, "approved"), 985343, null)).toMatchObject(
+      nullHidden,
+    );
+    // 保存并添加同事件订单: the next order must not inherit them either.
+    const prev = incidentToForm({
+      ...buildFields(emptyForm(TODAY)),
+      id_province: "四川",
+      venue_override: "SZ02",
+    });
+    expect(buildCreatePayload(carryOverForm(prev, TODAY), 985344, 12)).toMatchObject(
+      nullHidden,
+    );
   });
 });
 
@@ -237,7 +309,6 @@ describe("same-incident carry over and dirty check", () => {
       resultText: "已核实",
       clientBankProvince: "广东",
       frozenScope: "one_card" as const,
-      freezeDaysUnknown: false,
       freezeDaysText: "7",
     };
     const next = carryOverForm(prev, TODAY, "fresh");
@@ -247,7 +318,7 @@ describe("same-incident carry over and dirty check", () => {
     expect(next.resultText).toBe("已核实");
     expect(next.clientBankProvince).toBe("");
     expect(next.frozenScope).toBe("unknown");
-    expect(next.freezeDaysUnknown).toBe(true);
+    expect(next.freezeDaysText).toBe("");
     expect(next.transferSucceeded).toBe("no");
   });
 
@@ -255,7 +326,7 @@ describe("same-incident carry over and dirty check", () => {
     const base = emptyForm(TODAY);
     expect(isFormDirty({ ...base }, base)).toBe(false);
     expect(isFormDirty({ ...base, eventText: "x" }, base)).toBe(true);
-    expect(isFormDirty({ ...base, freezeDaysUnknown: false }, base)).toBe(true);
+    expect(isFormDirty({ ...base, freezeDaysText: "3" }, base)).toBe(true);
   });
 });
 
