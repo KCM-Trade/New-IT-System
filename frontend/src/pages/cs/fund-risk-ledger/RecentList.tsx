@@ -6,6 +6,7 @@ import { formatHk } from "@/lib/hk-time";
 
 import { fmtAmount } from "./helpers";
 import type { Incident } from "./types";
+import { useLedgerT } from "./useLedgerT";
 
 interface RecentListProps {
   rows: Incident[];
@@ -21,10 +22,13 @@ function clientLabel(row: Incident): string {
 }
 
 export function RecentList({ rows, onOpen, disabled = false }: RecentListProps) {
+  const t = useLedgerT();
   if (rows.length === 0) return null;
   return (
     <div className="pt-6">
-      <div className="px-2 pb-1 text-xs text-muted-foreground">最近登记</div>
+      <div className="px-2 pb-1 text-xs text-muted-foreground">
+        {t("fundRiskLedgerPage.entry.recentTitle")}
+      </div>
       <ul>
         {rows.map((row) => {
           const parts = [
@@ -40,7 +44,7 @@ export function RecentList({ rows, onOpen, disabled = false }: RecentListProps) 
                 type="button"
                 disabled={disabled}
                 onClick={() => onOpen(row)}
-                title="打开这条登记进行编辑"
+                title={t("fundRiskLedgerPage.entry.recentOpen")}
                 className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60"
               >
                 <span className="font-medium tabular-nums text-foreground">

@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 
 import { SELECT_LIKE_TRIGGER_CLASS, TRIGGER_ICON_CLASS } from "./controlStyles";
 import { PROVINCES } from "./regions";
+import { useLedgerT } from "./useLedgerT";
 
 interface ProvinceComboboxProps {
   value: string; // "" = not selected
@@ -38,12 +39,14 @@ export function ProvinceCombobox({
   value,
   onChange,
   id,
-  placeholder = "选择省份",
+  placeholder,
   disabled,
   className,
   "aria-label": ariaLabel,
 }: ProvinceComboboxProps) {
+  const t = useLedgerT();
   const [open, setOpen] = useState(false);
+  const clearLabel = t("fundRiskLedgerPage.province.clear");
   const options =
     value && !PROVINCES.includes(value) ? [value, ...PROVINCES] : PROVINCES;
   const pick = (next: string) => {
@@ -67,20 +70,20 @@ export function ProvinceCombobox({
             className,
           )}
         >
-          <span className="truncate">{value || placeholder}</span>
+          <span className="truncate">{value || (placeholder ?? t("fundRiskLedgerPage.province.placeholder"))}</span>
           <ChevronDown className={TRIGGER_ICON_CLASS} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[220px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="搜索省份..." />
+          <CommandInput placeholder={t("fundRiskLedgerPage.province.search")} />
           <CommandList>
-            <CommandEmpty>没有匹配的省份</CommandEmpty>
+            <CommandEmpty>{t("fundRiskLedgerPage.province.empty")}</CommandEmpty>
             <CommandGroup>
               {value && (
-                <CommandItem value="不选" onSelect={() => pick("")}>
+                <CommandItem value={clearLabel} onSelect={() => pick("")}>
                   <Check className="h-4 w-4 opacity-0" />
-                  <span className="text-muted-foreground">不选</span>
+                  <span className="text-muted-foreground">{clearLabel}</span>
                 </CommandItem>
               )}
               {options.map((p) => (

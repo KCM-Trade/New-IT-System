@@ -72,6 +72,7 @@ import {
   carryOverForm,
   defaultTransferSucceeded,
   emptyForm,
+  errorText,
   fmtAmount,
   fromYmd,
   incidentToForm,
@@ -85,13 +86,15 @@ import {
   type LedgerForm,
 } from "./helpers";
 import {
-  AUTHORITY_LABELS,
-  CLIENT_SOURCE_LABELS,
-  DIRECTION_LABELS,
-  FROZEN_SCOPE_LABELS,
+  AUTHORITY_LABEL_KEYS,
+  CLIENT_SOURCE_LABEL_KEYS,
+  DIRECTION_LABEL_KEYS,
+  FROZEN_SCOPE_LABEL_KEYS,
   labelOf,
-  ORDER_WARNING_LABELS,
-  TRANSFER_SUCCEEDED_LABELS,
+  ORDER_WARNING_LABEL_KEYS,
+  ROW_SOURCE_LABEL_KEYS,
+  TRANSFER_SUCCEEDED_LABEL_KEYS,
+  type Translate,
 } from "./labels";
 import {
   AUTHORITIES,
@@ -111,6 +114,7 @@ import {
   type OrderWarning,
   type TransferSucceeded,
 } from "./types";
+import { useLedgerT } from "./useLedgerT";
 
 /** A record handed over from the history tab. */
 export type EntryIntent =
@@ -169,13 +173,16 @@ function EnumSelect<T extends string>({
   id,
   value,
   options,
-  labels,
+  labelKeys,
+  t,
   onChange,
 }: {
   id: string;
   value: T;
   options: readonly T[];
-  labels: Record<T, string>;
+  /** Translation key of each option's label. */
+  labelKeys: Record<T, string>;
+  t: Translate;
   onChange: (value: T) => void;
 }) {
   return (
@@ -186,7 +193,7 @@ function EnumSelect<T extends string>({
       <SelectContent>
         {options.map((v) => (
           <SelectItem key={v} value={v}>
-            {labels[v]}
+            {t(labelKeys[v])}
           </SelectItem>
         ))}
       </SelectContent>
@@ -210,6 +217,7 @@ async function fetchIncident(id: number, signal: AbortSignal): Promise<Incident>
 }
 
 export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryFormProps) {
+  const t = useLedgerT();
   // False = the centred idle view; true = the input sits on top and the page
   // below it belongs to one registration.
   const [active, setActive] = useState(false);
@@ -326,7 +334,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
         // version is still caught by the server.
         loadRecord(row, false);
         toast.error(
-          `读取最新记录失败，显示的是列表中的内容: ${err instanceof Error ? err.message : String(err)}`,
+          t("fundRiskLedgerPage.entry.readLatestFailed", { detail: errorText(err, t) }),
         );
       } finally {
         if (!signal.aborted) setRecordLoading(false);
@@ -407,7 +415,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
   const handleLookup = async () => {
     const id = parseTransactionId(txnInput);
     if (id === null) {
-      setLookupError("请输入正确的订单号（纯数字）");
+      setLookupError(t("fundRiskLedgerPage.entry.invalidId"));
       return;
     }
     const signal = newReadSignal();
@@ -417,15 +425,19 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     try {
       const res = await apiFetch(`${API_BASE}/order/${id}`, { signal });
       if (res.status === 404) {
-        setLookupError(`CRM 中没有订单号 ${id}，请核对后重试`);
+        setLookupError(t("fundRiskLedgerPage.entry.notFound", { id }));
         return;
       }
       if (res.status === 422) {
-        setLookupError(`该订单不能登记：${await readErrorDetail(res)}`);
+        setLookupError(
+          t("fundRiskLedgerPage.entry.notAllowed", { detail: await readErrorDetail(res) }),
+        );
         return;
       }
       if (!res.ok) {
-        setLookupError(`查询订单失败：${await readErrorDetail(res)}`);
+        setLookupError(
+          t("fundRiskLedgerPage.entry.lookupFailed", { detail: await readErrorDetail(res) }),
+        );
         return;
       }
       const body = (await res.json()) as OrderPreviewResponse;
@@ -433,7 +445,9 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
         if (group) {
           // Adding to an incident group: an already-recorded order cannot be
           // moved between groups, and switching to it would drop typed text.
-          setLookupError(`该订单已登记（记录 #${body.existing_id}），不能加入当前事件组。`);
+          setLookupError(
+            t("fundRiskLedgerPage.entry.recordedElsewhere", { id: body.existing_id }),
+          );
           return;
         }
         // Already recorded: open that record for editing instead of failing.
@@ -454,7 +468,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       }
     } catch (err) {
       if (isAbortError(err)) return;
-      setLookupError(`查询订单失败：${err instanceof Error ? err.message : String(err)}`);
+      setLookupError(t("fundRiskLedgerPage.entry.lookupFailed", { detail: errorText(err, t) }));
     } finally {
       if (!signal.aborted) setLookupBusy(false);
     }
@@ -477,7 +491,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       loadRecord(await fetchIncident(id, signal), recorded);
     } catch (err) {
       if (isAbortError(err)) return;
-      toast.error(`读取记录失败: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(t("fundRiskLedgerPage.entry.readFailed", { detail: errorText(err, t) }));
     } finally {
       if (!signal.aborted) setRecordLoading(false);
     }
@@ -489,7 +503,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     let res: Response;
     setDuplicateId(null);
     try {
-      // Both builders throw a user-facing message on invalid input.
+      // Both builders throw a LedgerFormError on invalid input.
       let url: string;
       let method: "POST" | "PUT";
       let body: unknown;
@@ -521,7 +535,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       );
     } catch (err) {
       setSaving(false);
-      toast.error(`保存失败: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(t("fundRiskLedgerPage.entry.saveFailed", { detail: errorText(err, t) }));
       return;
     }
 
@@ -533,19 +547,30 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
         } else if (conflict.existing_id !== null) {
           setDuplicateId(conflict.existing_id);
         } else {
-          toast.error(`保存失败: ${conflict.detail || "记录冲突"}`);
+          toast.error(
+            t("fundRiskLedgerPage.entry.saveFailed", {
+              detail: conflict.detail || t("fundRiskLedgerPage.entry.conflict"),
+            }),
+          );
         }
         return;
       }
       if (!res.ok) {
-        toast.error(`保存失败: ${await readErrorDetail(res)}`);
+        toast.error(
+          t("fundRiskLedgerPage.entry.saveFailed", { detail: await readErrorDetail(res) }),
+        );
         return;
       }
       const saved = (await res.json()) as Incident;
       toast.success(
         editing
-          ? `订单 ${saved.transaction_id ?? `#${saved.id}`} 的登记已更新`
-          : `订单 ${saved.transaction_id} 已登记（事件组 #${saved.incident_group_id}）`,
+          ? t("fundRiskLedgerPage.entry.updated", {
+              order: saved.transaction_id ?? `#${saved.id}`,
+            })
+          : t("fundRiskLedgerPage.entry.created", {
+              order: String(saved.transaction_id),
+              group: saved.incident_group_id,
+            }),
       );
       setRecentTick((t) => t + 1);
       if (!addAnother) {
@@ -569,7 +594,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       resetForm(carryOverForm(incidentToForm(saved), new Date()));
       setFocusTick((t) => t + 1);
     } catch (err) {
-      toast.error(`保存失败: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(t("fundRiskLedgerPage.entry.saveFailed", { detail: errorText(err, t) }));
     } finally {
       setSaving(false);
     }
@@ -600,17 +625,17 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     <Dialog open={confirmCancel} onOpenChange={setConfirmCancel}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>放弃未保存的修改？</DialogTitle>
+          <DialogTitle>{t("fundRiskLedgerPage.discardDialog.title")}</DialogTitle>
           <DialogDescription>
-            表单里有还没保存的内容，取消后这些内容会丢失。
+            {t("fundRiskLedgerPage.discardDialog.cancelBody")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => setConfirmCancel(false)}>
-            继续填写
+            {t("fundRiskLedgerPage.discardDialog.keep")}
           </Button>
           <Button variant="destructive" onClick={resetToIdle}>
-            放弃修改
+            {t("fundRiskLedgerPage.discardDialog.discard")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -623,14 +648,14 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       <div className="flex min-h-[60vh] flex-col items-center justify-center">
         <div className="w-full max-w-2xl">
           <h2 className="mb-4 text-center text-sm font-medium text-muted-foreground">
-            出入金风控登记
+            {t("fundRiskLedgerPage.entry.heading")}
           </h2>
           {/* Input and button are one unit: same height, radius and text size. */}
           <div className="flex items-center gap-2">
             <Input
               {...txnInputProps}
-              aria-label="订单号（CRM transaction id）"
-              placeholder="输入订单号，例如 985343"
+              aria-label={t("fundRiskLedgerPage.entry.txnAria")}
+              placeholder={t("fundRiskLedgerPage.entry.heroPlaceholder")}
               className={cn(TXN_BAR_CLASS.hero, "flex-1 tabular-nums")}
             />
             <Button
@@ -644,7 +669,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
               ) : (
                 <Plus className="h-4 w-4" />
               )}
-              新增风控登记
+              {t("fundRiskLedgerPage.entry.newButton")}
             </Button>
           </div>
           {lookupError ? (
@@ -653,7 +678,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             </p>
           ) : (
             <p className="mt-2 text-center text-sm text-muted-foreground">
-              输入 CRM 订单号后回车，订单信息会自动读取；已登记过的订单会直接打开编辑。
+              {t("fundRiskLedgerPage.entry.hint")}
             </p>
           )}
           <RecentList rows={recent} onOpen={startEdit} disabled={lookupBusy} />
@@ -663,12 +688,16 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
   }
 
   const title = isEdit
-    ? `编辑登记 · 订单 ${editing.transaction_id ?? `（无订单号 #${editing.id}）`}`
+    ? t("fundRiskLedgerPage.entry.titleEdit", {
+        order:
+          editing.transaction_id ??
+          t("fundRiskLedgerPage.entry.titleEditNoTxn", { id: editing.id }),
+      })
     : recordLoading
-      ? "编辑登记"
+      ? t("fundRiskLedgerPage.entry.titleEditLoading")
       : group
-        ? "添加同事件订单"
-        : "新增登记";
+        ? t("fundRiskLedgerPage.entry.titleAddToGroup")
+        : t("fundRiskLedgerPage.entry.titleCreate");
   const reportedDate = fromYmd(form.reportedDate);
 
   return (
@@ -678,8 +707,14 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
         {(group || (isEdit && editing.group_size > 1)) && (
           <Badge variant="secondary" className="tabular-nums">
             {group
-              ? `事件组 #${group.id} · 第 ${group.nextIndex} 单`
-              : `事件组 #${editing!.incident_group_id} · 共 ${editing!.group_size} 单`}
+              ? t("fundRiskLedgerPage.entry.groupNext", {
+                  id: group.id,
+                  index: group.nextIndex,
+                })
+              : t("fundRiskLedgerPage.entry.groupTotal", {
+                  id: editing!.incident_group_id,
+                  count: editing!.group_size,
+                })}
           </Badge>
         )}
       </div>
@@ -690,8 +725,8 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
           <div className={cn("flex flex-wrap items-center gap-2", FORM_WIDTH)}>
             <Input
               {...txnInputProps}
-              aria-label="订单号（CRM transaction id）"
-              placeholder="订单号，例如 985343"
+              aria-label={t("fundRiskLedgerPage.entry.txnAria")}
+              placeholder={t("fundRiskLedgerPage.entry.compactPlaceholder")}
               className={cn(TXN_BAR_CLASS.compact, "min-w-[160px] flex-1 tabular-nums")}
             />
             {order ? (
@@ -702,7 +737,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                 onClick={handleChangeOrder}
                 disabled={saving}
               >
-                更换订单
+                {t("fundRiskLedgerPage.entry.changeOrder")}
               </Button>
             ) : (
               <>
@@ -717,7 +752,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                   ) : (
                     <Search className="h-4 w-4" />
                   )}
-                  确认
+                  {t("fundRiskLedgerPage.entry.confirm")}
                 </Button>
                 {/* No form below yet, so its 取消 button is not there either. */}
                 <Button
@@ -726,7 +761,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                   className={TXN_BAR_CLASS.compact}
                   onClick={requestCancel}
                 >
-                  取消
+                  {t("fundRiskLedgerPage.entry.cancel")}
                 </Button>
               </>
             )}
@@ -742,23 +777,22 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       {recordLoading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          正在读取记录…
+          {t("fundRiskLedgerPage.entry.loadingRecord")}
         </div>
       )}
 
       {alreadyRecorded && isEdit && (
         <p className={AMBER_NOTE}>
-          该订单已登记过（由 {editing.created_by} 于 {formatHk(editing.created_at)}{" "}
-          登记），已切换为编辑这条记录。
+          {t("fundRiskLedgerPage.entry.alreadyRecorded", {
+            user: editing.created_by,
+            time: formatHk(editing.created_at),
+          })}
         </p>
       )}
 
       {staleConflict && isEdit && (
         <div className={AMBER_NOTE}>
-          <p>
-            这条记录在你打开之后被其他人修改过，本次保存没有生效。重新加载会读取最新内容，
-            你在这里未保存的修改会丢失，请先把需要的文字复制出来。
-          </p>
+          <p>{t("fundRiskLedgerPage.entry.stale")}</p>
           <Button
             type="button"
             variant="outline"
@@ -767,14 +801,14 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             onClick={() => void handleOpenRecord(editing.id, alreadyRecorded)}
             disabled={recordLoading}
           >
-            重新加载
+            {t("fundRiskLedgerPage.entry.reload")}
           </Button>
         </div>
       )}
 
       {duplicateId !== null && (
         <div className={AMBER_NOTE}>
-          <p>该订单刚刚已被登记，本次没有重复新建。</p>
+          <p>{t("fundRiskLedgerPage.entry.duplicate")}</p>
           <Button
             type="button"
             variant="outline"
@@ -783,7 +817,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             onClick={() => void handleOpenRecord(duplicateId, true)}
             disabled={recordLoading}
           >
-            打开已有记录
+            {t("fundRiskLedgerPage.entry.openExisting")}
           </Button>
         </div>
       )}
@@ -794,48 +828,50 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
           {order ? (
             <div className="space-y-2 rounded-xl border bg-muted/40 px-4 py-3 md:px-6">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold">订单信息（只读）</span>
+                <span className="text-sm font-semibold">
+                  {t("fundRiskLedgerPage.order.title")}
+                </span>
                 {order.is_test_account && (
                   <Badge
                     variant="outline"
                     className="border-amber-400 text-amber-700 dark:text-amber-300"
                   >
-                    测试账户
+                    {t("fundRiskLedgerPage.order.testAccount")}
                   </Badge>
                 )}
                 {isEdit && editing.source === "import" && (
-                  <Badge variant="secondary">历史导入</Badge>
+                  <Badge variant="secondary">{t(ROW_SOURCE_LABEL_KEYS.import)}</Badge>
                 )}
               </div>
               <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
-                <OrderFact label="客户 ID">{order.client_id ?? "—"}</OrderFact>
-                <OrderFact label="客户">{order.client_name ?? "—"}</OrderFact>
-                <OrderFact label="场地">{order.venue ?? "—"}</OrderFact>
-                <OrderFact label="方向">{labelOf(DIRECTION_LABELS, order.direction)}</OrderFact>
-                <OrderFact label="渠道">{order.channel}</OrderFact>
-                <OrderFact label="金额 CNY">
+                <OrderFact label={t("fundRiskLedgerPage.order.clientId")}>{order.client_id ?? "—"}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.client")}>{order.client_name ?? "—"}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.venue")}>{order.venue ?? "—"}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.direction")}>{labelOf(t, DIRECTION_LABEL_KEYS, order.direction)}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.channel")}>{order.channel}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.amount")}>
                   <span className="tabular-nums">{fmtAmount(order.amount_cny)}</span>
                 </OrderFact>
-                <OrderFact label="订单状态">{order.txn_status}</OrderFact>
-                <OrderFact label="创建时间 (HK)">{formatHk(order.txn_created_at)}</OrderFact>
-                <OrderFact label="处理时间 (HK)">{formatHk(order.txn_processed_at)}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.status")}>{order.txn_status}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.createdAt")}>{formatHk(order.txn_created_at)}</OrderFact>
+                <OrderFact label={t("fundRiskLedgerPage.order.processedAt")}>{formatHk(order.txn_processed_at)}</OrderFact>
               </dl>
               {isEdit && !editing.order_is_live && (
                 <p className="text-xs text-muted-foreground">
-                  CRM 从库暂时读不到，以上是登记时保存的订单快照，客户姓名不显示。
+                  {t("fundRiskLedgerPage.order.snapshotNote")}
                 </p>
               )}
               {warnings.length > 0 && (
                 <ul className={`${AMBER_NOTE} list-disc space-y-0.5 pl-6`}>
                   {warnings.map((w) => (
-                    <li key={w}>{labelOf(ORDER_WARNING_LABELS, w)}</li>
+                    <li key={w}>{labelOf(t, ORDER_WARNING_LABEL_KEYS, w)}</li>
                   ))}
                 </ul>
               )}
             </div>
           ) : (
             <p className="rounded-xl border bg-muted/40 px-4 py-3 text-sm text-muted-foreground md:px-6">
-              这是历史导入的记录，没有可核对的订单信息。
+              {t("fundRiskLedgerPage.order.noOrder")}
             </p>
           )}
 
@@ -847,7 +883,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             )}
           >
             <div className="space-y-3">
-              <Row label="登记日期" htmlFor="frl-date">
+              <Row label={t("fundRiskLedgerPage.form.reportedDate")} htmlFor="frl-date">
                 <Popover open={dateOpen} onOpenChange={setDateOpen}>
                   <PopoverTrigger asChild>
                     <button
@@ -858,7 +894,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                         !form.reportedDate && "text-muted-foreground",
                       )}
                     >
-                      <span className="tabular-nums">{form.reportedDate || "未填"}</span>
+                      <span className="tabular-nums">{form.reportedDate || t("fundRiskLedgerPage.form.notSet")}</span>
                       <CalendarIcon className={TRIGGER_ICON_CLASS} />
                     </button>
                   </PopoverTrigger>
@@ -876,61 +912,64 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                 </Popover>
               </Row>
 
-              <Row label="是否成功转账" htmlFor="frl-transfer">
+              <Row label={t("fundRiskLedgerPage.form.transferSucceeded")} htmlFor="frl-transfer">
                 <EnumSelect<TransferSucceeded>
                   id="frl-transfer"
                   value={form.transferSucceeded}
                   options={TRANSFER_SUCCEEDED}
-                  labels={TRANSFER_SUCCEEDED_LABELS}
+                  labelKeys={TRANSFER_SUCCEEDED_LABEL_KEYS}
+                  t={t}
                   onChange={(v) => patch({ transferSucceeded: v })}
                 />
               </Row>
 
-              <Row label="被封资料" htmlFor="frl-scope">
+              <Row label={t("fundRiskLedgerPage.form.frozenScope")} htmlFor="frl-scope">
                 <EnumSelect<FrozenScope>
                   id="frl-scope"
                   value={form.frozenScope}
                   options={FROZEN_SCOPES}
-                  labels={FROZEN_SCOPE_LABELS}
+                  labelKeys={FROZEN_SCOPE_LABEL_KEYS}
+                  t={t}
                   onChange={(v) => patch({ frozenScope: v })}
                 />
               </Row>
 
-              <Row label="封卡天数" htmlFor="frl-days">
+              <Row label={t("fundRiskLedgerPage.form.freezeDays")} htmlFor="frl-days">
                 <Input
                   id="frl-days"
                   inputMode="numeric"
                   autoComplete="off"
                   maxLength={5}
-                  placeholder="留空 = 尚不知"
+                  placeholder={t("fundRiskLedgerPage.form.freezeDaysPlaceholder")}
                   className={cn(CONTROL_CLASS, "tabular-nums")}
                   value={form.freezeDaysText}
                   onChange={(e) => patch({ freezeDaysText: e.target.value })}
                 />
               </Row>
 
-              <Row label="封卡备注" htmlFor="frl-freeze-note">
+              <Row label={t("fundRiskLedgerPage.form.freezeNote")} htmlFor="frl-freeze-note">
                 <Input
                   id="frl-freeze-note"
                   className={CONTROL_CLASS}
                   maxLength={FREEZE_NOTE_MAX}
-                  placeholder="天数说不清时写在这里，例如「半年后复核」"
+                  placeholder={t("fundRiskLedgerPage.form.freezeNotePlaceholder")}
                   value={form.freezeNote}
                   onChange={(e) => patch({ freezeNote: e.target.value })}
                 />
               </Row>
 
-              <Row label="封卡单位" htmlFor="frl-authority">
+              <Row label={t("fundRiskLedgerPage.form.authority")} htmlFor="frl-authority">
                 <EnumSelect<Authority>
                   id="frl-authority"
                   value={form.authority}
                   options={AUTHORITIES}
-                  labels={AUTHORITY_LABELS}
+                  labelKeys={AUTHORITY_LABEL_KEYS}
+                  t={t}
                   onChange={(v) => patch({ authority: v })}
                 />
               </Row>
 
-              <Row label="客户来源" htmlFor="frl-source">
+              <Row label={t("fundRiskLedgerPage.form.clientSource")} htmlFor="frl-source">
                 {/* Optional field: 「未填」 maps back to the empty value. */}
                 <Select
                   value={form.clientSource === "" ? NONE_VALUE : form.clientSource}
@@ -948,73 +987,75 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={NONE_VALUE}>未填</SelectItem>
+                    <SelectItem value={NONE_VALUE}>
+                      {t("fundRiskLedgerPage.form.notSet")}
+                    </SelectItem>
                     {CLIENT_SOURCES.map((v) => (
                       <SelectItem key={v} value={v}>
-                        {CLIENT_SOURCE_LABELS[v]}
+                        {t(CLIENT_SOURCE_LABEL_KEYS[v])}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </Row>
 
-              <Row label="客户银行省市" htmlFor="frl-client-province">
+              <Row label={t("fundRiskLedgerPage.form.clientBankRegion")} htmlFor="frl-client-province">
                 <div className="grid grid-cols-2 gap-2">
                   <ProvinceCombobox
                     id="frl-client-province"
-                    placeholder="省"
+                    placeholder={t("fundRiskLedgerPage.form.province")}
                     value={form.clientBankProvince}
                     onChange={(v) => patch({ clientBankProvince: v })}
                   />
                   <Input
-                    aria-label="客户银行所在市"
+                    aria-label={t("fundRiskLedgerPage.form.clientBankCityAria")}
                     className={CONTROL_CLASS}
                     maxLength={SHORT_MAX}
-                    placeholder="市"
+                    placeholder={t("fundRiskLedgerPage.form.city")}
                     value={form.clientBankCity}
                     onChange={(e) => patch({ clientBankCity: e.target.value })}
                   />
                 </div>
               </Row>
 
-              <Row label="交易员银行卡省市" htmlFor="frl-trader-province">
+              <Row label={t("fundRiskLedgerPage.form.traderBankRegion")} htmlFor="frl-trader-province">
                 <div className="grid grid-cols-2 gap-2">
                   <ProvinceCombobox
                     id="frl-trader-province"
-                    placeholder="省"
+                    placeholder={t("fundRiskLedgerPage.form.province")}
                     value={form.traderBankProvince}
                     onChange={(v) => patch({ traderBankProvince: v })}
                   />
                   <Input
-                    aria-label="交易员银行卡所在市"
+                    aria-label={t("fundRiskLedgerPage.form.traderBankCityAria")}
                     className={CONTROL_CLASS}
                     maxLength={SHORT_MAX}
-                    placeholder="市"
+                    placeholder={t("fundRiskLedgerPage.form.city")}
                     value={form.traderBankCity}
                     onChange={(e) => patch({ traderBankCity: e.target.value })}
                   />
                 </div>
               </Row>
 
-              <Row label="事件" htmlFor="frl-event">
+              <Row label={t("fundRiskLedgerPage.form.event")} htmlFor="frl-event">
                 <Textarea
                   id="frl-event"
                   rows={4}
                   className={TEXTAREA_CLASS}
                   maxLength={TEXT_MAX}
-                  placeholder="银行卡号和手机号保存时会自动遮盖；请不要填写客户姓名、出生日期和完整 IP。"
+                  placeholder={t("fundRiskLedgerPage.form.eventPlaceholder")}
                   value={form.eventText}
                   onChange={(e) => patch({ eventText: e.target.value })}
                 />
               </Row>
 
-              <Row label="查询结果" htmlFor="frl-result">
+              <Row label={t("fundRiskLedgerPage.form.result")} htmlFor="frl-result">
                 <Textarea
                   id="frl-result"
                   rows={4}
                   className={TEXTAREA_CLASS}
                   maxLength={TEXT_MAX}
-                  placeholder="暂时没有结果可以留空，之后再补。"
+                  placeholder={t("fundRiskLedgerPage.form.resultPlaceholder")}
                   value={form.resultText}
                   onChange={(e) => patch({ resultText: e.target.value })}
                 />
@@ -1029,9 +1070,11 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                   onCheckedChange={(c) => setApplyToGroup(c === true)}
                 />
                 <span>
-                  同步事件/查询结果/封卡单位到同组其他订单
+                  {t("fundRiskLedgerPage.form.applyToGroup")}
                   <span className="block text-xs text-muted-foreground">
-                    同组另外 {editing.group_size - 1} 笔订单的这三项会被本次内容覆盖。
+                    {t("fundRiskLedgerPage.form.applyToGroupHint", {
+                      count: editing.group_size - 1,
+                    })}
                   </span>
                 </span>
               </label>
@@ -1039,8 +1082,12 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
 
             {isEdit && (
               <p className="text-xs text-muted-foreground">
-                登记：{editing.created_by} · {formatHk(editing.created_at)}
-                ；最近修改：{editing.updated_by} · {formatHk(editing.updated_at)}
+                {t("fundRiskLedgerPage.form.meta", {
+                  createdBy: editing.created_by,
+                  createdAt: formatHk(editing.created_at),
+                  updatedBy: editing.updated_by,
+                  updatedAt: formatHk(editing.updated_at),
+                })}
               </p>
             )}
 
@@ -1050,19 +1097,21 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
                 onClick={() => void handleSave(false)}
                 disabled={saving || recordLoading}
               >
-                {saving ? "保存中..." : "保存"}
+                {saving
+                  ? t("fundRiskLedgerPage.entry.saving")
+                  : t("fundRiskLedgerPage.entry.save")}
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => void handleSave(true)}
                 disabled={saving || recordLoading}
-                title="保存后继续登记同一事件的下一笔订单，事件、查询结果和封卡单位会带过去"
+                title={t("fundRiskLedgerPage.entry.saveAndAddTitle")}
               >
-                保存并添加同事件订单
+                {t("fundRiskLedgerPage.entry.saveAndAdd")}
               </Button>
               <Button type="button" variant="ghost" onClick={requestCancel} disabled={saving}>
-                取消
+                {t("fundRiskLedgerPage.entry.cancel")}
               </Button>
             </div>
           </div>
