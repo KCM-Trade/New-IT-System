@@ -175,6 +175,12 @@ export function EntrySheet({ open, intent, onOpenChange, onChanged }: EntrySheet
 
   const [form, setForm] = useState<LedgerForm>(() => emptyForm(new Date()));
   const [baseline, setBaseline] = useState<LedgerForm>(form);
+  const formRef = useRef(form);
+  const baselineRef = useRef(baseline);
+  useEffect(() => {
+    formRef.current = form;
+    baselineRef.current = baseline;
+  }, [form, baseline]);
   const [applyToGroup, setApplyToGroup] = useState(false);
 
   const [saving, setSaving] = useState(false);
@@ -325,6 +331,12 @@ export function EntrySheet({ open, intent, onOpenChange, onChanged }: EntrySheet
       }
       const body = (await res.json()) as OrderPreviewResponse;
       if (body.existing_id !== null && body.existing_id !== undefined) {
+        if (group) {
+          // Adding to an incident group: an already-recorded order cannot be
+          // moved between groups, and switching to it would drop typed text.
+          setLookupError(`该订单已登记（记录 #${body.existing_id}），不能加入当前事件组。`);
+          return;
+        }
         // Already recorded: open that record for editing instead of failing.
         loadRecord(await fetchIncident(body.existing_id, signal), true);
         return;
@@ -334,8 +346,12 @@ export function EntrySheet({ open, intent, onOpenChange, onChanged }: EntrySheet
       // Seed 是否成功转账 from the order status. Applied to the baseline as
       // well, so a seeded default alone does not count as an unsaved edit.
       const seeded = defaultTransferSucceeded(body.order.txn_status);
-      setForm((f) => ({ ...f, transferSucceeded: seeded }));
-      setBaseline((b) => ({ ...b, transferSucceeded: seeded }));
+      // Only while the field is untouched: a second lookup (更换订单) must not
+      // overwrite an explicit choice.
+      if (formRef.current.transferSucceeded === baselineRef.current.transferSucceeded) {
+        setForm((f) => ({ ...f, transferSucceeded: seeded }));
+        setBaseline((b) => ({ ...b, transferSucceeded: seeded }));
+      }
     } catch (err) {
       if (isAbortError(err)) return;
       setLookupError(`查询订单失败：${err instanceof Error ? err.message : String(err)}`);

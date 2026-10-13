@@ -190,6 +190,14 @@ class _FakeCursor:
             row = db.rows.get(params[0])
             ok = row is not None and row["deleted_at"] is None
             self._result = [dict(row)] if ok else []
+        elif s.startswith(f"SELECT id FROM {TABLE} WHERE incident_group_id = (SELECT incident_group_id"):
+            # Group-wide lock taken first by apply_to_group (ordered by id).
+            assert s.endswith("ORDER BY id FOR UPDATE"), s
+            anchor = db.rows.get(params[0])
+            self._result = [] if anchor is None else [
+                {"id": r["id"]} for r in sorted(db.live(), key=lambda r: r["id"])
+                if r["incident_group_id"] == anchor["incident_group_id"]
+            ]
         elif s.startswith(f"SELECT * FROM {TABLE} WHERE incident_group_id = %s AND id <> %s"):
             self._result = [
                 dict(r) for r in sorted(db.live(), key=lambda r: r["id"])
@@ -650,3 +658,30 @@ def test_export_builds_a_workbook_with_chinese_headers():
     assert "客户姓名" not in rows[0]
     cd = export.content_disposition(export.filename(date(2026, 10, 13)))
     assert 'filename="' in cd and "filename*=UTF-8''" in cd and cd.count(".xlsx") == 2
+
+
+def test_mask_text_handles_separators_and_country_code():
+    from app.services.cs_ledger.text import mask_text, strip_control, strip_ip
+
+    assert mask_text("6222 0212 3456 7890") == "[卡号]"
+    assert mask_text("6222-0212-3456-7890") == "[卡号]"
+    assert mask_text("+8613812345678") == "[手机号]"
+    assert mask_text("138-1234-5678") == "[手机号]"
+    # A list of order ids is not a card number.
+    assert mask_text("订单 700450 700484 705497") == "订单 700450 700484 705497"
+    assert strip_control("a\x0bb\nc") == "ab\nc"
+    assert strip_ip("175.152.117.1 成都") == "成都"
+    assert strip_ip("240e:47e:50b0:f48f:d9aa:ac12:8246:5145 河南周口") == "河南周口"
+    assert strip_ip("广东") == "广东"
+
+
+def test_export_survives_control_characters_and_formula_text():
+    import io
+
+    import openpyxl
+
+    from app.services.cs_ledger.export import build_xlsx
+
+    data = build_xlsx([{"event_text": "=1+1 a\x0bb"}])
+    cells = [c for c in openpyxl.load_workbook(io.BytesIO(data)).active[2] if c.value]
+    assert [(c.value, c.data_type) for c in cells] == [("=1+1 ab", "s")]

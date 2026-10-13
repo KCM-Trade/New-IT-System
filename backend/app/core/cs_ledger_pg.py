@@ -100,8 +100,8 @@ DDL_STATEMENTS: tuple[str, ...] = (
         WHERE import_batch IS NOT NULL
     """,
     """
-    CREATE INDEX IF NOT EXISTS ix_fund_risk_reported
-        ON cs_ledger.fund_risk_incidents (reported_date DESC, id DESC) WHERE deleted_at IS NULL
+    CREATE INDEX IF NOT EXISTS ix_fund_risk_reported_nl
+        ON cs_ledger.fund_risk_incidents (reported_date DESC NULLS LAST, id DESC) WHERE deleted_at IS NULL
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_fund_risk_processed

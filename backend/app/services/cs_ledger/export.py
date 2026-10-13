@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -106,6 +107,18 @@ def _cell(key: str, row: Mapping[str, Any]) -> Any:
     return value
 
 
+def _safe(ws, value: Any) -> Any:
+    """Text cells: drop characters openpyxl rejects and never emit a formula."""
+    if not isinstance(value, str):
+        return value
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    if value.startswith("="):
+        cell = WriteOnlyCell(ws, value=value)
+        cell.data_type = "s"
+        return cell
+    return value
+
+
 def build_xlsx(rows: Iterable[Mapping[str, Any]]) -> bytes:
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("台账")
@@ -117,7 +130,7 @@ def build_xlsx(rows: Iterable[Mapping[str, Any]]) -> bytes:
         header.append(cell)
     ws.append(header)
     for row in rows:
-        ws.append([_cell(key, row) for key, _ in COLUMNS])
+        ws.append([_safe(ws, _cell(key, row)) for key, _ in COLUMNS])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

@@ -458,6 +458,12 @@ def apply_overrides(cands: list[dict], overrides: list[dict]) -> list[str]:
                 value: Any = ov["value"] or None
                 if value is not None and ov["field"] in ("event_text", "result_text", "freeze_note"):
                     value = mask_text(value)
+                try:
+                    # Coerce through the API model so "15" becomes 15, a date string a date.
+                    value = getattr(IncidentFields(**{ov["field"]: value}), ov["field"])
+                except Exception as exc:  # pydantic.ValidationError
+                    errors.append(f"{where}: bad value for '{ov['field']}': {exc}")
+                    break
                 c["fields"][ov["field"]] = value
                 c.setdefault("forced_fields", set()).add(ov["field"])
                 label += f":{ov['field']}"

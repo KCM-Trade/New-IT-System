@@ -42,7 +42,7 @@ from app.schemas.cs_fund_risk import (
 )
 from app.services.cs_ledger import order_lookup
 from app.services.cs_ledger.order_lookup import OrderLookup, ReplicaUnavailable
-from app.services.cs_ledger.text import mask_text
+from app.services.cs_ledger.text import mask_text, strip_control, strip_ip
 
 logger = logging.getLogger(__name__)
 
@@ -159,9 +159,11 @@ def normalize_fields(fields: IncidentFields) -> dict[str, Any]:
     for name in STAFF_FIELDS:
         value = getattr(fields, name)
         if isinstance(value, str):
-            value = value.strip() or None
+            value = strip_control(value).strip() or None
             if name in MASKED_FIELDS:
                 value = mask_text(value)
+            elif name == "ip_region":
+                value = strip_ip(value)
         out[name] = value
     return out
 
@@ -293,14 +295,22 @@ class ListFilters:
     q: Optional[str] = None                 # digits only: transaction id or client id
 
 
+# Date filters use the register date, falling back to the order date (HK day) so
+# imported rows without a register date stay reachable.
+EFFECTIVE_DATE = (
+    "COALESCE(t.reported_date, "
+    "(COALESCE(t.txn_processed_at, t.txn_created_at) AT TIME ZONE 'Asia/Hong_Kong')::date)"
+)
+
+
 def _where(filters: ListFilters) -> tuple[str, list[Any]]:
     clauses = ["t.deleted_at IS NULL"]
     params: list[Any] = []
     if filters.date_from is not None:
-        clauses.append("t.reported_date >= %s")
+        clauses.append(f"{EFFECTIVE_DATE} >= %s")
         params.append(filters.date_from)
     if filters.date_to is not None:
-        clauses.append("t.reported_date <= %s")
+        clauses.append(f"{EFFECTIVE_DATE} <= %s")
         params.append(filters.date_to)
     for column in ("channel", "direction", "authority", "frozen_scope"):
         value = getattr(filters, column)
@@ -491,6 +501,16 @@ def update_incident(incident_id: int, body: IncidentUpdate, actor: str) -> Updat
     changes: list[RowChange] = []
     with risk_cases_conn() as conn:
         with conn.cursor() as cur:
+            if body.apply_to_group:
+                # Two users saving different rows of one group would otherwise
+                # take the row locks in opposite order and deadlock.
+                cur.execute(
+                    f"SELECT id FROM {TABLE} WHERE incident_group_id = "
+                    f"(SELECT incident_group_id FROM {TABLE} WHERE id = %s) "
+                    "AND deleted_at IS NULL ORDER BY id FOR UPDATE",
+                    (incident_id,),
+                )
+                cur.fetchall()
             cur.execute(
                 f"SELECT * FROM {TABLE} WHERE id = %s AND deleted_at IS NULL FOR UPDATE",
                 (incident_id,),
