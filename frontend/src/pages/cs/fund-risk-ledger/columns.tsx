@@ -9,7 +9,7 @@
  */
 import { useMemo, type MutableRefObject } from "react";
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
-import { CopyPlus, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,6 @@ import { useLedgerT } from "./useLedgerT";
 /** Row actions, read through a ref so columnDefs stay referentially stable. */
 export interface LedgerRowActions {
   onEdit: (row: Incident) => void;
-  onAddToGroup: (row: Incident) => void;
   onDelete: (row: Incident) => void;
   /** Soft delete is manager-only; the button is not rendered otherwise. */
   canDelete: boolean;
@@ -286,16 +285,6 @@ export function useLedgerColumnDefs(
                 onClick={() => actions.onEdit(row)}
               >
                 <Pencil className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                title={t("fundRiskLedgerPage.grid.addToGroup")}
-                aria-label={t("fundRiskLedgerPage.grid.addToGroup")}
-                onClick={() => actions.onAddToGroup(row)}
-              >
-                <CopyPlus className="h-4 w-4" />
               </Button>
               {actions.canDelete && (
                 <Button

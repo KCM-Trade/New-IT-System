@@ -10,7 +10,6 @@ import {
   buildCreatePayload,
   buildFields,
   buildUpdatePayload,
-  carryOverForm,
   defaultTransferSucceeded,
   effectiveVenue,
   emptyForm,
@@ -316,41 +315,10 @@ describe("form -> payload", () => {
     expect(buildCreatePayload(emptyForm(TODAY, "approved"), 985343, null)).toMatchObject(
       nullHidden,
     );
-    // 保存并添加同事件订单: the next order must not inherit them either.
-    const prev = incidentToForm({
-      ...buildFields(emptyForm(TODAY)),
-      id_province: "四川",
-      venue_override: "SZ02",
-    });
-    expect(buildCreatePayload(carryOverForm(prev, TODAY), 985344, 12)).toMatchObject(
-      nullHidden,
-    );
   });
 });
 
-describe("same-incident carry over and dirty check", () => {
-  it("keeps the incident-level fields and resets the order-level ones", () => {
-    const prev = {
-      ...emptyForm(TODAY, "approved"),
-      reportedDate: "2026-10-01",
-      authority: "police_antifraud" as const,
-      eventText: "同一事件",
-      resultText: "已核实",
-      clientBankProvince: "广东",
-      frozenScope: "one_card" as const,
-      freezeDaysText: "7",
-    };
-    const next = carryOverForm(prev, TODAY, "fresh");
-    expect(next.reportedDate).toBe("2026-10-01");
-    expect(next.authority).toBe("police_antifraud");
-    expect(next.eventText).toBe("同一事件");
-    expect(next.resultText).toBe("已核实");
-    expect(next.clientBankProvince).toBe("");
-    expect(next.frozenScope).toBe("unknown");
-    expect(next.freezeDaysText).toBe("");
-    expect(next.transferSucceeded).toBe("no");
-  });
-
+describe("dirty check", () => {
   it("detects a changed field", () => {
     const base = emptyForm(TODAY);
     expect(isFormDirty({ ...base }, base)).toBe(false);
