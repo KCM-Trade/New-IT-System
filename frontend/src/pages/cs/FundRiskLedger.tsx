@@ -52,6 +52,7 @@ import {
   toYmd,
 } from "./fund-risk-ledger/helpers";
 import type { Incident, IncidentListResponse } from "./fund-risk-ledger/types";
+import { useLedgerT } from "./fund-risk-ledger/useLedgerT";
 
 // ── tabs (URL-controlled, same pattern as /login-ips) ────────────────────────
 const TABS = ["entry", "history"] as const;
@@ -73,6 +74,7 @@ interface HistoryTabProps {
 }
 
 function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
+  const t = useLedgerT();
   const { user, authEnabled } = useAuth();
   // Kill switch: with auth off the backend lets everyone through and
   // /auth/me reports no user, so a bare role check would hide the button.
@@ -153,18 +155,28 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
         { retries: 0 },
       );
       if (res.status === 403) {
-        toast.error("删除失败: 只有 manager 可以删除登记记录");
+        toast.error(t("fundRiskLedgerPage.history.deleteForbidden"));
         return;
       }
       if (!res.ok) {
-        toast.error(`删除失败: ${await readErrorDetail(res)}`);
+        toast.error(
+          t("fundRiskLedgerPage.history.deleteFailed", { detail: await readErrorDetail(res) }),
+        );
         return;
       }
-      toast.success(`已删除订单 ${deleting.transaction_id ?? `#${deleting.id}`} 的登记`);
+      toast.success(
+        t("fundRiskLedgerPage.history.deleted", {
+          order: deleting.transaction_id ?? `#${deleting.id}`,
+        }),
+      );
       setDeleting(null);
       refresh();
     } catch (err) {
-      toast.error(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(
+        t("fundRiskLedgerPage.history.deleteFailed", {
+          detail: err instanceof Error ? err.message : String(err),
+        }),
+      );
     } finally {
       setDeleteBusy(false);
     }
@@ -188,7 +200,9 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
         { timeoutMs: EXPORT_TIMEOUT_MS, retries: 0 },
       );
       if (!res.ok) {
-        toast.error(`导出失败: ${await readErrorDetail(res)}`);
+        toast.error(
+          t("fundRiskLedgerPage.history.exportFailed", { detail: await readErrorDetail(res) }),
+        );
         return;
       }
       const fileName = filenameFromDisposition(
@@ -206,7 +220,11 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
       URL.revokeObjectURL(url);
     } catch (err) {
       if (isAbortError(err)) return;
-      toast.error(`导出失败: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(
+        t("fundRiskLedgerPage.history.exportFailed", {
+          detail: err instanceof Error ? err.message : String(err),
+        }),
+      );
     } finally {
       if (exportCtrl.current === controller) {
         exportCtrl.current = null;
@@ -221,7 +239,7 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
         {!replicaLive && !loading && (
           <span className="text-xs text-amber-700 dark:text-amber-300 sm:mr-auto">
-            CRM 从库暂时读不到：订单信息显示的是登记时的快照，客户姓名不显示。
+            {t("fundRiskLedgerPage.history.replicaDown")}
           </span>
         )}
         <Button
@@ -231,7 +249,7 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
           disabled={loading}
         >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-          刷新
+          {t("fundRiskLedgerPage.history.refresh")}
         </Button>
         <Button
           variant="outline"
@@ -244,7 +262,9 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
           ) : (
             <Download className="h-4 w-4" />
           )}
-          {exporting ? "导出中…" : "导出"}
+          {exporting
+            ? t("fundRiskLedgerPage.history.exporting")
+            : t("fundRiskLedgerPage.history.export")}
         </Button>
         <ColumnVisibilityMenu
           persist={columnPersist}
@@ -255,9 +275,9 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
 
       {loadError && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          <span>加载台账失败：{loadError}</span>
+          <span>{t("fundRiskLedgerPage.history.loadFailed", { detail: loadError })}</span>
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            重试
+            {t("fundRiskLedgerPage.history.retry")}
           </Button>
         </div>
       )}
@@ -273,21 +293,26 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
       <Dialog open={deleting !== null} onOpenChange={(o) => !o && !deleteBusy && setDeleting(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>删除登记</DialogTitle>
+            <DialogTitle>{t("fundRiskLedgerPage.deleteDialog.title")}</DialogTitle>
             <DialogDescription>
-              确认删除订单 {deleting?.transaction_id ?? `#${deleting?.id}`}{" "}
-              的登记？删除后这条记录不再出现在台账和导出里，操作会留下审计记录。
+              {t("fundRiskLedgerPage.deleteDialog.body", {
+                order: deleting?.transaction_id ?? `#${deleting?.id}`,
+              })}
               {deleting && deleting.group_size > 1
-                ? ` 同一事件组的其他 ${deleting.group_size - 1} 笔订单不受影响。`
+                ? ` ${t("fundRiskLedgerPage.deleteDialog.groupNote", {
+                    count: deleting.group_size - 1,
+                  })}`
                 : ""}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleting(null)} disabled={deleteBusy}>
-              取消
+              {t("fundRiskLedgerPage.deleteDialog.cancel")}
             </Button>
             <Button variant="destructive" onClick={() => void handleDelete()} disabled={deleteBusy}>
-              {deleteBusy ? "删除中..." : "确认删除"}
+              {deleteBusy
+                ? t("fundRiskLedgerPage.deleteDialog.deleting")
+                : t("fundRiskLedgerPage.deleteDialog.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -297,6 +322,7 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
 }
 
 export default function FundRiskLedgerPage() {
+  const t = useLedgerT();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
   const activeTab: LedgerTabKey = isTab(tabParam) ? tabParam : DEFAULT_TAB;
@@ -393,11 +419,11 @@ export default function FundRiskLedgerPage() {
         <TabsList className="grid w-full max-w-xs grid-cols-2">
           <TabsTrigger value="entry" className="gap-1.5">
             <PenLine className="h-4 w-4" />
-            登记
+            {t("fundRiskLedgerPage.tabs.entry")}
           </TabsTrigger>
           <TabsTrigger value="history" className="gap-1.5">
             <History className="h-4 w-4" />
-            历史记录
+            {t("fundRiskLedgerPage.tabs.history")}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="entry" className="mt-4">
@@ -416,14 +442,14 @@ export default function FundRiskLedgerPage() {
       <Dialog open={pendingTab !== null} onOpenChange={(o) => !o && setPendingTab(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>放弃未保存的修改？</DialogTitle>
+            <DialogTitle>{t("fundRiskLedgerPage.discardDialog.title")}</DialogTitle>
             <DialogDescription>
-              登记表单里有还没保存的内容，切换页签后这些内容会丢失。
+              {t("fundRiskLedgerPage.discardDialog.tabBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPendingTab(null)}>
-              继续填写
+              {t("fundRiskLedgerPage.discardDialog.keep")}
             </Button>
             <Button
               variant="destructive"
@@ -433,7 +459,7 @@ export default function FundRiskLedgerPage() {
                 if (target) goTab(target);
               }}
             >
-              放弃修改
+              {t("fundRiskLedgerPage.discardDialog.discard")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,4 +1,10 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
+
+import { enUS } from "@/i18n/locales/en-US";
+import { zhCN } from "@/i18n/locales/zh-CN";
 
 import {
   buildCreatePayload,
@@ -8,11 +14,13 @@ import {
   defaultTransferSucceeded,
   effectiveVenue,
   emptyForm,
+  errorText,
   fmtFreeze,
   fmtRegion,
   fromYmd,
   incidentToForm,
   isFormDirty,
+  LedgerFormError,
   parseConflict,
   parseFreezeDays,
   parseTransactionId,
@@ -21,14 +29,15 @@ import {
   toYmd,
 } from "./helpers";
 import {
-  AUTHORITY_LABELS,
-  CLIENT_SOURCE_LABELS,
-  DIRECTION_LABELS,
-  FROZEN_SCOPE_LABELS,
+  AUTHORITY_LABEL_KEYS,
+  CLIENT_SOURCE_LABEL_KEYS,
+  DIRECTION_LABEL_KEYS,
+  FROZEN_SCOPE_LABEL_KEYS,
   labelOf,
-  ORDER_WARNING_LABELS,
-  ROW_SOURCE_LABELS,
-  TRANSFER_SUCCEEDED_LABELS,
+  makeTranslate,
+  ORDER_WARNING_LABEL_KEYS,
+  ROW_SOURCE_LABEL_KEYS,
+  TRANSFER_SUCCEEDED_LABEL_KEYS,
 } from "./labels";
 import { PROVINCES } from "./regions";
 import {
@@ -41,6 +50,10 @@ import {
   TRANSFER_SUCCEEDED,
   type IncidentFields,
 } from "./types";
+
+const zh = makeTranslate("zh-CN");
+const en = makeTranslate("en-US");
+const CJK = /[\u4e00-\u9fff]/;
 
 const TODAY = new Date(2026, 9, 13); // 2026-10-13 local
 
@@ -181,10 +194,26 @@ describe("form -> payload", () => {
     expect(fields.result_text).toBeNull();
   });
 
-  it("throws a readable message on invalid days", () => {
-    expect(() =>
-      buildFields({ ...emptyForm(TODAY), freezeDaysText: "x" }),
-    ).toThrow(/封卡天数/);
+  it("throws a translatable error on invalid days", () => {
+    let caught: unknown;
+    try {
+      buildFields({ ...emptyForm(TODAY), freezeDaysText: "x" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(LedgerFormError);
+    expect(errorText(caught, zh)).toBe("封卡天数必须是不小于 0 的整数");
+    expect(errorText(caught, en)).toMatch(/^Freeze duration/);
+    // Anything that is not a form error is shown as received.
+    expect(errorText(new Error("boom"), en)).toBe("boom");
+  });
+
+  it("fills the limit into the too-large message", () => {
+    const res = parseFreezeDays("36501");
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(zh(res.errorKey, res.errorParams)).toBe("封卡天数不能超过 36500");
+    expect(en(res.errorKey, res.errorParams)).toContain("36500");
   });
 
   it("builds create and update bodies", () => {
@@ -361,30 +390,43 @@ describe("display helpers", () => {
     expect(fmtRegion("广东", "深圳")).toBe("广东 深圳");
     expect(fmtRegion(null, "深圳")).toBe("深圳");
     expect(fmtRegion(null, null)).toBe("—");
-    expect(fmtFreeze(30, null)).toBe("30 天");
-    expect(fmtFreeze(0, "当天解封")).toBe("0 天（当天解封）");
-    expect(fmtFreeze(null, "半年")).toBe("半年");
-    expect(fmtFreeze(null, null)).toBe("尚不知");
+    expect(fmtFreeze(30, null, zh)).toBe("30 天");
+    expect(fmtFreeze(0, "当天解封", zh)).toBe("0 天（当天解封）");
+    expect(fmtFreeze(null, "半年", zh)).toBe("半年");
+    expect(fmtFreeze(null, null, zh)).toBe("尚不知");
+    // English wording; the staff note is data and stays as typed.
+    expect(fmtFreeze(30, null, en)).toBe("30 d");
+    expect(fmtFreeze(0, "当天解封", en)).toBe("0 d (当天解封)");
+    expect(fmtFreeze(null, "半年", en)).toBe("半年");
+    expect(fmtFreeze(null, null, en)).toBe("Not known yet");
   });
 });
 
 describe("enum label coverage", () => {
   const cases: [string, readonly string[], Record<string, string>][] = [
-    ["Direction", DIRECTIONS, DIRECTION_LABELS],
-    ["FrozenScope", FROZEN_SCOPES, FROZEN_SCOPE_LABELS],
-    ["Authority", AUTHORITIES, AUTHORITY_LABELS],
-    ["ClientSource", CLIENT_SOURCES, CLIENT_SOURCE_LABELS],
-    ["TransferSucceeded", TRANSFER_SUCCEEDED, TRANSFER_SUCCEEDED_LABELS],
-    ["RowSource", ROW_SOURCES, ROW_SOURCE_LABELS],
-    ["OrderWarning", ORDER_WARNINGS, ORDER_WARNING_LABELS],
+    ["Direction", DIRECTIONS, DIRECTION_LABEL_KEYS],
+    ["FrozenScope", FROZEN_SCOPES, FROZEN_SCOPE_LABEL_KEYS],
+    ["Authority", AUTHORITIES, AUTHORITY_LABEL_KEYS],
+    ["ClientSource", CLIENT_SOURCES, CLIENT_SOURCE_LABEL_KEYS],
+    ["TransferSucceeded", TRANSFER_SUCCEEDED, TRANSFER_SUCCEEDED_LABEL_KEYS],
+    ["RowSource", ROW_SOURCES, ROW_SOURCE_LABEL_KEYS],
+    ["OrderWarning", ORDER_WARNINGS, ORDER_WARNING_LABEL_KEYS],
   ];
 
-  it.each(cases)("%s: every contract value has a Chinese label", (_name, values, labels) => {
-    expect(Object.keys(labels).sort()).toEqual([...values].sort());
-    for (const v of values) {
-      expect(labels[v]).toMatch(/[一-鿿]/);
-    }
-  });
+  it.each(cases)(
+    "%s: every contract value has a label in both languages",
+    (_name, values, keys) => {
+      expect(Object.keys(keys).sort()).toEqual([...values].sort());
+      for (const v of values) {
+        // A key that does not resolve comes back as the key itself.
+        expect(zh(keys[v])).not.toBe(keys[v]);
+        expect(en(keys[v])).not.toBe(keys[v]);
+        expect(zh(keys[v])).toMatch(CJK);
+        expect(en(keys[v])).not.toMatch(CJK);
+        expect(en(keys[v]).trim()).not.toBe("");
+      }
+    },
+  );
 
   it("mirrors the contract's enum strings", () => {
     expect(DIRECTIONS).toEqual(["deposit", "withdrawal"]);
@@ -403,9 +445,10 @@ describe("enum label coverage", () => {
   });
 
   it("falls back to the raw value for an unknown enum string", () => {
-    expect(labelOf(AUTHORITY_LABELS, "bank")).toBe("银行");
-    expect(labelOf(AUTHORITY_LABELS, "court")).toBe("court");
-    expect(labelOf(AUTHORITY_LABELS, null)).toBe("—");
+    expect(labelOf(zh, AUTHORITY_LABEL_KEYS, "bank")).toBe("银行");
+    expect(labelOf(en, AUTHORITY_LABEL_KEYS, "bank")).toBe("Bank");
+    expect(labelOf(zh, AUTHORITY_LABEL_KEYS, "court")).toBe("court");
+    expect(labelOf(en, AUTHORITY_LABEL_KEYS, null)).toBe("—");
   });
 
   it("lists 34 distinct provinces", () => {
@@ -413,5 +456,47 @@ describe("enum label coverage", () => {
     expect(new Set(PROVINCES).size).toBe(34);
     expect(PROVINCES[0]).toBe("北京");
     expect(PROVINCES[33]).toBe("澳门");
+  });
+});
+
+describe("translations", () => {
+  it("inserts interpolated values verbatim", () => {
+    // Server error details and staff notes are free text: `$&` and a second
+    // `{placeholder}` inside a value must not be interpreted.
+    expect(zh("fundRiskLedgerPage.entry.saveFailed", { detail: "cost $& {order}" })).toBe(
+      "保存失败: cost $& {order}",
+    );
+    expect(en("fundRiskLedgerPage.grid.freezeDaysWithNote", { days: 3, note: "$1 {days}" })).toBe(
+      "3 d ($1 {days})",
+    );
+  });
+
+  it("every key the page references exists in both dictionaries", () => {
+    // t("typo.path") renders the path itself and throws nothing, so read the
+    // keys out of the page sources. All of them are full string literals.
+    const resolves = (dict: unknown, path: string): boolean => {
+      let v: unknown = dict;
+      for (const k of path.split(".")) {
+        if (!v || typeof v !== "object" || !(k in v)) return false;
+        v = (v as Record<string, unknown>)[k];
+      }
+      return typeof v === "string";
+    };
+    const sources = [
+      join(__dirname, "..", "FundRiskLedger.tsx"),
+      ...readdirSync(__dirname)
+        .filter((f) => /\.tsx?$/.test(f) && !f.endsWith(".test.ts"))
+        .map((f) => join(__dirname, f)),
+    ];
+    const keys = new Set<string>();
+    for (const file of sources) {
+      for (const m of readFileSync(file, "utf8").matchAll(/"(fundRiskLedgerPage\.[A-Za-z0-9_.]+)"/g)) {
+        keys.add(m[1]);
+      }
+    }
+    // A regex that matched nothing would make the assertions below vacuous.
+    expect(keys.size).toBeGreaterThan(100);
+    expect([...keys].filter((k) => !resolves(zhCN, k))).toEqual([]);
+    expect([...keys].filter((k) => !resolves(enUS, k))).toEqual([]);
   });
 });

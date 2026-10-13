@@ -3,6 +3,7 @@
  * serialisation, list query strings, and small parsers. No React and no
  * DOM in this file so vitest covers it without a browser environment.
  */
+import type { Translate, TranslateParams } from "./labels";
 import {
   FREEZE_DAYS_MAX,
   type Authority,
@@ -215,9 +216,26 @@ export function isFormDirty(current: LedgerForm, baseline: LedgerForm): boolean 
   );
 }
 
+/**
+ * Invalid form input. Carries a translation key instead of a sentence — this
+ * file has no language — and the caller renders it with the page translator.
+ * `message` is the key, so an untranslated log line still says what failed.
+ */
+export class LedgerFormError extends Error {
+  readonly key: string;
+  readonly params?: TranslateParams;
+
+  constructor(key: string, params?: TranslateParams) {
+    super(key);
+    this.name = "LedgerFormError";
+    this.key = key;
+    this.params = params;
+  }
+}
+
 export type FreezeDaysResult =
   | { ok: true; value: number | null }
-  | { ok: false; error: string };
+  | { ok: false; errorKey: string; errorParams?: TranslateParams };
 
 /**
  * 封卡天数: an empty box means not known yet (null); otherwise a whole number
@@ -227,11 +245,15 @@ export function parseFreezeDays(text: string): FreezeDaysResult {
   const t = text.trim();
   if (t === "") return { ok: true, value: null };
   if (!/^\d+$/.test(t)) {
-    return { ok: false, error: "封卡天数必须是不小于 0 的整数" };
+    return { ok: false, errorKey: "fundRiskLedgerPage.form.freezeDaysInvalid" };
   }
   const n = Number(t);
   if (n > FREEZE_DAYS_MAX) {
-    return { ok: false, error: `封卡天数不能超过 ${FREEZE_DAYS_MAX}` };
+    return {
+      ok: false,
+      errorKey: "fundRiskLedgerPage.form.freezeDaysTooLarge",
+      errorParams: { max: FREEZE_DAYS_MAX },
+    };
   }
   return { ok: true, value: n };
 }
@@ -241,12 +263,12 @@ function textOrNull(s: string): string | null {
   return t === "" ? null : t;
 }
 
-/** Form -> IncidentFields. Throws an Error with a user-facing message. */
+/** Form -> IncidentFields. Throws a LedgerFormError on invalid input. */
 export function buildFields(form: LedgerForm): IncidentFields {
   const days = parseFreezeDays(form.freezeDaysText);
-  if (!days.ok) throw new Error(days.error);
+  if (!days.ok) throw new LedgerFormError(days.errorKey, days.errorParams);
   if (form.reportedDate !== "" && !fromYmd(form.reportedDate)) {
-    throw new Error("登记日期格式不正确");
+    throw new LedgerFormError("fundRiskLedgerPage.form.reportedDateInvalid");
   }
   return {
     reported_date: form.reportedDate === "" ? null : form.reportedDate,
@@ -355,9 +377,18 @@ export function fmtRegion(
 export function fmtFreeze(
   days: number | null | undefined,
   note: string | null | undefined,
+  t: Translate,
 ): string {
   if (days !== null && days !== undefined) {
-    return note ? `${days} 天（${note}）` : `${days} 天`;
+    return note
+      ? t("fundRiskLedgerPage.grid.freezeDaysWithNote", { days, note })
+      : t("fundRiskLedgerPage.grid.freezeDaysValue", { days });
   }
-  return note ? note : "尚不知";
+  return note ? note : t("fundRiskLedgerPage.enums.frozenScope.unknown");
+}
+
+/** Text of a caught error: a form error is translated, anything else is shown as-is. */
+export function errorText(err: unknown, t: Translate): string {
+  if (err instanceof LedgerFormError) return t(err.key, err.params);
+  return err instanceof Error ? err.message : String(err);
 }

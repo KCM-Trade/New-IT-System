@@ -23,13 +23,14 @@ import {
   fmtRegion,
 } from "./helpers";
 import {
-  AUTHORITY_LABELS,
-  DIRECTION_LABELS,
-  FROZEN_SCOPE_LABELS,
+  AUTHORITY_LABEL_KEYS,
+  DIRECTION_LABEL_KEYS,
+  FROZEN_SCOPE_LABEL_KEYS,
   labelOf,
-  TRANSFER_SUCCEEDED_LABELS,
+  TRANSFER_SUCCEEDED_LABEL_KEYS,
 } from "./labels";
 import type { Incident } from "./types";
+import { useLedgerT } from "./useLedgerT";
 
 /** Row actions, read through a ref so columnDefs stay referentially stable. */
 export interface LedgerRowActions {
@@ -52,12 +53,16 @@ function renderLongText(text: string) {
 export function useLedgerColumnDefs(
   actionsRef: MutableRefObject<LedgerRowActions>,
 ): ColDef<Incident>[] {
-  // Deps stay empty: column visibility is persisted, so nothing here may vary
-  // by mode or by user (the manager-only delete button reads the ref).
+  // Column visibility is persisted, so nothing here may vary by mode or by
+  // user (the manager-only delete button reads the ref). The one dependency is
+  // the language: header text and label values follow it, every colId / field
+  // stays the same. LedgerGrid remounts the grid on a language change, so the
+  // new defs never re-apply their default width / pinning over a saved layout.
+  const t = useLedgerT();
   return useMemo<ColDef<Incident>[]>(
     () => [
       {
-        headerName: "事件组",
+        headerName: t("fundRiskLedgerPage.grid.group"),
         field: "incident_group_id",
         width: 90,
         filter: "agNumberColumnFilter",
@@ -70,7 +75,7 @@ export function useLedgerColumnDefs(
               {row.group_size > 1 && (
                 <span
                   className="ml-1 text-xs text-muted-foreground"
-                  title={`同一事件共 ${row.group_size} 笔订单`}
+                  title={t("fundRiskLedgerPage.grid.groupSizeTitle", { count: row.group_size })}
                 >
                   ×{row.group_size}
                 </span>
@@ -80,7 +85,7 @@ export function useLedgerColumnDefs(
         },
       },
       {
-        headerName: "订单号",
+        headerName: t("fundRiskLedgerPage.grid.transactionId"),
         field: "transaction_id",
         width: 130,
         cellRenderer: (p: ICellRendererParams<Incident>) => {
@@ -94,12 +99,12 @@ export function useLedgerColumnDefs(
                   variant="outline"
                   className="border-amber-400 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
                 >
-                  测试
+                  {t("fundRiskLedgerPage.grid.testBadge")}
                 </Badge>
               )}
               {row.source === "import" && (
                 <Badge variant="secondary" className="px-1 py-0 text-[10px]">
-                  导入
+                  {t("fundRiskLedgerPage.grid.importBadge")}
                 </Badge>
               )}
             </span>
@@ -107,7 +112,7 @@ export function useLedgerColumnDefs(
         },
       },
       {
-        headerName: "客户ID",
+        headerName: t("fundRiskLedgerPage.grid.clientId"),
         colId: "client_id",
         width: 100,
         valueGetter: (p) => p.data?.order?.client_id ?? null,
@@ -127,31 +132,31 @@ export function useLedgerColumnDefs(
         },
       },
       {
-        headerName: "客户",
+        headerName: t("fundRiskLedgerPage.grid.client"),
         colId: "client_name",
         width: 130,
         valueGetter: (p) => p.data?.order?.client_name ?? "—",
       },
       {
-        headerName: "场地",
+        headerName: t("fundRiskLedgerPage.grid.venue"),
         colId: "venue",
         width: 90,
         valueGetter: (p) => (p.data ? (effectiveVenue(p.data) ?? "—") : "—"),
       },
       {
-        headerName: "方向",
+        headerName: t("fundRiskLedgerPage.grid.direction"),
         colId: "direction",
         width: 80,
-        valueGetter: (p) => labelOf(DIRECTION_LABELS, p.data?.order?.direction),
+        valueGetter: (p) => labelOf(t, DIRECTION_LABEL_KEYS, p.data?.order?.direction),
       },
       {
-        headerName: "渠道",
+        headerName: t("fundRiskLedgerPage.grid.channel"),
         colId: "channel",
         width: 130,
         valueGetter: (p) => p.data?.order?.channel ?? "—",
       },
       {
-        headerName: "金额CNY",
+        headerName: t("fundRiskLedgerPage.grid.amount"),
         colId: "amount_cny",
         width: 120,
         headerClass: "ag-right-aligned-header",
@@ -161,13 +166,13 @@ export function useLedgerColumnDefs(
         valueFormatter: (p) => fmtAmount(p.value as number | null),
       },
       {
-        headerName: "订单状态",
+        headerName: t("fundRiskLedgerPage.grid.status"),
         colId: "txn_status",
         width: 100,
         valueGetter: (p) => p.data?.order?.txn_status ?? "—",
       },
       {
-        headerName: "处理时间 (HK)",
+        headerName: t("fundRiskLedgerPage.grid.processedAt"),
         colId: "txn_processed_at",
         width: 160,
         // Sorts on the ISO value, filters on the HK text shown in the cell.
@@ -176,54 +181,54 @@ export function useLedgerColumnDefs(
         filterValueGetter: (p) => formatHk(p.data?.order?.txn_processed_at),
       },
       {
-        headerName: "转账成功",
+        headerName: t("fundRiskLedgerPage.grid.transferSucceeded"),
         // colId = the former field name, so saved column state still matches.
         colId: "transfer_succeeded",
         width: 90,
-        valueGetter: (p) => labelOf(TRANSFER_SUCCEEDED_LABELS, p.data?.transfer_succeeded),
+        valueGetter: (p) => labelOf(t, TRANSFER_SUCCEEDED_LABEL_KEYS, p.data?.transfer_succeeded),
       },
       {
-        headerName: "被封资料",
+        headerName: t("fundRiskLedgerPage.grid.frozenScope"),
         // colId = the former field name, so saved column state still matches.
         colId: "frozen_scope",
         width: 100,
-        valueGetter: (p) => labelOf(FROZEN_SCOPE_LABELS, p.data?.frozen_scope),
+        valueGetter: (p) => labelOf(t, FROZEN_SCOPE_LABEL_KEYS, p.data?.frozen_scope),
       },
       {
-        headerName: "封卡天数",
+        headerName: t("fundRiskLedgerPage.grid.freezeDays"),
         colId: "freeze_days",
         width: 120,
-        valueGetter: (p) => fmtFreeze(p.data?.freeze_days, p.data?.freeze_note),
+        valueGetter: (p) => fmtFreeze(p.data?.freeze_days, p.data?.freeze_note, t),
       },
       {
-        headerName: "封卡单位",
+        headerName: t("fundRiskLedgerPage.grid.authority"),
         // colId = the former field name, so saved column state still matches.
         colId: "authority",
         width: 100,
-        valueGetter: (p) => labelOf(AUTHORITY_LABELS, p.data?.authority),
+        valueGetter: (p) => labelOf(t, AUTHORITY_LABEL_KEYS, p.data?.authority),
       },
       {
-        headerName: "客户银行省市",
+        headerName: t("fundRiskLedgerPage.grid.clientBankRegion"),
         colId: "client_bank_region",
         width: 130,
         valueGetter: (p) =>
           fmtRegion(p.data?.client_bank_province, p.data?.client_bank_city),
       },
       {
-        headerName: "交易员卡省市",
+        headerName: t("fundRiskLedgerPage.grid.traderBankRegion"),
         colId: "trader_bank_region",
         width: 130,
         valueGetter: (p) =>
           fmtRegion(p.data?.trader_bank_province, p.data?.trader_bank_city),
       },
       {
-        headerName: "登记日期",
+        headerName: t("fundRiskLedgerPage.grid.reportedDate"),
         field: "reported_date",
         width: 115,
         valueFormatter: (p) => (p.value as string | null) ?? "—",
       },
       {
-        headerName: "事件",
+        headerName: t("fundRiskLedgerPage.grid.event"),
         field: "event_text",
         width: 260,
         cellRenderer: (p: ICellRendererParams<Incident>) => {
@@ -232,7 +237,7 @@ export function useLedgerColumnDefs(
         },
       },
       {
-        headerName: "查询结果",
+        headerName: t("fundRiskLedgerPage.grid.result"),
         field: "result_text",
         width: 260,
         cellRenderer: (p: ICellRendererParams<Incident>) => {
@@ -240,24 +245,26 @@ export function useLedgerColumnDefs(
           if (text) return renderLongText(text);
           return (
             <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
-              待补
+              {t("fundRiskLedgerPage.grid.resultPending")}
             </span>
           );
         },
       },
-      { headerName: "登记人", field: "created_by", width: 150 },
+      { headerName: t("fundRiskLedgerPage.grid.createdBy"), field: "created_by", width: 150 },
       {
-        headerName: "更新时间 (HK)",
+        headerName: t("fundRiskLedgerPage.grid.updatedAt"),
         field: "updated_at",
         width: 160,
         valueFormatter: (p) => formatHk(p.value as string | null),
         filterValueGetter: (p) => formatHk(p.data?.updated_at),
         tooltipValueGetter: (p) =>
-          p.data ? `最后修改人：${p.data.updated_by}` : "",
+          p.data
+            ? t("fundRiskLedgerPage.grid.lastEditedBy", { user: p.data.updated_by })
+            : "",
       },
       {
         // Renderer-only column -> explicit stable colId (ui-pitfalls §2).
-        headerName: "操作",
+        headerName: t("fundRiskLedgerPage.grid.actions"),
         colId: "actions",
         width: 124,
         sortable: false,
@@ -274,8 +281,8 @@ export function useLedgerColumnDefs(
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0"
-                title="编辑"
-                aria-label="编辑"
+                title={t("fundRiskLedgerPage.grid.edit")}
+                aria-label={t("fundRiskLedgerPage.grid.edit")}
                 onClick={() => actions.onEdit(row)}
               >
                 <Pencil className="h-4 w-4" />
@@ -284,8 +291,8 @@ export function useLedgerColumnDefs(
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0"
-                title="同事件加单"
-                aria-label="同事件加单"
+                title={t("fundRiskLedgerPage.grid.addToGroup")}
+                aria-label={t("fundRiskLedgerPage.grid.addToGroup")}
                 onClick={() => actions.onAddToGroup(row)}
               >
                 <CopyPlus className="h-4 w-4" />
@@ -295,8 +302,8 @@ export function useLedgerColumnDefs(
                   variant="ghost"
                   size="sm"
                   className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                  title="删除"
-                  aria-label="删除"
+                  title={t("fundRiskLedgerPage.grid.delete")}
+                  aria-label={t("fundRiskLedgerPage.grid.delete")}
                   onClick={() => actions.onDelete(row)}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -307,6 +314,6 @@ export function useLedgerColumnDefs(
         },
       },
     ],
-    [actionsRef],
+    [actionsRef, t],
   );
 }

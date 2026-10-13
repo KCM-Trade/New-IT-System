@@ -8,12 +8,14 @@
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef } from "ag-grid-community";
 
+import { useI18n } from "@/components/i18n-provider";
 import { useTheme } from "@/components/theme-provider";
 import type { UseGridColumnPersistResult } from "@/hooks/useGridColumnPersist";
 import { cn } from "@/lib/utils";
 import { useGridThemeStyle } from "@/pages/cs/fund-flow/gridTheme";
 
 import type { Incident } from "./types";
+import { useLedgerT } from "./useLedgerT";
 
 // Global wrap so narrowed columns never silently clip (ag-grid-style §4b).
 const WRAP_CELL_STYLE = {
@@ -47,6 +49,8 @@ export function LedgerGrid({ rows, columnDefs, columnPersist, loading }: LedgerG
   const { theme } = useTheme();
   const isDarkMode = theme === "dark";
   const themeStyle = useGridThemeStyle(isDarkMode);
+  const { language } = useI18n();
+  const t = useLedgerT();
 
   return (
     <div
@@ -57,6 +61,13 @@ export function LedgerGrid({ rows, columnDefs, columnPersist, loading }: LedgerG
       style={themeStyle}
     >
       <AgGridReact<Incident>
+        // Remount on a language change. Updating columnDefs in place makes
+        // AG-Grid re-apply each def's width / pinned over what the user set
+        // (and the persist hook would then save that); a fresh grid instead
+        // restores the saved column state in onGridReady. Header filters are
+        // cleared by the remount, which is wanted: they match label text of
+        // the previous language.
+        key={language}
         rowData={rows}
         columnDefs={columnDefs}
         defaultColDef={DEFAULT_COL_DEF}
@@ -71,7 +82,7 @@ export function LedgerGrid({ rows, columnDefs, columnPersist, loading }: LedgerG
         paginationPageSizeSelector={PAGE_SIZE_OPTIONS}
         getRowId={(p) => String(p.data.id)}
         overlayNoRowsTemplate={
-          '<span style="padding:12px;color:var(--muted-foreground,#888)">还没有登记记录。</span>'
+          `<span style="padding:12px;color:var(--muted-foreground,#888)">${t("fundRiskLedgerPage.history.empty")}</span>`
         }
         // Compose persist events — never spread gridEventProps.
         onGridReady={(e) => columnPersist.gridEventProps.onGridReady(e)}
