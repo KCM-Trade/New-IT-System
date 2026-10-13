@@ -189,26 +189,6 @@ export function incidentToForm(row: IncidentFields): LedgerForm {
   };
 }
 
-/**
- * Form for the next order of the same incident: the event description, the
- * findings, the authority and the reported date describe the incident and are
- * carried over; everything that belongs to one order is reset (the hidden
- * pass-through fields included, so a new record is created with them null).
- */
-export function carryOverForm(
-  prev: LedgerForm,
-  today: Date,
-  txnStatus?: string | null,
-): LedgerForm {
-  return {
-    ...emptyForm(today, txnStatus),
-    reportedDate: prev.reportedDate || toYmd(today),
-    authority: prev.authority,
-    eventText: prev.eventText,
-    resultText: prev.resultText,
-  };
-}
-
 /** True when any field differs between the two form states. */
 export function isFormDirty(current: LedgerForm, baseline: LedgerForm): boolean {
   return (Object.keys(baseline) as (keyof LedgerForm)[]).some(

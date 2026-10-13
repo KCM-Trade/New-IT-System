@@ -69,7 +69,6 @@ import {
   API_BASE,
   buildCreatePayload,
   buildUpdatePayload,
-  carryOverForm,
   defaultTransferSucceeded,
   emptyForm,
   errorText,
@@ -117,10 +116,7 @@ import {
 import { useLedgerT } from "./useLedgerT";
 
 /** A record handed over from the history tab. */
-export type EntryIntent =
-  | { kind: "edit"; row: Incident }
-  /** New order joining the incident group of an existing row. */
-  | { kind: "add-to-group"; row: Incident };
+export type EntryIntent = { kind: "edit"; row: Incident };
 
 interface EntryFormProps {
   /** Set by the history tab's row actions; null when the tab opens on its own. */
@@ -130,9 +126,6 @@ interface EntryFormProps {
   /** Reports unsaved edits so the page can guard a tab change. */
   onDirtyChange: (dirty: boolean) => void;
 }
-
-/** The incident group a new order will join, for the header chip. */
-type GroupContext = { id: number; nextIndex: number };
 
 const AMBER_NOTE =
   "rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-300";
@@ -234,7 +227,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
   const [warnings, setWarnings] = useState<OrderWarning[]>([]);
   const [editing, setEditing] = useState<Incident | null>(null);
   const [alreadyRecorded, setAlreadyRecorded] = useState(false);
-  const [group, setGroup] = useState<GroupContext | null>(null);
   const [recordLoading, setRecordLoading] = useState(false);
 
   const [form, setForm] = useState<LedgerForm>(() => emptyForm(new Date()));
@@ -282,7 +274,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     setWarnings([]);
     setEditing(null);
     setAlreadyRecorded(false);
-    setGroup(null);
     setApplyToGroup(false);
     setSaving(false);
     setStaleConflict(false);
@@ -307,7 +298,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     setWarnings([]);
     setTxnInput(record.transaction_id === null ? "" : String(record.transaction_id));
     setAlreadyRecorded(recorded);
-    setGroup(null);
     setApplyToGroup(false);
     setStaleConflict(false);
     setDuplicateId(null);
@@ -342,27 +332,13 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
     })();
   };
 
-  /** Register another order into the incident group of `row`. */
-  const startAddToGroup = (row: Incident) => {
-    readCtrl.current?.abort();
-    clearContext();
-    setActive(true);
-    setGroup({
-      id: row.incident_group_id,
-      nextIndex: Math.max(row.group_size, 1) + 1,
-    });
-    resetForm(carryOverForm(incidentToForm(row), new Date()));
-    setFocusTick((t) => t + 1);
-  };
-
   // Pick up a record handed over from the history tab. No cleanup here: the
   // parent clears `intent` right away, and that re-run must not abort the
   // read this run started (the unmount effect above does the aborting).
   useEffect(() => {
     if (!intent) return;
     onIntentConsumed();
-    if (intent.kind === "edit") startEdit(intent.row);
-    else startAddToGroup(intent.row);
+    startEdit(intent.row);
     // Only a new intent object is a trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intent]);
@@ -442,14 +418,6 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       }
       const body = (await res.json()) as OrderPreviewResponse;
       if (body.existing_id !== null && body.existing_id !== undefined) {
-        if (group) {
-          // Adding to an incident group: an already-recorded order cannot be
-          // moved between groups, and switching to it would drop typed text.
-          setLookupError(
-            t("fundRiskLedgerPage.entry.recordedElsewhere", { id: body.existing_id }),
-          );
-          return;
-        }
         // Already recorded: open that record for editing instead of failing.
         loadRecord(await fetchIncident(body.existing_id, signal), true);
         return;
@@ -498,7 +466,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
   };
 
   // ── save ────────────────────────────────────────────────────────────────
-  const handleSave = async (addAnother: boolean) => {
+  const handleSave = async () => {
     if (saving) return;
     let res: Response;
     setDuplicateId(null);
@@ -519,7 +487,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
         if (!order) return;
         url = `${API_BASE}/incidents`;
         method = "POST";
-        body = buildCreatePayload(form, order.transaction_id, group?.id ?? null);
+        body = buildCreatePayload(form, order.transaction_id, null);
       }
       setSaving(true);
       // retries: 0 — an automatic retry after the server already wrote the
@@ -573,26 +541,7 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             }),
       );
       setRecentTick((t) => t + 1);
-      if (!addAnother) {
-        resetToIdle();
-        return;
-      }
-      // Next order of the same incident: keep the group and the
-      // incident-level fields as the server stored them, clear the order.
-      setEditing(null);
-      setOrder(null);
-      setWarnings([]);
-      setTxnInput("");
-      setLookupError(null);
-      setAlreadyRecorded(false);
-      setApplyToGroup(false);
-      setStaleConflict(false);
-        setGroup({
-        id: saved.incident_group_id,
-        nextIndex: Math.max(saved.group_size, 1) + 1,
-      });
-      resetForm(carryOverForm(incidentToForm(saved), new Date()));
-      setFocusTick((t) => t + 1);
+      resetToIdle();
     } catch (err) {
       toast.error(t("fundRiskLedgerPage.entry.saveFailed", { detail: errorText(err, t) }));
     } finally {
@@ -695,26 +644,19 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
       })
     : recordLoading
       ? t("fundRiskLedgerPage.entry.titleEditLoading")
-      : group
-        ? t("fundRiskLedgerPage.entry.titleAddToGroup")
-        : t("fundRiskLedgerPage.entry.titleCreate");
+      : t("fundRiskLedgerPage.entry.titleCreate");
   const reportedDate = fromYmd(form.reportedDate);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-base font-semibold">{title}</h2>
-        {(group || (isEdit && editing.group_size > 1)) && (
+        {isEdit && editing.group_size > 1 && (
           <Badge variant="secondary" className="tabular-nums">
-            {group
-              ? t("fundRiskLedgerPage.entry.groupNext", {
-                  id: group.id,
-                  index: group.nextIndex,
-                })
-              : t("fundRiskLedgerPage.entry.groupTotal", {
-                  id: editing!.incident_group_id,
-                  count: editing!.group_size,
-                })}
+            {t("fundRiskLedgerPage.entry.groupTotal", {
+              id: editing.incident_group_id,
+              count: editing.group_size,
+            })}
           </Badge>
         )}
       </div>
@@ -1094,21 +1036,12 @@ export function EntryForm({ intent, onIntentConsumed, onDirtyChange }: EntryForm
             <div className="flex flex-wrap items-center gap-2 border-t pt-4 [&>button]:min-w-[112px]">
               <Button
                 type="button"
-                onClick={() => void handleSave(false)}
+                onClick={() => void handleSave()}
                 disabled={saving || recordLoading}
               >
                 {saving
                   ? t("fundRiskLedgerPage.entry.saving")
                   : t("fundRiskLedgerPage.entry.save")}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void handleSave(true)}
-                disabled={saving || recordLoading}
-                title={t("fundRiskLedgerPage.entry.saveAndAddTitle")}
-              >
-                {t("fundRiskLedgerPage.entry.saveAndAdd")}
               </Button>
               <Button type="button" variant="ghost" onClick={requestCancel} disabled={saving}>
                 {t("fundRiskLedgerPage.entry.cancel")}

@@ -131,13 +131,11 @@ function HistoryTab({ onOpenInEntry }: HistoryTabProps) {
 
   const actionsRef = useRef<LedgerRowActions>({
     onEdit: () => {},
-    onAddToGroup: () => {},
     onDelete: () => {},
     canDelete: false,
   });
   actionsRef.current = {
     onEdit: (row) => onOpenInEntry({ kind: "edit", row }),
-    onAddToGroup: (row) => onOpenInEntry({ kind: "add-to-group", row }),
     onDelete: (row) => setDeleting(row),
     canDelete: isManager,
   };

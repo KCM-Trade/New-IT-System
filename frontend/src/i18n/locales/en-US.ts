@@ -618,16 +618,12 @@ export const enUS = {
       titleEdit: "Edit record · transaction {order}",
       titleEditNoTxn: "(no transaction ID, #{id})",
       titleEditLoading: "Edit record",
-      titleAddToGroup: "Add transaction to incident",
       titleCreate: "New record",
-      groupNext: "Incident group #{id} · transaction {index}",
       groupTotal: "Incident group #{id} · {count} transactions",
       invalidId: "Enter a valid transaction ID (digits only)",
       notFound: "Transaction ID {id} was not found in the CRM. Check it and try again.",
       notAllowed: "This transaction cannot be recorded: {detail}",
       lookupFailed: "Transaction lookup failed: {detail}",
-      recordedElsewhere:
-        "This transaction is already recorded (record #{id}) and cannot join the current incident group.",
       alreadyRecorded:
         "This transaction is already recorded (by {user} at {time}). Switched to editing that record.",
       stale:
@@ -643,9 +639,6 @@ export const enUS = {
       created: "Transaction {order} recorded (incident group #{group})",
       save: "Save",
       saving: "Saving...",
-      saveAndAdd: "Save and add transaction to incident",
-      saveAndAddTitle:
-        "Save, then register the next transaction of the same incident. The incident, inquiry result and freezing authority are carried over.",
     },
     order: {
       title: "Transaction details (read-only)",
@@ -731,7 +724,6 @@ export const enUS = {
       lastEditedBy: "Last edited by: {user}",
       actions: "Actions",
       edit: "Edit",
-      addToGroup: "Add transaction to incident",
       delete: "Delete",
     },
     enums: {
