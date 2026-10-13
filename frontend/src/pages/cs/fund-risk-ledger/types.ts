@@ -137,8 +137,3 @@ export interface IncidentConflict {
   existing_id: number | null;
   current_version: number | null;
 }
-
-/** Server-side sort whitelist of GET /incidents. */
-export const SORT_KEYS = ["reported_date", "txn_processed_at", "id"] as const;
-export type SortKey = (typeof SORT_KEYS)[number];
-export type SortOrder = "asc" | "desc";

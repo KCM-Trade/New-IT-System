@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreatePayload,
   buildFields,
-  buildFilterParams,
-  buildListQuery,
   buildUpdatePayload,
   carryOverForm,
   defaultTransferSucceeded,
@@ -15,18 +13,15 @@ import {
   fromYmd,
   incidentToForm,
   isFormDirty,
-  normalizeSearch,
   parseConflict,
   parseFreezeDays,
   parseTransactionId,
-  presetRange,
+  listQuery,
+  mergePagesById,
   toYmd,
-  VIEW_FILTER_DEFAULTS,
-  type LedgerQuery,
 } from "./helpers";
 import {
   AUTHORITY_LABELS,
-  CHANNEL_OPTIONS,
   CLIENT_SOURCE_LABELS,
   DIRECTION_LABELS,
   FROZEN_SCOPE_LABELS,
@@ -49,8 +44,6 @@ import {
 
 const TODAY = new Date(2026, 9, 13); // 2026-10-13 local
 
-const QUERY: LedgerQuery = { ...VIEW_FILTER_DEFAULTS, customRange: null, search: "" };
-
 describe("dates", () => {
   it("formats and parses local calendar dates", () => {
     expect(toYmd(TODAY)).toBe("2026-10-13");
@@ -58,70 +51,24 @@ describe("dates", () => {
     expect(fromYmd("2026/01/05")).toBeUndefined();
     expect(fromYmd(null)).toBeUndefined();
   });
-
-  it("turns a preset into an inclusive range ending today", () => {
-    expect(presetRange("7d", TODAY)).toEqual({ from: "2026-10-07", to: "2026-10-13" });
-    expect(presetRange("30d", TODAY)).toEqual({ from: "2026-09-14", to: "2026-10-13" });
-    expect(presetRange("all", TODAY)).toBeNull();
-  });
 });
 
-describe("filter -> query string", () => {
-  it("sends only the date range for the defaults", () => {
-    const p = buildFilterParams(QUERY, TODAY);
-    expect(p.toString()).toBe("date_from=2026-07-16&date_to=2026-10-13");
+describe("list requests", () => {
+  it("asks for one page, newest record first, with no filters", () => {
+    expect(listQuery(1, 500)).toBe("sort=id&order=desc&page=1&page_size=500");
+    expect(listQuery(3, 5)).toBe("sort=id&order=desc&page=3&page_size=5");
   });
 
-  it("omits every filter set to 'all'", () => {
-    const p = buildFilterParams({ ...QUERY, datePreset: "all" }, TODAY);
-    expect(p.toString()).toBe("");
-  });
-
-  it("sends each active filter under the contract's parameter name", () => {
-    const p = buildFilterParams(
-      {
-        datePreset: "7d",
-        channel: "Npay(支付宝)",
-        direction: "withdrawal",
-        authority: "police_antifraud",
-        pendingOnly: true,
-        customRange: null,
-        search: " 985343 ",
-      },
-      TODAY,
-    );
-    expect(p.get("date_from")).toBe("2026-10-07");
-    expect(p.get("date_to")).toBe("2026-10-13");
-    expect(p.get("channel")).toBe("Npay(支付宝)");
-    expect(p.get("direction")).toBe("withdrawal");
-    expect(p.get("authority")).toBe("police_antifraud");
-    expect(p.get("pending_result")).toBe("true");
-    expect(p.get("q")).toBe("985343");
-  });
-
-  it("lets an absolute range win over the preset", () => {
-    const p = buildFilterParams(
-      { ...QUERY, datePreset: "7d", customRange: { from: "2026-01-01", to: "2026-01-31" } },
-      TODAY,
-    );
-    expect(p.get("date_from")).toBe("2026-01-01");
-    expect(p.get("date_to")).toBe("2026-01-31");
-  });
-
-  it("drops a search text that cannot be an id", () => {
-    expect(buildFilterParams({ ...QUERY, search: "abc" }, TODAY).has("q")).toBe(false);
-    expect(normalizeSearch("abc")).toBeNull();
-    expect(normalizeSearch("  ")).toBe("");
-    expect(normalizeSearch("12345")).toBe("12345");
-  });
-
-  it("appends paging and sort for the list request", () => {
-    const qs = buildListQuery(
-      { ...QUERY, datePreset: "all" },
-      { page: 3, pageSize: 50, sort: "txn_processed_at", order: "asc" },
-      TODAY,
-    );
-    expect(qs).toBe("page=3&page_size=50&sort=txn_processed_at&order=asc");
+  it("merges pages and drops a row that arrives twice", () => {
+    const a = { id: 9, v: "first" };
+    const merged = mergePagesById([
+      [a, { id: 8, v: "x" }],
+      [{ id: 8, v: "shifted copy" }, { id: 7, v: "y" }],
+      [],
+    ]);
+    expect(merged.map((r) => r.id)).toEqual([9, 8, 7]);
+    expect(merged[1].v).toBe("x");
+    expect(mergePagesById([])).toEqual([]);
   });
 });
 
@@ -390,11 +337,10 @@ describe("enum label coverage", () => {
     expect(labelOf(AUTHORITY_LABELS, null)).toBe("—");
   });
 
-  it("lists 34 distinct provinces and 7 channels", () => {
+  it("lists 34 distinct provinces", () => {
     expect(PROVINCES).toHaveLength(34);
     expect(new Set(PROVINCES).size).toBe(34);
     expect(PROVINCES[0]).toBe("北京");
     expect(PROVINCES[33]).toBe("澳门");
-    expect(CHANNEL_OPTIONS).toHaveLength(7);
   });
 });

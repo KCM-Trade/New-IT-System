@@ -57,20 +57,6 @@ export const ORDER_WARNING_LABELS: Record<OrderWarning, string> = {
   amount_not_cny: "订单没有人民币面额，金额留空",
 };
 
-/**
- * Channel filter options. Same labels and order as CHANNEL_ORDER in
- * backend/app/services/cs_ledger/channels.py.
- */
-export const CHANNEL_OPTIONS: readonly string[] = [
-  "Mpay",
-  "Mpay Corporate",
-  "Chippay",
-  "Npay(支付宝)",
-  "Exlink",
-  "CC",
-  "Jpay",
-];
-
 /** Label lookup that never renders an empty cell for an unexpected value. */
 export function labelOf<K extends string>(
   map: Record<K, string>,

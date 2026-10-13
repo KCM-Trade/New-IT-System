@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cs/fund-risk")
 
-MAX_PAGE_SIZE = 200
+MAX_PAGE_SIZE = 500   # the history tab loads every row, one replica IN-chunk per page
 ANONYMOUS_ACTOR = "unknown"   # only reachable with AUTH_ENABLED=false
 
 _CONFLICT = {409: {"model": IncidentConflict, "description": "Duplicate transaction or stale version"}}

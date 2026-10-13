@@ -2,8 +2,10 @@
  * Column definitions of the ledger grid. Kept apart from LedgerGrid.tsx so
  * that file exports components only (fast refresh).
  *
- * Only the two columns in the backend sort whitelist are sortable — a header
- * arrow on any other column would be a sort that does not happen.
+ * The grid holds every row, so each column sorts and filters client-side from
+ * its header. Columns whose cell shows a label or a formatted time expose that
+ * same text to the filter (valueGetter / filterValueGetter) — what staff type
+ * is what they see.
  */
 import { useMemo, type MutableRefObject } from "react";
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
@@ -15,7 +17,6 @@ import { crmUserUrl } from "@/lib/crm-links";
 import { formatHk } from "@/lib/hk-time";
 
 import {
-  DEFAULT_ORDER,
   effectiveVenue,
   fmtAmount,
   fmtFreeze,
@@ -39,9 +40,6 @@ export interface LedgerRowActions {
   canDelete: boolean;
 }
 
-// Server-sorted column: the grid shows the arrow, the backend does the work.
-const SERVER_SORTED = { sortable: true, comparator: () => 0 } as const;
-
 /** Long free text: at most three lines in the cell, full text on hover. */
 function renderLongText(text: string) {
   return (
@@ -62,6 +60,7 @@ export function useLedgerColumnDefs(
         headerName: "事件组",
         field: "incident_group_id",
         width: 90,
+        filter: "agNumberColumnFilter",
         cellRenderer: (p: ICellRendererParams<Incident>) => {
           const row = p.data;
           if (!row) return null;
@@ -157,6 +156,7 @@ export function useLedgerColumnDefs(
         width: 120,
         headerClass: "ag-right-aligned-header",
         cellClass: "text-right tabular-nums",
+        filter: "agNumberColumnFilter",
         valueGetter: (p) => p.data?.order?.amount_cny ?? null,
         valueFormatter: (p) => fmtAmount(p.value as number | null),
       },
@@ -170,21 +170,24 @@ export function useLedgerColumnDefs(
         headerName: "处理时间 (HK)",
         colId: "txn_processed_at",
         width: 160,
-        ...SERVER_SORTED,
+        // Sorts on the ISO value, filters on the HK text shown in the cell.
         valueGetter: (p) => p.data?.order?.txn_processed_at ?? null,
         valueFormatter: (p) => formatHk(p.value as string | null),
+        filterValueGetter: (p) => formatHk(p.data?.order?.txn_processed_at),
       },
       {
         headerName: "转账成功",
-        field: "transfer_succeeded",
+        // colId = the former field name, so saved column state still matches.
+        colId: "transfer_succeeded",
         width: 90,
-        valueFormatter: (p) => labelOf(TRANSFER_SUCCEEDED_LABELS, p.value as string),
+        valueGetter: (p) => labelOf(TRANSFER_SUCCEEDED_LABELS, p.data?.transfer_succeeded),
       },
       {
         headerName: "被封资料",
-        field: "frozen_scope",
+        // colId = the former field name, so saved column state still matches.
+        colId: "frozen_scope",
         width: 100,
-        valueFormatter: (p) => labelOf(FROZEN_SCOPE_LABELS, p.value as string),
+        valueGetter: (p) => labelOf(FROZEN_SCOPE_LABELS, p.data?.frozen_scope),
       },
       {
         headerName: "封卡天数",
@@ -194,9 +197,10 @@ export function useLedgerColumnDefs(
       },
       {
         headerName: "封卡单位",
-        field: "authority",
+        // colId = the former field name, so saved column state still matches.
+        colId: "authority",
         width: 100,
-        valueFormatter: (p) => labelOf(AUTHORITY_LABELS, p.value as string),
+        valueGetter: (p) => labelOf(AUTHORITY_LABELS, p.data?.authority),
       },
       {
         headerName: "客户银行省市",
@@ -216,8 +220,6 @@ export function useLedgerColumnDefs(
         headerName: "登记日期",
         field: "reported_date",
         width: 115,
-        ...SERVER_SORTED,
-        initialSort: DEFAULT_ORDER,
         valueFormatter: (p) => (p.value as string | null) ?? "—",
       },
       {
@@ -249,6 +251,7 @@ export function useLedgerColumnDefs(
         field: "updated_at",
         width: 160,
         valueFormatter: (p) => formatHk(p.value as string | null),
+        filterValueGetter: (p) => formatHk(p.data?.updated_at),
         tooltipValueGetter: (p) =>
           p.data ? `最后修改人：${p.data.updated_by}` : "",
       },
@@ -257,6 +260,8 @@ export function useLedgerColumnDefs(
         headerName: "操作",
         colId: "actions",
         width: 124,
+        sortable: false,
+        filter: false,
         suppressMovable: true,
         pinned: "right",
         cellRenderer: (p: ICellRendererParams<Incident>) => {

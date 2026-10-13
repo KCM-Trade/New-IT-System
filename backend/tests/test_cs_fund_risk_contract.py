@@ -339,7 +339,7 @@ def test_list_parameters_response_shape_and_snapshot_fallback(world, monkeypatch
         "Jpay", "deposit", "bank", "one_card", True, "1279140")
     assert (seen["page"], seen["page_size"], seen["sort"], seen["order"]) == (2, 200, "txn_processed_at", "asc")
 
-    for bad in ({"page_size": 201}, {"page": 0}, {"sort": "amount_cny"}, {"order": "up"},
+    for bad in ({"page_size": 501}, {"page": 0}, {"sort": "amount_cny"}, {"order": "up"},
                 {"q": "abc"}, {"q": "1 OR 1=1"}, {"direction": "sideways"}, {"date_from": "yesterday"}):
         assert world.http.get(f"{PREFIX}/incidents", headers=h, params=bad).status_code == 422, bad
 

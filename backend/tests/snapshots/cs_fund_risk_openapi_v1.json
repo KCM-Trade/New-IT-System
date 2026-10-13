@@ -394,7 +394,7 @@
             "required": false,
             "schema": {
               "default": 50,
-              "maximum": 200,
+              "maximum": 500,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"

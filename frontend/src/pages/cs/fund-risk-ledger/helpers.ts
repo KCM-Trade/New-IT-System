@@ -1,6 +1,6 @@
 /**
  * Pure helpers for the fund risk-control ledger page: form <-> payload
- * serialisation, filter -> query string, and small parsers. No React and no
+ * serialisation, list query strings, and small parsers. No React and no
  * DOM in this file so vitest covers it without a browser environment.
  */
 import {
@@ -13,8 +13,6 @@ import {
   type IncidentCreate,
   type IncidentFields,
   type IncidentUpdate,
-  type SortKey,
-  type SortOrder,
   type TransferSucceeded,
 } from "./types";
 
@@ -44,121 +42,45 @@ export function fromYmd(ymd: string | null | undefined): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-// ── list filters ────────────────────────────────────────────────────────────
+// ── list requests ───────────────────────────────────────────────────────────
 
-export const DATE_PRESETS = ["7d", "30d", "90d", "all"] as const;
-export type DatePreset = (typeof DATE_PRESETS)[number];
-
-export const DATE_PRESET_LABELS: Record<DatePreset, string> = {
-  "7d": "近 7 天",
-  "30d": "近 30 天",
-  "90d": "近 90 天",
-  all: "全部日期",
-};
-
-const PRESET_DAYS: Record<DatePreset, number | null> = {
-  "7d": 7,
-  "30d": 30,
-  "90d": 90,
-  all: null,
-};
-
-export const ALL = "all";
+/** Server maximum of `page_size`; the history tab pulls the ledger in pages of this. */
+export const HISTORY_PAGE_SIZE = 500;
+/** Rows of the 「最近登记」 list under the entry input. */
+export const RECENT_LIMIT = 5;
+/** Stop paging after this many requests even if the server keeps reporting more. */
+export const MAX_HISTORY_PAGES = 200;
 
 /**
- * View preferences that are persisted (useFilterPersist). Must be a `type`
- * alias, not an interface: interfaces have no implicit index signature and
- * fail the `Record<string, unknown>` constraint of the persist hook.
+ * Query string (no leading "?") of one GET /incidents request, newest record
+ * first. No filters: the history grid filters client-side.
  */
-export type LedgerViewFilters = {
-  datePreset: DatePreset;
-  channel: string; // "all" | channel label
-  direction: string; // "all" | Direction
-  authority: string; // "all" | Authority
-  pendingOnly: boolean;
-};
-
-export const VIEW_FILTER_DEFAULTS: LedgerViewFilters = {
-  datePreset: "90d",
-  channel: ALL,
-  direction: ALL,
-  authority: ALL,
-  pendingOnly: false,
-};
-
-export type DateRange = { from: string; to: string };
-
-/** Everything that shapes one list / export request. */
-export type LedgerQuery = LedgerViewFilters & {
-  /** Absolute range; wins over `datePreset`. Never persisted. */
-  customRange: DateRange | null;
-  /** Committed search text (transaction id or client id). Never persisted. */
-  search: string;
-};
-
-/** Inclusive `reported_date` range of a preset; null = no date filter. */
-export function presetRange(preset: DatePreset, today: Date): DateRange | null {
-  const days = PRESET_DAYS[preset];
-  if (days === null || days === undefined) return null;
-  const from = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1));
-  return { from: toYmd(from), to: toYmd(today) };
-}
-
-/**
- * The backend matches `q` exactly against a transaction id or a client id, so
- * only digits are meaningful. Returns the digits, "" for an empty box, or
- * null when the text cannot be a valid id.
- */
-export function normalizeSearch(text: string): string | null {
-  const t = text.trim();
-  if (t === "") return "";
-  return /^\d{1,18}$/.test(t) ? t : null;
-}
-
-/** Filter params shared by GET /incidents and GET /export. */
-export function buildFilterParams(query: LedgerQuery, today: Date): URLSearchParams {
+export function listQuery(page: number, pageSize: number): string {
   const params = new URLSearchParams();
-  const range = query.customRange ?? presetRange(query.datePreset, today);
-  if (range) {
-    params.set("date_from", range.from);
-    params.set("date_to", range.to);
-  }
-  if (query.channel !== ALL) params.set("channel", query.channel);
-  if (query.direction !== ALL) params.set("direction", query.direction);
-  if (query.authority !== ALL) params.set("authority", query.authority);
-  if (query.pendingOnly) params.set("pending_result", "true");
-  const q = normalizeSearch(query.search);
-  if (q) params.set("q", q);
-  return params;
-}
-
-export type ListPaging = {
-  page: number;
-  pageSize: number;
-  sort: SortKey;
-  order: SortOrder;
-};
-
-export const DEFAULT_SORT: SortKey = "reported_date";
-export const DEFAULT_ORDER: SortOrder = "desc";
-export const PAGE_SIZE = 50;
-
-/** Query string (no leading "?") of one GET /incidents request. */
-export function buildListQuery(query: LedgerQuery, paging: ListPaging, today: Date): string {
-  const params = buildFilterParams(query, today);
-  params.set("page", String(paging.page));
-  params.set("page_size", String(paging.pageSize));
-  params.set("sort", paging.sort);
-  params.set("order", paging.order);
+  params.set("sort", "id");
+  params.set("order", "desc");
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
   return params.toString();
 }
 
-/** Grid colId -> server sort key. Columns not listed are not sortable. */
-export const COL_TO_SORT: Readonly<Record<string, SortKey>> = {
-  reported_date: "reported_date",
-  txn_processed_at: "txn_processed_at",
-  id: "id",
-};
+/**
+ * Concatenate pages, keeping the first occurrence of each id. A record created
+ * while the pages are being fetched shifts every later row by one, so the same
+ * row can arrive twice — and the grid needs unique row ids.
+ */
+export function mergePagesById<T extends { id: number }>(pages: readonly T[][]): T[] {
+  const seen = new Set<number>();
+  const out: T[] = [];
+  for (const page of pages) {
+    for (const row of page) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(row);
+    }
+  }
+  return out;
+}
 
 // ── transaction id input ────────────────────────────────────────────────────
 
