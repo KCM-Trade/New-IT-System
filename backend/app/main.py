@@ -61,6 +61,7 @@ from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.burst_open_scheduler import start_burst_scheduler, stop_burst_scheduler
 from app.core.fund_flow_monitor_db import init_fund_flow_monitor_db
 from app.core.risk_cases_pg import close_risk_cases_pools, init_risk_cases_pg
+from app.core.cs_ledger_pg import init_cs_ledger_pg
 from app.core.view_profiles_db import init_view_profiles_db
 from app.core.fund_flow_scheduler import (
     start_fund_flow_scheduler,
@@ -137,6 +138,9 @@ async def lifespan(app: FastAPI):
     # OPT-0047 risk-V2 case layer (cloud PG). Fail-open: returns False when
     # PG is down/unconfigured — the app must still serve everything else.
     init_risk_cases_pg()
+    # CS fund risk-control ledger tables (same database, schema cs_ledger).
+    # Same fail-open posture: returns False when PG is down.
+    init_cs_ledger_pg()
 
     # Auth layer (design P1). Log the posture at every boot: "is login on?" is
     # the first question during an incident, and AUTH_ENABLED is an env flag

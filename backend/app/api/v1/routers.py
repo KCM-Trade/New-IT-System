@@ -31,6 +31,7 @@ from .routes.view_profiles import router as view_profiles_router
 from .routes.ib_tree import router as ib_tree_router
 from .routes.alert_mail import router as alert_mail_router
 from .routes.risk_cases import router as risk_cases_router
+from .routes.cs_fund_risk import router as cs_fund_risk_router
 from .routes.hold_bucket import router as hold_bucket_router
 from .routes.window_scan import router as window_scan_router
 from .routes.ibid_lots import router as ibid_lots_router
@@ -108,6 +109,9 @@ api_v1_router.include_router(view_profiles_router, tags=["view-profiles"])
 api_v1_router.include_router(ib_tree_router, tags=["ib-tree"])
 api_v1_router.include_router(alert_mail_router, tags=["alert-mail"])
 api_v1_router.include_router(risk_cases_router, tags=["risk-cases"])
+# CS fund risk-control ledger: /api/v1/cs/fund-risk/* — `cs` module; every path
+# is OPEN in data_scope.ROUTE_SCOPE (docs/features/fund-risk-ledger.md).
+api_v1_router.include_router(cs_fund_risk_router, tags=["cs-fund-risk"])
 api_v1_router.include_router(hold_bucket_router, tags=["hold-bucket"])
 api_v1_router.include_router(window_scan_router, tags=["window-scan"])
 api_v1_router.include_router(ibid_lots_router, tags=["ibid-lots"])

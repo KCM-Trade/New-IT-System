@@ -59,6 +59,8 @@ export const GRID_STORAGE_KEYS = {
   LOGIN_IP_TRADE_PROFIT: "LOGIN_IP_TRADE_PROFIT_GRID_STATE_V1",
   // /exec-compensation · per-deal orders grid (OPT-0068).
   EXEC_COMP_ORDERS: "EXEC_COMP_ORDERS_GRID_STATE_V1",
+  // /cs/fund-risk-ledger · ledger list.
+  CS_FUND_RISK_LEDGER: "CS_FUND_RISK_LEDGER_GRID_STATE_V1",
 } as const;
 
 export type GridStorageKey =

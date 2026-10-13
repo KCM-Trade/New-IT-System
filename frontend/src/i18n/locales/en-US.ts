@@ -59,6 +59,7 @@ export const enUS = {
     ibTreeQuery: "IB Tree Lookup",
     // CS-side copy of the IB half of nav.ibData ("IB & Region Deposits").
     csIbDeposits: "IB Deposits & Withdrawals",
+    fundRiskLedger: "Fund Risk Ledger",
     riskAlertMail: "Alert Mail Center",
     riskMonitor: "Risk Rule Alerts",
     riskWatchlist: "Client Activity Monitor",
@@ -248,6 +249,7 @@ export const enUS = {
     ibFinancialMonitor: "IB Financial Monitor",
     ibTreeQuery: "IB Tree Lookup",
     csIbDeposits: "IB Deposits & Withdrawals",
+    fundRiskLedger: "Fund Risk Ledger",
     riskAlertMail: "Alert Mail Center",
     riskWatchlist: "Client Activity Monitor",
     aiAssistant: "AI Analyst (Preview)",

@@ -1,0 +1,1859 @@
+{
+  "paths": {
+    "/api/v1/cs/fund-risk/export": {
+      "get": {
+        "description": "Every filtered row as xlsx (stored snapshot values, no replica queries).",
+        "operationId": "export_incidents_api_v1_cs_fund_risk_export_get",
+        "parameters": [
+          {
+            "description": "reported_date >= (inclusive)",
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "reported_date >= (inclusive)",
+              "title": "Date From"
+            }
+          },
+          {
+            "description": "reported_date <= (inclusive)",
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "reported_date <= (inclusive)",
+              "title": "Date To"
+            }
+          },
+          {
+            "description": "Exact channel label",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact channel label",
+              "title": "Channel"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "deposit",
+                    "withdrawal"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
+            "name": "authority",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "bank",
+                    "police_antifraud",
+                    "alipay",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authority"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frozen_scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "one_card",
+                    "all_cards",
+                    "non_counter",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Frozen Scope"
+            }
+          },
+          {
+            "description": "true = result_text is empty",
+            "in": "query",
+            "name": "pending_result",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true = result_text is empty",
+              "title": "Pending Result"
+            }
+          },
+          {
+            "description": "Transaction id or client id (exact)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{1,18}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Transaction id or client id (exact)",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "reported_date",
+              "pattern": "^(reported_date|txn_processed_at|id)$",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "pattern": "^(asc|desc)$",
+              "title": "Order",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+            },
+            "description": "xlsx: 台账"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Export Incidents",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      }
+    },
+    "/api/v1/cs/fund-risk/incidents": {
+      "get": {
+        "operationId": "list_incidents_api_v1_cs_fund_risk_incidents_get",
+        "parameters": [
+          {
+            "description": "reported_date >= (inclusive)",
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "reported_date >= (inclusive)",
+              "title": "Date From"
+            }
+          },
+          {
+            "description": "reported_date <= (inclusive)",
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "reported_date <= (inclusive)",
+              "title": "Date To"
+            }
+          },
+          {
+            "description": "Exact channel label",
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact channel label",
+              "title": "Channel"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "deposit",
+                    "withdrawal"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
+            "name": "authority",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "bank",
+                    "police_antifraud",
+                    "alipay",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authority"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frozen_scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "one_card",
+                    "all_cards",
+                    "non_counter",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Frozen Scope"
+            }
+          },
+          {
+            "description": "true = result_text is empty",
+            "in": "query",
+            "name": "pending_result",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true = result_text is empty",
+              "title": "Pending Result"
+            }
+          },
+          {
+            "description": "Transaction id or client id (exact)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{1,18}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Transaction id or client id (exact)",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "reported_date",
+              "pattern": "^(reported_date|txn_processed_at|id)$",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "pattern": "^(asc|desc)$",
+              "title": "Order",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "List Incidents",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      },
+      "post": {
+        "description": "Record one order. The order fields are re-read server-side.",
+        "operationId": "create_incident_api_v1_cs_fund_risk_incidents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentConflict"
+                }
+              }
+            },
+            "description": "Duplicate transaction or stale version"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Create Incident",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      }
+    },
+    "/api/v1/cs/fund-risk/incidents/{incident_id}": {
+      "delete": {
+        "description": "Soft-delete one row (manager only).",
+        "operationId": "delete_incident_api_v1_cs_fund_risk_incidents__incident_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Incident Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "Manager role required"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Delete Incident",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      },
+      "get": {
+        "operationId": "get_incident_api_v1_cs_fund_risk_incidents__incident_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Incident Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Get Incident",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      },
+      "put": {
+        "description": "Replace the staff-entered fields. A request that changes nothing is a 200 no-op.",
+        "operationId": "update_incident_api_v1_cs_fund_risk_incidents__incident_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Incident Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentConflict"
+                }
+              }
+            },
+            "description": "Duplicate transaction or stale version"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Update Incident",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      }
+    },
+    "/api/v1/cs/fund-risk/order/{transaction_id}": {
+      "get": {
+        "description": "Read one CRM order for staff to check before recording it.",
+        "operationId": "preview_order_api_v1_cs_fund_risk_order__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "title": "Transaction Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Ledger database or MySQL replica unavailable"
+          }
+        },
+        "summary": "Preview Order",
+        "tags": [
+          "cs-fund-risk"
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "HTTPValidationError": {
+      "properties": {
+        "detail": {
+          "items": {
+            "$ref": "#/components/schemas/ValidationError"
+          },
+          "title": "Detail",
+          "type": "array"
+        }
+      },
+      "title": "HTTPValidationError",
+      "type": "object"
+    },
+    "Incident": {
+      "properties": {
+        "account_type": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Type"
+        },
+        "authority": {
+          "default": "unknown",
+          "enum": [
+            "bank",
+            "police_antifraud",
+            "alipay",
+            "unknown"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "client_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank City"
+        },
+        "client_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank Province"
+        },
+        "client_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "online",
+                "offline"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Source"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "created_by": {
+          "title": "Created By",
+          "type": "string"
+        },
+        "event_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Text"
+        },
+        "freeze_days": {
+          "anyOf": [
+            {
+              "maximum": 36500.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Days"
+        },
+        "freeze_note": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Note"
+        },
+        "frozen_scope": {
+          "default": "unknown",
+          "enum": [
+            "none",
+            "one_card",
+            "all_cards",
+            "non_counter",
+            "unknown"
+          ],
+          "title": "Frozen Scope",
+          "type": "string"
+        },
+        "group_size": {
+          "default": 1,
+          "title": "Group Size",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "id_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id City"
+        },
+        "id_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id Province"
+        },
+        "incident_group_id": {
+          "title": "Incident Group Id",
+          "type": "integer"
+        },
+        "ip_region": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ip Region"
+        },
+        "order": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/OrderSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order_is_live": {
+          "default": false,
+          "title": "Order Is Live",
+          "type": "boolean"
+        },
+        "pwa_domain": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pwa Domain"
+        },
+        "reported_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reported Date"
+        },
+        "result_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Result Text"
+        },
+        "source": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "import"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "trader_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank City"
+        },
+        "trader_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank Province"
+        },
+        "transaction_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Transaction Id"
+        },
+        "transfer_succeeded": {
+          "default": "unknown",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "title": "Transfer Succeeded",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        },
+        "updated_by": {
+          "title": "Updated By",
+          "type": "string"
+        },
+        "venue_override": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Venue Override"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "incident_group_id",
+        "version",
+        "created_by",
+        "created_at",
+        "updated_by",
+        "updated_at"
+      ],
+      "title": "Incident",
+      "type": "object"
+    },
+    "IncidentConflict": {
+      "description": "Body of a 409: duplicate transaction id or stale version.",
+      "properties": {
+        "current_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Current Version"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "existing_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Existing Id"
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "title": "IncidentConflict",
+      "type": "object"
+    },
+    "IncidentCreate": {
+      "properties": {
+        "account_type": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Type"
+        },
+        "authority": {
+          "default": "unknown",
+          "enum": [
+            "bank",
+            "police_antifraud",
+            "alipay",
+            "unknown"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "client_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank City"
+        },
+        "client_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank Province"
+        },
+        "client_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "online",
+                "offline"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Source"
+        },
+        "event_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Text"
+        },
+        "freeze_days": {
+          "anyOf": [
+            {
+              "maximum": 36500.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Days"
+        },
+        "freeze_note": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Note"
+        },
+        "frozen_scope": {
+          "default": "unknown",
+          "enum": [
+            "none",
+            "one_card",
+            "all_cards",
+            "non_counter",
+            "unknown"
+          ],
+          "title": "Frozen Scope",
+          "type": "string"
+        },
+        "id_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id City"
+        },
+        "id_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id Province"
+        },
+        "incident_group_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Incident Group Id"
+        },
+        "ip_region": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ip Region"
+        },
+        "pwa_domain": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pwa Domain"
+        },
+        "reported_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reported Date"
+        },
+        "result_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Result Text"
+        },
+        "trader_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank City"
+        },
+        "trader_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank Province"
+        },
+        "transaction_id": {
+          "exclusiveMinimum": 0.0,
+          "title": "Transaction Id",
+          "type": "integer"
+        },
+        "transfer_succeeded": {
+          "default": "unknown",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "title": "Transfer Succeeded",
+          "type": "string"
+        },
+        "venue_override": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Venue Override"
+        }
+      },
+      "required": [
+        "transaction_id"
+      ],
+      "title": "IncidentCreate",
+      "type": "object"
+    },
+    "IncidentListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/components/schemas/Incident"
+          },
+          "title": "Data",
+          "type": "array"
+        },
+        "page": {
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_size": {
+          "title": "Page Size",
+          "type": "integer"
+        },
+        "statistics": {
+          "$ref": "#/components/schemas/IncidentStatistics"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        },
+        "total_pages": {
+          "title": "Total Pages",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "data",
+        "total",
+        "page",
+        "page_size",
+        "total_pages",
+        "statistics"
+      ],
+      "title": "IncidentListResponse",
+      "type": "object"
+    },
+    "IncidentStatistics": {
+      "properties": {
+        "query_time_ms": {
+          "title": "Query Time Ms",
+          "type": "integer"
+        },
+        "replica_live": {
+          "title": "Replica Live",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query_time_ms",
+        "replica_live"
+      ],
+      "title": "IncidentStatistics",
+      "type": "object"
+    },
+    "IncidentUpdate": {
+      "properties": {
+        "account_type": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Type"
+        },
+        "apply_to_group": {
+          "default": false,
+          "title": "Apply To Group",
+          "type": "boolean"
+        },
+        "authority": {
+          "default": "unknown",
+          "enum": [
+            "bank",
+            "police_antifraud",
+            "alipay",
+            "unknown"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "client_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank City"
+        },
+        "client_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Bank Province"
+        },
+        "client_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "online",
+                "offline"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Source"
+        },
+        "event_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Text"
+        },
+        "freeze_days": {
+          "anyOf": [
+            {
+              "maximum": 36500.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Days"
+        },
+        "freeze_note": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Freeze Note"
+        },
+        "frozen_scope": {
+          "default": "unknown",
+          "enum": [
+            "none",
+            "one_card",
+            "all_cards",
+            "non_counter",
+            "unknown"
+          ],
+          "title": "Frozen Scope",
+          "type": "string"
+        },
+        "id_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id City"
+        },
+        "id_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id Province"
+        },
+        "ip_region": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ip Region"
+        },
+        "pwa_domain": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pwa Domain"
+        },
+        "reported_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reported Date"
+        },
+        "result_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Result Text"
+        },
+        "trader_bank_city": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank City"
+        },
+        "trader_bank_province": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trader Bank Province"
+        },
+        "transfer_succeeded": {
+          "default": "unknown",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "title": "Transfer Succeeded",
+          "type": "string"
+        },
+        "venue_override": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Venue Override"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "title": "IncidentUpdate",
+      "type": "object"
+    },
+    "OrderPreviewResponse": {
+      "properties": {
+        "existing_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Existing Id"
+        },
+        "order": {
+          "$ref": "#/components/schemas/OrderSnapshot"
+        },
+        "warnings": {
+          "items": {
+            "enum": [
+              "psp_unmapped",
+              "non_cn_psp",
+              "test_account",
+              "not_approved",
+              "amount_not_cny"
+            ],
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "order"
+      ],
+      "title": "OrderPreviewResponse",
+      "type": "object"
+    },
+    "OrderSnapshot": {
+      "description": "Order facts derived from fxbackoffice; never typed by staff.",
+      "properties": {
+        "amount_cny": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Amount Cny"
+        },
+        "channel": {
+          "title": "Channel",
+          "type": "string"
+        },
+        "client_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Id"
+        },
+        "client_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Name"
+        },
+        "direction": {
+          "enum": [
+            "deposit",
+            "withdrawal"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "is_test_account": {
+          "default": false,
+          "title": "Is Test Account",
+          "type": "boolean"
+        },
+        "login_sid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Login Sid"
+        },
+        "psp_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Psp Id"
+        },
+        "psp_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Psp Name"
+        },
+        "transaction_id": {
+          "title": "Transaction Id",
+          "type": "integer"
+        },
+        "txn_created_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Txn Created At"
+        },
+        "txn_processed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Txn Processed At"
+        },
+        "txn_status": {
+          "title": "Txn Status",
+          "type": "string"
+        },
+        "txn_type": {
+          "title": "Txn Type",
+          "type": "string"
+        },
+        "venue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Venue"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "direction",
+        "txn_type",
+        "channel",
+        "txn_status"
+      ],
+      "title": "OrderSnapshot",
+      "type": "object"
+    },
+    "ValidationError": {
+      "properties": {
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Location",
+          "type": "array"
+        },
+        "msg": {
+          "title": "Message",
+          "type": "string"
+        },
+        "type": {
+          "title": "Error Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "ValidationError",
+      "type": "object"
+    }
+  }
+}

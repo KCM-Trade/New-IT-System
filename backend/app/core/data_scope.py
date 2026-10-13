@@ -823,6 +823,16 @@ ROUTE_SCOPE: dict[str, str] = {
     # authorized, per the user's 2026-08-14 decision), unchanged here.
     "/cs/fund-flow/config": OPEN,
 
+    # ── /cs/fund-risk — ALL OPEN, by an explicit decision (2026-10-13) ───────
+    # The fund risk-control ledger (docs/features/fund-risk-ledger.md §2). The
+    # user decided on 2026-10-13 that NO country isolation is applied here:
+    # everyone holding the `cs` module can read and edit every row. This is a
+    # decision that was made, not routes nobody classified.
+    "/cs/fund-risk/order/{transaction_id}": OPEN,
+    "/cs/fund-risk/incidents": OPEN,
+    "/cs/fund-risk/incidents/{incident_id}": OPEN,
+    "/cs/fund-risk/export": OPEN,
+
     # ── /ib-tree ─────────────────────────────────────────────────────────────
     # LOOKUP: one client id in the path. The response is that client's UPLINE
     # chain (not downline — /ibid-lots and /ib-data are the downline ones), so
