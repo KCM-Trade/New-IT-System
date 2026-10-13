@@ -41,6 +41,7 @@ const routeToKeyMap: Record<string, string> = {
   "/cfg/view-profiles": "pages.viewProfiles",
   "/cs/ib-tree": "pages.ibTreeQuery",
   "/cs/ib-deposits": "pages.csIbDeposits",
+  "/cs/fund-risk-ledger": "pages.fundRiskLedger",
 }
 
 export function SiteHeader() {

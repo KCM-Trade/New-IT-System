@@ -59,6 +59,7 @@ export const zhCN = {
     // CS 侧的 IB 出入金查询（/cs/ib-deposits）——与 Data Query 的
     // nav.ibData（IB / 地区出入金）是同一张 IB 表，只是不带地区汇总那半。
     csIbDeposits: "IB 出入金查询",
+    fundRiskLedger: "出入金风控台账",
     riskAlertMail: "告警邮件中心",
     // These three risk pages keep English labels in both locales — the Chinese
     // names were too similar to tell apart at a glance (user decision 2026-08-05).
@@ -259,6 +260,7 @@ export const zhCN = {
     ibFinancialMonitor: "IB 资金监控",
     ibTreeQuery: "IB Tree查询",
     csIbDeposits: "IB 出入金查询",
+    fundRiskLedger: "出入金风控台账",
     riskAlertMail: "告警邮件中心",
     riskWatchlist: "Client Activity Monitor", // English in both locales — see nav block
     aiAssistant: "AI 分析助手（Preview）",

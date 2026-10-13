@@ -105,6 +105,9 @@ export const PAGE_POLICIES: Record<string, PagePolicy> = {
   // The IB half of /warehouse/ib-data, copied here for CS. Its two endpoints
   // are an any-of carve-out server-side ({cs, data}) — see MODULE_MAP.
   "/cs/ib-deposits": "cs",
+  // Fund risk-control ledger (出入金风控台账). No country scoping by decision
+  // (docs/features/fund-risk-ledger.md §2): every `cs` holder sees all rows.
+  "/cs/fund-risk-ledger": "cs",
 
   // ── data ───────────────────────────────────────────────────────────────────
   "/hold-bucket-report": "data",

@@ -69,6 +69,8 @@ export const UI_STATE_KEYS: readonly string[] = [
   "WINDOW_SCAN_ACTIVE_TAB_V1",
   // Login IPs: which of the (now URL-controlled) tabs the page opens on.
   "LOGIN_IP_ACTIVE_TAB_V1",
+  // Fund risk ledger: which tab the page opens on (entry / history).
+  "CS_FUND_RISK_LEDGER_ACTIVE_TAB_V1",
 ];
 
 /**

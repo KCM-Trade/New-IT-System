@@ -53,6 +53,8 @@ const FundFlowMonitorPage = lazyWithRetry(() => import("@/pages/cs/FundFlowMonit
 const AiAssistantPage = lazyWithRetry(() => import("@/pages/AiAssistant"))
 const IBTreeQueryPage = lazyWithRetry(() => import("@/pages/cs/IBTreeQuery"))
 const CsIbDepositsPage = lazyWithRetry(() => import("@/pages/cs/IbDeposits"))
+// Fund risk-control ledger (出入金风控台账), CS Department.
+const FundRiskLedgerPage = lazyWithRetry(() => import("@/pages/cs/FundRiskLedger"))
 const SettingsPage = lazyWithRetry(() => import("@/pages/Settings"))
 const SearchPage = lazyWithRetry(() => import("@/pages/Search"))
 const ViewProfilesPage = lazyWithRetry(() => import("@/pages/ViewProfiles"))
@@ -146,6 +148,7 @@ function App() {
               <Route path="cs/ib-tree" element={<IBTreeQueryPage />} />
               <Route path="ai/assistant" element={<AiAssistantPage />} />
               <Route path="cs/ib-deposits" element={<CsIbDepositsPage />} />
+              <Route path="cs/fund-risk-ledger" element={<FundRiskLedgerPage />} />
               {/* test page removed */}
               <Route path="settings" element={<SettingsPage />} />
               <Route path="search" element={<SearchPage />} />
