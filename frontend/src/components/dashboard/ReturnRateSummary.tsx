@@ -44,8 +44,8 @@ function formatPercent(value: number | null | undefined): string {
 function getProfitColor(value: number | null | undefined): string {
   if (value === null || value === undefined || value === 0) return "";
   return value > 0
-    ? "text-green-600 dark:text-green-400"
-    : "text-red-600 dark:text-red-400";
+    ? "text-profit"
+    : "text-loss";
 }
 
 const TOGGLE_ITEM_CLASS =
@@ -301,7 +301,7 @@ export default function ReturnRateSummary() {
           )}
 
           {error && (
-            <div className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+            <div className="flex items-center gap-1.5 text-xs text-destructive">
               <span>加载失败: {error}</span>
             </div>
           )}

@@ -172,7 +172,7 @@ export default function CnPaymentSuccessRate() {
             <div className="text-xs text-muted-foreground">
               总计 <span className="font-semibold text-foreground">{data.total_orders}</span> 笔
             </div>
-            <div className={cn("text-sm font-bold", rateColor(data.overall_success_rate))}>
+            <div className={cn("text-sm font-semibold", rateColor(data.overall_success_rate))}>
               {data.overall_success_rate}%
             </div>
           </div>
@@ -199,7 +199,7 @@ export default function CnPaymentSuccessRate() {
                   {ch.display_name}
                 </span>
                 {ch.approved_amount > 0 && (
-                  <span className="text-[10px] text-green-600 dark:text-green-400 shrink-0">
+                  <span className="text-xs text-green-600 dark:text-green-400 shrink-0">
                     {fmtAmount(ch.approved_amount)}
                   </span>
                 )}
@@ -208,29 +208,29 @@ export default function CnPaymentSuccessRate() {
               {/* Stats row */}
               <div className="grid grid-cols-5 gap-1 text-center">
                 <div>
-                  <div className="text-[10px] text-muted-foreground leading-tight">总数</div>
+                  <div className="text-xs text-muted-foreground leading-tight">总数</div>
                   <div className="text-xs font-semibold">{ch.total}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-muted-foreground leading-tight">通过</div>
+                  <div className="text-xs text-muted-foreground leading-tight">通过</div>
                   <div className="text-xs font-semibold text-green-600 dark:text-green-400">
                     {ch.approved}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-muted-foreground leading-tight">拒绝</div>
+                  <div className="text-xs text-muted-foreground leading-tight">拒绝</div>
                   <div className="text-xs font-semibold text-red-600 dark:text-red-400">
                     {ch.declined}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-muted-foreground leading-tight">待处理</div>
+                  <div className="text-xs text-muted-foreground leading-tight">待处理</div>
                   <div className="text-xs font-semibold text-yellow-600 dark:text-yellow-400">
                     {ch.fresh}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-muted-foreground leading-tight">成功率</div>
+                  <div className="text-xs text-muted-foreground leading-tight">成功率</div>
                   <div className="text-xs font-semibold text-red-600 dark:text-red-400">
                     {ch.total > 0 ? `${((ch.approved / ch.total) * 100).toFixed(1)}%` : "—"}
                   </div>
@@ -263,7 +263,7 @@ export default function CnPaymentSuccessRate() {
                 return (
                   <div className="rounded-md bg-muted/50">
                     <div
-                      className="flex cursor-pointer items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                      className="flex cursor-pointer items-center gap-1 px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground"
                       onClick={() =>
                         setExpandedChannel((c) =>
                           c === ch.display_name ? null : ch.display_name,
@@ -277,7 +277,7 @@ export default function CnPaymentSuccessRate() {
                     </div>
                     {isExpanded && (
                       <div className="px-1.5 pb-1.5 space-y-0.5">
-                        <div className="grid grid-cols-3 text-[10px] text-muted-foreground leading-tight px-0.5">
+                        <div className="grid grid-cols-3 text-xs text-muted-foreground leading-tight px-0.5">
                           <span>订单ID</span>
                           <span className="text-right">金额</span>
                           <span className="text-right">客户ID</span>
@@ -285,7 +285,7 @@ export default function CnPaymentSuccessRate() {
                         {ch.top_orders.map((o) => (
                           <div
                             key={o.order_id}
-                            className="grid grid-cols-3 text-[11px] leading-tight px-0.5"
+                            className="grid grid-cols-3 text-xs leading-tight px-0.5"
                           >
                             <span className="text-muted-foreground">#{o.order_id}</span>
                             <span className="text-right font-medium">{fmtAmount(o.processed_amount)}</span>

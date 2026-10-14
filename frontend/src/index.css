@@ -2,8 +2,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap");
+/* Geist is self-hosted (bundled by Vite) so it does not depend on Google Fonts
+   being reachable. It has no CJK glyphs: Latin + digits render in Geist and
+   Chinese falls through to Noto Sans SC / the OS CJK font. */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: "Geist Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
@@ -25,6 +35,8 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-profit: var(--profit);
+  --color-loss: var(--loss);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -60,6 +72,9 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  /* Semantic money colors: use text-profit / text-loss, not raw green/red. */
+  --profit: oklch(0.627 0.194 149.214);
+  --loss: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -94,6 +109,8 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --profit: oklch(0.792 0.209 151.711);
+  --loss: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -117,16 +134,19 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground font-['Noto_Sans_SC'];
+    @apply bg-background text-foreground font-sans antialiased;
+    text-rendering: optimizeLegibility;
+    /* Data-heavy app: equal-width digits keep numbers aligned in columns. */
+    font-variant-numeric: tabular-nums;
   }
 }
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
+
+/* AG Grid ships its own font stack (IBM Plex Sans / system); use the app font
+   so grids and the surrounding UI match. !important: index.css is imported
+   before ag-theme-quartz.css. */
+.ag-theme-quartz,
+.ag-theme-quartz-dark {
+  --ag-font-family: var(--font-sans) !important;
 }
 
 .ag-paging-panel {
