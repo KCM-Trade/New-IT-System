@@ -83,12 +83,9 @@ SID_TO_DISPLAY: dict[int, str] = {
     6: "MT4_Live2",
 }
 
-# KCM convention: MT login numbers starting with '7' are demo / test accounts.
-# Same filter open_positions_service.py uses (`AND t.LOGIN NOT LIKE '7%'`).
-# Login-IP itself does NOT filter these — they show up in the daily report
-# alongside real correlated accounts. We drop them here so the audit email
-# only shows genuine clients to risk team.
-DEMO_LOGIN_PREFIX = "7"
+# No login-prefix demo filter (2026-10-14): the old "7 = demo" convention never
+# matched a CRM demo account and only dropped live clients (sid=1 702xxxx,
+# sid=6 780xxxxx). Demo/test exclusion is a CRM GROUP/NAME question.
 
 
 # ---------------------------------------------------------------------------
@@ -192,16 +189,7 @@ def fetch_correlated_account_pool(target_account: str, target_date: str) -> dict
             if not entry["chinese_name"] and corr.get("chinese_name"):
                 entry["chinese_name"] = corr["chinese_name"]
 
-    correlated_all = sorted(by_login.values(), key=lambda x: x["login"])
-    correlated = [
-        c for c in correlated_all if not c["login"].startswith(DEMO_LOGIN_PREFIX)
-    ]
-    skipped_demo = len(correlated_all) - len(correlated)
-    if skipped_demo:
-        logger.info(
-            "filtered out %d demo/test correlated account(s) (login starts with %r)",
-            skipped_demo, DEMO_LOGIN_PREFIX,
-        )
+    correlated = sorted(by_login.values(), key=lambda x: x["login"])
 
     return {
         "watchlist_server_name": target_data["server_name"],  # may be wrong
@@ -212,7 +200,6 @@ def fetch_correlated_account_pool(target_account: str, target_date: str) -> dict
         "monitored_total_logins": target_data.get("total_logins", 0),
         "shared_ip_blocks": target_data["shared_ips_analysis"],
         "correlated": correlated,
-        "skipped_demo_count": skipped_demo,
     }
 
 
@@ -907,10 +894,6 @@ def render_html(
     )
 
     skipped_note = ""
-    if pool.get("skipped_demo_count"):
-        skipped_note = (
-            f' (已跳过 <b>{pool["skipped_demo_count"]}</b> 个 7 开头的 demo/test 账户)'
-        )
 
     banner = f"""
     <table role="presentation" cellpadding="0" cellspacing="0" border="0"

@@ -33,7 +33,7 @@ never for data-scope-restricted callers — run_sql.py:43-45). The harness shoul
 | 10 | stats_ib_commissions PK and indexes | TD/stats_ib_commissions.md:1, :8 |
 | 11 | mt4_users ~192K, users ~68K rows; mt4_users indexes | TD/mt4_users.md:1, :18-20; TD/users.md:1 |
 | 12 | Timeout → narrow and retry once | prompt.py:49; run_sql.py:603-611 |
-| 13 | Universe filter lines (sid IN (1,5,6), CMD, isDeleted, sid 1 '7%' demo, .demo symbol, GROUP/NAME demo/test, employee join) | QN:12-34, :46-53; backend/app/services/open_positions_rank_service.py:57-75; backend/app/services/login_ip_trade_profit_service.py:169-172 |
+| 13 | Universe filter lines (sid IN (1,5,6), CMD, isDeleted, .demo symbol, GROUP/NAME demo/test, employee join) | QN:12-34, :46-53; backend/app/services/open_positions_rank_service.py:57-75; backend/app/services/login_ip_trade_profit_service.py:169-172 |
 | 14 | sid 4 retired with leftover open rows | QN:46-48 |
 | 15 | NAME is PII → refused; tools filter NAME | run_sql.py:257-283 ("name" in SENSITIVE_COLUMNS); login_ip_trade_profit_service.py:171 |
 | 16 | Guard refuses any SQL comment | run_sql.py:17-23; prompt.py:126 |
@@ -71,7 +71,7 @@ never for data-scope-restricted callers — run_sql.py:43-45). The harness shoul
 - TODO(business): gold symbol naming — the skill assumes the family `XAUUSD%` (as rank_open_positions does). Are there gold symbols not starting with `XAUUSD` on live servers (e.g. `GOLD…`)? query-norms mentions `Gold.demo` on a demo account only.
 - "Do not sum `lots` in stats_ib_commissions (counted once per IB level)" is **inferred**: the measured double-count is for `stats_ib_commissions_by_login_sid.lots` (deposit-tier-lots-analysis.md:77-78) and KCM T6 (architecture.md:867). Same per-level row structure applies to `(ibId, refId)`, but not measured on this table. TODO(business/data): verify.
 - `isLead` gloss "still a lead (not a converted client)" is an interpretation of the column name + activity-status-column skill's "lead" universe; not a documented definition.
-- sid 1 '7%' demo rule and `.demo` symbol rule come from QN (KCM project norms), not from the certified tools' SQL (which use GROUP/NAME only). Adding them is stricter than the tools; harmless but means SQL counts can be slightly lower than tool counts.
+- `.demo` symbol rule comes from QN (the sid 1 '7%' demo rule was dropped 2026-10-14: CRM has zero official demo on sid 1/6) (KCM project norms), not from the certified tools' SQL (which use GROUP/NAME only). Adding them is stricter than the tools; harmless but means SQL counts can be slightly lower than tool counts.
 
 ## Notes for implementer
 - The system-prompt schema card lacks `mt4_users.MARGIN` and `MARGIN_FREE` (both exist, TD/mt4_users.md:10). The skill works around it with `MARGIN_LEVEL > 0`; consider adding them to the card.

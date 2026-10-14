@@ -505,7 +505,6 @@ _WINDOW_TRADES_SQL = """
       AND t.sid IN ({sid_placeholders})
       AND t.CMD IN (0, 1)
       AND COALESCE(t.isDeleted, 0) = 0
-      AND t.LOGIN NOT LIKE '7%%'
       AND u.userId IS NOT NULL
       {symbol_clause}
       AND NOT COALESCE(

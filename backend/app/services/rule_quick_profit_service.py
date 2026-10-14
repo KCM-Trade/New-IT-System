@@ -123,7 +123,6 @@ def _query_mt4_realized(
         WHERE t.CMD IN (0, 1)
           AND t.CLOSE_TIME > '1970-01-01 00:00:00'
           AND t.CLOSE_TIME >= DATE_SUB(NOW(), INTERVAL %s SECOND)
-          AND t.LOGIN NOT LIKE '7%%'
           {demo_test_filter_sql('u.`GROUP`', 'u.NAME', login_col='t.LOGIN', server_label=server_label)}
         ORDER BY t.LOGIN, t.SYMBOL, t.CLOSE_TIME
     """

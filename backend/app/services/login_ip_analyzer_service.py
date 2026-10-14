@@ -77,11 +77,17 @@ ORDER_IP_FILE = "analysis_order_ip.json"
 #   - MT5:            demo logins all start with '3' (verified against the
 #                     `Group demo\\*` audit lines in the live journal; real
 #                     client groups KCM*/KCMC* use '6'/'7' prefixes)
-#   - MT4/MT4_Live2:  demo/test logins start with '7' (house convention,
-#                     same as open_positions_service `LOGIN NOT LIKE '7%'`)
+#   - MT4/MT4_Live2:  NO login-prefix rule (2026-10-14). The old "7 = demo"
+#                     convention never matched a CRM demo account (sid=1/6
+#                     hold zero official demos; MT4-side test logins sit in
+#                     `test*` groups) but did drop live sid=1 702xxxx and
+#                     sid=6 780xxxxx clients. The journal carries no group,
+#                     so `test*` accounts on these servers now pass this
+#                     parse-time gate and are excluded downstream by the
+#                     CRM GROUP/NAME filter where one applies.
 #   - all servers:    manager/dealer accounts are short numbers ('25', '114')
 #                     → require at least 5 digits
-_DEMO_PREFIX_BY_SERVER = {"MT5": "3", "MT4": "7", "MT4_Live2": "7"}
+_DEMO_PREFIX_BY_SERVER = {"MT5": "3"}
 _MIN_CLIENT_LOGIN_LEN = 5
 
 # Close-order detection, matched against the message after "'<acc>': ".

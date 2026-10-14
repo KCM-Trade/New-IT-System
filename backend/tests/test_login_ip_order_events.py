@@ -177,7 +177,8 @@ MT4_LINES = [
     "1\t01:35:15.198\t\t'100001199': order #23106610, buy 0.01 XAUUSD is opened at 4348.31000",
     # dropped: module name in the IP column
     "1\t02:00:00.000\tStopOut.All\t'8520962': order #23106611, sell 0.10 XAUUSD at 4340.00000",
-    # dropped: demo account (MT4 '7' prefix)
+    # kept since 2026-10-14: '7'-prefixed MT4 logins are live clients (7021083 is
+    # a real sid=1 account); the old prefix gate only ever dropped real clients
     "1\t03:00:00.000\t1.2.3.4\t'7021083': order #23106529, sell stop 0.01 XAUUSD.c at 4237.85000",
     # dropped: manager account (<5 digits)
     "1\t04:00:00.000\t1.2.3.4\t'114': order #23106540, buy 1.00 XAUUSD at 4340.00000",
@@ -219,6 +220,7 @@ def test_parse_one_log_mt4_order_events(tmp_path):
     assert [(e["order_ref"], e["cmd"]) for e in order_events] == [
         (23106530, "buy"),
         (23106533, "buy limit"),
+        (23106529, "sell stop"),
     ]
     first = order_events[0]
     assert first["account_id"] == 8520962

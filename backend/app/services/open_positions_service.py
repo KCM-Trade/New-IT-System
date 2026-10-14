@@ -5,26 +5,17 @@ Three consumers, all reading fxbackoffice.mt4_trades on the read replica:
   * get_symbol_cross_server_summary() -> the cross-server summary card
   * get_xauusd_position_detail()      -> the 1-min XAUUSD snapshot scheduler
 
-⚠ KNOWN DEFECT — `t.LOGIN NOT LIKE '7%'` (all three queries below)
-The 7-prefix login exclusion is an **MT4-only** demo convention. On MT5
-(sid=5) `67xxxxxx` / `77xxxxxx` are REAL client accounts and demo logins are
-`3`-prefixed instead — see docs/features/login-ip.md §3.4 and the
-database-context skill. Applying it to sid=5/6 therefore drops live clients.
-
-Measured on the replica 2026-08-10 (open XAUUSD* positions, raw lots, cent not
-yet scaled): the filter removes 1,026 mt5 orders (127.24 buy / 129.98 sell)
-plus 46 on mt4_live2 and 2 on mt4_live — roughly a third of mt5's gross gold
-book. Net impact happened to be small that day (about -1.6 lots overall
-because the dropped book was two-sided), but nothing bounds it: on a day when
-those accounts lean one way the Buy/Sell lines and the Net line are all off.
-
-Not fixed here on purpose — the correct predicate is
-`(t.sid <> 1 OR t.LOGIN NOT LIKE '7%')` (already used in
-docs/analysis/mt-night-window-sql-playbook.md), but changing it shifts every
-number the page shows AND breaks continuity with the 60 days of snapshots
-already recorded under the old rule. Needs a deliberate call + a note on the
-chart. Same defect exists in risk_monitor_service, window_scan_service,
-rule_quick_profit_service and rule_quick_open_close_service.
+Demo exclusion note (2026-10-14)
+The historical `t.LOGIN NOT LIKE '7%'` clause was removed from all three
+queries. It was an MT4-only house convention and the CRM official table
+`mt4_users_snapshot.is_demo` shows it never matched a demo account: sid=1 and
+sid=6 hold zero official demo logins (MT4-side test accounts all sit in
+`test*` groups, which the group clause already excludes) while sid=5 demo
+logins are `3`-prefixed. What the clause actually removed were live clients:
+the sid=1 702xxxx range (allocated since 2025-07), sid=5 77xxxxxx and sid=6
+780xxxxx. Measured 2026-08-10 the clause dropped roughly a third of mt5's
+gross gold book. Snapshots recorded before 2026-10-14 therefore under-count
+those accounts; treat the series as discontinuous at that date.
 """
 
 from __future__ import annotations
@@ -229,8 +220,6 @@ def get_xauusd_position_detail(settings: Settings) -> dict[str, Any]:
           AND t.SYMBOL LIKE 'XAUUSD%%'
           AND t.closeDate = '1970-01-01'
           AND t.CMD IN (0, 1)
-          -- MT4-only demo convention; wrong for sid=5/6. See module docstring.
-          AND t.LOGIN NOT LIKE '7%%'
           AND NOT EXISTS (
             SELECT 1
             FROM mt4_users u
@@ -364,8 +353,6 @@ def get_open_positions_today(settings: Settings, source: str = "mt4_live") -> di
         WHERE t.sid = %(sid)s
           AND t.closeDate = '1970-01-01'
           AND t.CMD IN (0, 1)
-          -- MT4-only demo convention; wrong for sid=5/6. See module docstring.
-          AND t.LOGIN NOT LIKE '7%%'
           AND NOT EXISTS (
             SELECT 1
             FROM mt4_users u
@@ -472,8 +459,6 @@ def get_symbol_cross_server_summary(settings: Settings, symbol: str) -> dict[str
           )
           AND t.closeDate = '1970-01-01'
           AND t.CMD IN (0, 1)
-          -- MT4-only demo convention; wrong for sid=5/6. See module docstring.
-          AND t.LOGIN NOT LIKE '7%%'
           AND NOT EXISTS (
             SELECT 1
             FROM mt4_users u

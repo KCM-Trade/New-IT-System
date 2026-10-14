@@ -324,7 +324,6 @@ def mt4_day(db: Db, dbname: str, day: dt.date, *, window: int) -> Dict[int, Dict
     demo_sql = (
         "AND u.`GROUP` NOT LIKE '%%demo%%' AND u.`GROUP` NOT LIKE '%%test%%' "
         "AND COALESCE(u.NAME,'') NOT LIKE '%%demo%%' AND COALESCE(u.NAME,'') NOT LIKE '%%test%%' "
-        "AND t.LOGIN NOT LIKE '7%%' "
     )
     sel = ("SELECT t.LOGIN AS login, t.TICKET AS ticket, t.CMD AS cmd, t.SYMBOL AS symbol, "
            "t.VOLUME/100 AS lots, t.OPEN_TIME AS ot, t.CLOSE_TIME AS ct, t.PROFIT AS profit, "
