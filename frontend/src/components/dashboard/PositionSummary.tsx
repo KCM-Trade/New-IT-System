@@ -39,8 +39,8 @@ function format2(n: number): string {
 }
 
 function profitClass(n: number): string {
-  if (n > 0) return "text-green-600 dark:text-green-400";
-  if (n < 0) return "text-red-600 dark:text-red-400";
+  if (n > 0) return "text-profit";
+  if (n < 0) return "text-loss";
   return "text-foreground";
 }
 
@@ -169,7 +169,7 @@ export default function PositionSummary() {
               重新查询
             </Button>
             {summaryError && (
-              <span className="text-xs text-red-600">{summaryError}</span>
+              <span className="text-xs text-destructive">{summaryError}</span>
             )}
           </div>
         </div>
@@ -232,7 +232,7 @@ export default function PositionSummary() {
                   </TableRow>
                 ))}
                 {summaryData.total && (
-                  <TableRow className="bg-amber-100/70 dark:bg-amber-900/40 font-bold border-t-2">
+                  <TableRow className="bg-amber-100/70 dark:bg-amber-900/40 font-semibold border-t-2">
                     <TableCell className="text-xs py-1.5">TOTAL</TableCell>
                     <TableCell className="text-xs text-right tabular-nums py-1.5">
                       {formatVolume(summaryData.total.volume_buy)}
