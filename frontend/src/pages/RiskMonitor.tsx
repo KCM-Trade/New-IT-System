@@ -454,13 +454,15 @@ const MARTINGALE_RULE_ID_BASE = 111;
 /** Backend `INTRADAY_RETURN_RULE_ID_MIN` — Intraday Return rule_ids are 131 … 140. */
 const INTRADAY_RETURN_RULE_ID_BASE = 131;
 
-/** Per-rule summary cards (批量下单 / 快开快平); cycles if more rules than colors. */
-const RULE_SUMMARY_CARD_STYLES: { dot: string; value: string }[] = [
-  { dot: "bg-violet-500", value: "text-violet-600 dark:text-violet-400" },
-  { dot: "bg-sky-500", value: "text-sky-600 dark:text-sky-400" },
-  { dot: "bg-emerald-500", value: "text-emerald-600 dark:text-emerald-400" },
-  { dot: "bg-amber-500", value: "text-amber-600 dark:text-amber-400" },
-  { dot: "bg-rose-500", value: "text-rose-600 dark:text-rose-400" },
+/** Per-rule summary card dot colours (批量下单 / 快开快平); cycles if more rules
+ *  than colors. Only the dot is coloured — the number stays in the foreground
+ *  colour so the value, not the hue, is what reads first. */
+const RULE_SUMMARY_CARD_STYLES: { dot: string }[] = [
+  { dot: "bg-violet-500" },
+  { dot: "bg-sky-500" },
+  { dot: "bg-emerald-500" },
+  { dot: "bg-amber-500" },
+  { dot: "bg-rose-500" },
 ];
 
 interface QuickRuleBreakdownItem {
@@ -1071,16 +1073,19 @@ async function exportGridAsCsv(opts: {
 // signals across every tab on this page. We unify the visual semantics
 // here so every table cell, detail row, and future tab speaks the same
 // colour language:
-//   ≥0  → emerald (client still has net inflow on us, normal)
-//   <0  → red     (client has withdrawn more than deposited — 风控关注)
-//   NULL→ neutral (unresolved client; can't draw a signal from no data)
+//   >0  → green (client still has net inflow on us, normal)
+//   <0  → red   (client has withdrawn more than deposited — 风控关注)
+//   0 / NULL → neutral (page-style-conventions §10)
+
+/** Conventional sign colour: positive = text-profit, negative = text-loss. */
+function signColorClass(v: number | null | undefined): string {
+  if (v === null || v === undefined || v === 0) return "";
+  return v > 0 ? "text-profit" : "text-loss";
+}
 
 /** Tailwind class for the value's colour, given the numeric value. */
 function netDepositColorClass(v: number | null | undefined): string {
-  if (v === null || v === undefined) return "";
-  return v >= 0
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-red-600 dark:text-red-400";
+  return signColorClass(v);
 }
 
 /**
@@ -1096,9 +1101,8 @@ function netDepositColorClass(v: number | null | undefined): string {
  */
 function netProfitColorClass(v: number | null | undefined): string {
   if (v === null || v === undefined || v === 0) return "";
-  return v < 0
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-red-600 dark:text-red-400";
+  // Inverted on purpose (B-book lens): green token for net-down clients.
+  return v < 0 ? "text-profit" : "text-loss";
 }
 
 /**
@@ -1111,10 +1115,7 @@ function netProfitColorClass(v: number | null | undefined): string {
 function netProfitConventionalColorClass(
   v: number | null | undefined,
 ): string {
-  if (v === null || v === undefined || v === 0) return "";
-  return v > 0
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-red-600 dark:text-red-400";
+  return signColorClass(v);
 }
 
 /**
@@ -1169,12 +1170,7 @@ function balanceColDef<TRow extends { balance?: number | null }>(
     field: "balance" as ColDef<TRow>["field"],
     colId,
     width,
-    // Subtle tinted background (cell + header) so the 余额 column stands out
-    // from the neighbouring 净值 / 净入金 money columns. The tint is a
-    // translucent overlay (rgba) so AG-Grid zebra striping still shows through
-    // — see `.rm-balance-cell` / `.rm-balance-header` in the page <style> block.
-    cellClass: "ag-right-aligned-cell rm-balance-cell",
-    headerClass: "rm-balance-header",
+    cellClass: "ag-right-aligned-cell",
     valueFormatter: (p) => fmtCurrency(p.value as number | null | undefined),
   };
   if (filter !== undefined) def.filter = filter;
@@ -1758,48 +1754,22 @@ export default function RiskMonitor() {
           border: 1px solid;
           border-bottom-width: 1px;
         }
-        /* 余额 (balance) column tint — translucent so zebra striping shows
-           through. Applied via balanceColDef cellClass/headerClass across every
-           tab that renders the column. Cool blue to stay distinct from the
-           emerald/red money columns and the amber gap-trade shared-IP rows. */
-        .risk-monitor-theme .rm-balance-cell {
-          background-color: rgba(37, 99, 235, 0.07);
-        }
-        .risk-monitor-theme .rm-balance-header {
-          background-color: rgba(37, 99, 235, 0.12);
-        }
-        .dark .risk-monitor-theme .rm-balance-cell {
-          background-color: rgba(96, 165, 250, 0.14);
-        }
-        .dark .risk-monitor-theme .rm-balance-header {
-          background-color: rgba(96, 165, 250, 0.22);
-        }
-        /* 淨賺 (net profit = equity − net deposit) column tint — violet, kept
-           distinct from the balance blue / net-deposit emerald-red / gap-trade
-           amber. Translucent so zebra striping shows through. Applied via
-           netProfitColDef cellClass/headerClass across every account-level tab. */
+        /* 淨賺 (net profit = equity − net deposit) column tint — the page's
+           single emphasis column group (page-style-conventions §10.1: at most
+           one group, amber only). Translucent so zebra striping shows through.
+           Applied via netProfitColDef cellClass/headerClass. Balance / remark /
+           累计 columns are intentionally NOT tinted. */
         .risk-monitor-theme .rm-netprofit-cell {
-          background-color: rgba(147, 51, 234, 0.07);
+          background-color: rgba(245, 158, 11, 0.10);
         }
         .risk-monitor-theme .rm-netprofit-header {
-          background-color: rgba(147, 51, 234, 0.12);
+          background-color: rgba(245, 158, 11, 0.18);
         }
         .dark .risk-monitor-theme .rm-netprofit-cell {
-          background-color: rgba(192, 132, 252, 0.14);
+          background-color: rgba(251, 191, 36, 0.15);
         }
         .dark .risk-monitor-theme .rm-netprofit-header {
-          background-color: rgba(192, 132, 252, 0.22);
-        }
-        /* 备注 (remark) column tint — red, kept distinct from the balance blue /
-           net-profit violet / gap-trade amber. Translucent so zebra striping
-           shows through. Applied via remarkColDef cellClass across every
-           account-level tab. Cells only — the header is intentionally NOT
-           tinted (per request). */
-        .risk-monitor-theme .rm-remark-cell {
-          background-color: rgba(239, 68, 68, 0.07);
-        }
-        .dark .risk-monitor-theme .rm-remark-cell {
-          background-color: rgba(248, 113, 113, 0.14);
+          background-color: rgba(251, 191, 36, 0.22);
         }
       `}</style>
 
@@ -2415,11 +2385,7 @@ function BurstOpenTab({ active }: { active: boolean }) {
           if (v === null || v === undefined) return "—";
           return (
             <span
-              className={
-                v >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-red-600 dark:text-red-400"
-              }
+              className={signColorClass(v)}
             >
               {fmtCurrency(v)}
             </span>
@@ -2498,7 +2464,6 @@ function BurstOpenTab({ active }: { active: boolean }) {
         colId: "total_count",
         width: 110,
         cellClass: "ag-right-aligned-cell",
-        cellStyle: { backgroundColor: "rgba(239, 68, 68, 0.08)" },
         headerTooltip: "窗口内 alert 的 order_count 累加",
       },
       {
@@ -2508,7 +2473,6 @@ function BurstOpenTab({ active }: { active: boolean }) {
         width: 120,
         sort: "desc",
         cellClass: "ag-right-aligned-cell",
-        cellStyle: { backgroundColor: "rgba(239, 68, 68, 0.08)" },
         valueFormatter: (p) =>
           typeof p.value === "number" ? p.value.toFixed(2) : "—",
         // NOTE: plain sum (no double-side multiplier). Don't copy the
@@ -2616,11 +2580,12 @@ function BurstOpenTab({ active }: { active: boolean }) {
             <Settings2 className="h-4 w-4 mr-1.5" />
             设置
           </Button>
-          {/* OPT-0027: "聚合 / 已聚合" toggle. Same affordance + colors as
-              the hedge-open tab so the gesture is consistent across tabs. */}
+          {/* OPT-0027: "聚合 / 已聚合" toggle. Same affordance as the
+              hedge-open tab so the gesture is consistent across tabs. */}
           <Button
             type="button"
             size="sm"
+            variant={aggregated ? "default" : "outline"}
             onClick={() => setAggregated((v) => !v)}
             aria-pressed={aggregated}
             title={
@@ -2628,17 +2593,6 @@ function BurstOpenTab({ active }: { active: boolean }) {
                 ? "已按账户聚合 — 再点切换回明细"
                 : "按账户聚合：把同账户多条告警折叠成一行"
             }
-            className={cn(
-              "border border-transparent",
-              aggregated
-                ? "bg-emerald-500 hover:bg-emerald-600 text-emerald-50 " +
-                    "ring-2 ring-emerald-700/40 " +
-                    "dark:bg-emerald-700 dark:hover:bg-emerald-800 " +
-                    "dark:text-emerald-50 dark:ring-emerald-300/30"
-                : "bg-amber-300 hover:bg-amber-400 text-amber-950 " +
-                    "dark:bg-amber-500 dark:hover:bg-amber-600 " +
-                    "dark:text-amber-50",
-            )}
           >
             <Layers className="h-4 w-4 mr-1.5" />
             {aggregated ? "已聚合" : "聚合"}
@@ -2676,7 +2630,6 @@ function BurstOpenTab({ active }: { active: boolean }) {
                 value={nAcc}
                 description={`告警 ${nEvt} 条 · ${rule.burst_window_sec}s 内 ≥${rule.min_order_count} 笔 / 每笔≥${rule.min_lots_per_order} 手`}
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -3444,11 +3397,7 @@ function QuickOpenCloseTab({ active }: { active: boolean }) {
           if (v === null || v === undefined) return "—";
           return (
             <span
-              className={
-                v >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-red-600 dark:text-red-400"
-              }
+              className={signColorClass(v)}
             >
               {fmtCurrency(v)}
             </span>
@@ -3596,7 +3545,6 @@ function QuickOpenCloseTab({ active }: { active: boolean }) {
                   `合并利润(单次拉取) ≥ $${rule.min_total_profit_usd}`
                 }
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -4906,10 +4854,8 @@ function QuickProfitTab({ active }: { active: boolean }) {
           return (
             <span
               className={cn(
-                "font-bold",
-                v >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-red-600 dark:text-red-400",
+                "font-semibold",
+                signColorClass(v),
               )}
             >
               {fmtCurrency(v)}
@@ -5081,7 +5027,6 @@ function QuickProfitTab({ active }: { active: boolean }) {
                   (rule.include_floating ? " · 含浮动" : "")
                 }
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -6079,7 +6024,6 @@ function HedgeOpenTab({ active }: { active: boolean }) {
         // opacity lets the AG-Grid zebra + hover show through, and the
         // single rgba works in both light and dark mode without a
         // dedicated .dark selector.
-        cellStyle: { backgroundColor: "rgba(239, 68, 68, 0.08)" },
         headerTooltip: "窗口内 buy + sell 订单数加总",
       },
       {
@@ -6089,7 +6033,6 @@ function HedgeOpenTab({ active }: { active: boolean }) {
         width: 120,
         sort: "desc",
         cellClass: "ag-right-aligned-cell",
-        cellStyle: { backgroundColor: "rgba(239, 68, 68, 0.08)" },
         valueFormatter: (p) =>
           typeof p.value === "number" ? p.value.toFixed(2) : "—",
         headerTooltip: "buy_lots + sell_lots 加总（双向计数，= 2× 实际对冲量）",
@@ -6243,17 +6186,13 @@ function HedgeOpenTab({ active }: { active: boolean }) {
             <Settings2 className="h-4 w-4 mr-1.5" />
             设置
           </Button>
-          {/* "聚合 / 已聚合" toggle.
-              - Off (default): amber background + 「聚合」 — affordance, draws
-                attention to a less-common view.
-              - On (active):  emerald background + 「已聚合」 — color change is
-                the strongest signal that the view has switched; the label
-                change reinforces it for low-color-contrast users.
-              Dark-mode uses a darker base on both because the *-300 / *-500
-              light shades wash out against the dark card background. */}
+          {/* "聚合 / 已聚合" toggle: outline when off, filled (default
+              variant) when on, plus the label change — the standard pressed
+              state used elsewhere in the app. */}
           <Button
             type="button"
             size="sm"
+            variant={aggregated ? "default" : "outline"}
             onClick={() => setAggregated((v) => !v)}
             aria-pressed={aggregated}
             title={
@@ -6261,17 +6200,6 @@ function HedgeOpenTab({ active }: { active: boolean }) {
                 ? "已按账户聚合 — 再点切换回明细"
                 : "按账户聚合：把同账户多条告警折叠成一行"
             }
-            className={cn(
-              "border border-transparent",
-              aggregated
-                ? "bg-emerald-500 hover:bg-emerald-600 text-emerald-50 " +
-                    "ring-2 ring-emerald-700/40 " +
-                    "dark:bg-emerald-700 dark:hover:bg-emerald-800 " +
-                    "dark:text-emerald-50 dark:ring-emerald-300/30"
-                : "bg-amber-300 hover:bg-amber-400 text-amber-950 " +
-                    "dark:bg-amber-500 dark:hover:bg-amber-600 " +
-                    "dark:text-amber-50",
-            )}
           >
             <Layers className="h-4 w-4 mr-1.5" />
             {aggregated ? "已聚合" : "聚合"}
@@ -6315,7 +6243,6 @@ function HedgeOpenTab({ active }: { active: boolean }) {
                   (rule.enabled ? "" : " · 已停用")
                 }
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -7453,7 +7380,6 @@ function LeverageAbuseTab({ active }: { active: boolean }) {
                   ` · 净值 ≥ $${rule.min_equity_usd}`
                 }
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -8391,9 +8317,7 @@ function MartingaleTab({ active }: { active: boolean }) {
           return (
             <span
               className={
-                v < 0
-                  ? "text-red-600 dark:text-red-400 font-semibold"
-                  : "text-emerald-600 dark:text-emerald-400"
+                cn(signColorClass(v), v < 0 && "font-semibold")
               }
             >
               {fmtCurrency(v)}
@@ -8531,7 +8455,6 @@ function MartingaleTab({ active }: { active: boolean }) {
                   ` · 加仓 ≥ ${rule.min_add_count} 次`
                 }
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -9008,11 +8931,7 @@ function signedMoneyCell(p: { value: number | null | undefined }) {
   return (
     <span
       className={
-        v < 0
-          ? "text-red-600 dark:text-red-400"
-          : v > 0
-            ? "text-emerald-600 dark:text-emerald-400"
-            : ""
+        signColorClass(v)
       }
     >
       {fmtCurrency(v)}
@@ -9444,7 +9363,7 @@ function IntradayReturnTab({ active }: { active: boolean }) {
           return (
             <span
               className={cn(
-                "font-bold",
+                "font-semibold",
                 v >= 300
                   ? "text-red-600 dark:text-red-400"
                   : v >= 100
@@ -9704,7 +9623,6 @@ function IntradayReturnTab({ active }: { active: boolean }) {
                 value={nAcc}
                 description={`告警 ${nEvt} 条 · ${ruleDesc(rule)}`}
                 dotColor={st.dot}
-                textColor={st.value}
               />
             );
           })}
@@ -10743,7 +10661,8 @@ function GapTradeTab({ active }: { active: boolean }) {
         field: "l_profit_usd" as keyof AlertEvent,
         colId: "l_profit_usd",
         width: 140,
-        cellClass: "ag-right-aligned-cell text-rose-600 dark:text-rose-400",
+        cellClass: (p) =>
+          cn("ag-right-aligned-cell", signColorClass(p.value as number | null | undefined)),
         valueFormatter: (p) =>
           fmtCurrency(p.value as number | null | undefined),
       },
@@ -10752,8 +10671,8 @@ function GapTradeTab({ active }: { active: boolean }) {
         field: "c_profit_usd" as keyof AlertEvent,
         colId: "c_profit_usd",
         width: 140,
-        cellClass:
-          "ag-right-aligned-cell text-emerald-600 dark:text-emerald-400",
+        cellClass: (p) =>
+          cn("ag-right-aligned-cell", signColorClass(p.value as number | null | undefined)),
         valueFormatter: (p) =>
           fmtCurrency(p.value as number | null | undefined),
       },
@@ -10866,7 +10785,8 @@ function GapTradeTab({ active }: { active: boolean }) {
         field: "total_l_loss_usd",
         colId: "total_l_loss_usd",
         width: 150,
-        cellClass: "ag-right-aligned-cell text-rose-600 dark:text-rose-400",
+        cellClass: (p) =>
+          cn("ag-right-aligned-cell", signColorClass(p.value as number | null | undefined)),
         valueFormatter: (p) =>
           fmtCurrency(p.value as number | null | undefined),
       },
@@ -10875,8 +10795,8 @@ function GapTradeTab({ active }: { active: boolean }) {
         field: "total_c_profit_usd",
         colId: "total_c_profit_usd",
         width: 150,
-        cellClass:
-          "ag-right-aligned-cell text-emerald-600 dark:text-emerald-400",
+        cellClass: (p) =>
+          cn("ag-right-aligned-cell", signColorClass(p.value as number | null | undefined)),
         valueFormatter: (p) =>
           fmtCurrency(p.value as number | null | undefined),
       },
@@ -10989,7 +10909,7 @@ function GapTradeTab({ active }: { active: boolean }) {
         cellClass: "ag-right-aligned-cell",
         cellRenderer: (params: { value?: number | null }) => {
           const v = params.value ?? 1;
-          return <span className={v > 1 ? "font-bold" : ""}>{v}</span>;
+          return <span className={v > 1 ? "font-semibold" : ""}>{v}</span>;
         },
       },
       {
@@ -11046,8 +10966,8 @@ function GapTradeTab({ active }: { active: boolean }) {
         field: "total_profit_usd",
         colId: "total_profit_usd",
         width: 150,
-        cellClass:
-          "ag-right-aligned-cell text-emerald-600 dark:text-emerald-400 font-bold",
+        cellClass: (p) =>
+          cn("ag-right-aligned-cell font-semibold", signColorClass(p.value as number | null | undefined)),
         valueFormatter: (p) =>
           fmtCurrency(p.value as number | null | undefined),
       },
@@ -11065,8 +10985,8 @@ function GapTradeTab({ active }: { active: boolean }) {
           return (
             <span
               className={cn(
-                "font-bold",
-                danger && "text-rose-600 dark:text-rose-400",
+                "font-semibold",
+                danger && "text-red-600 dark:text-red-400",
               )}
             >
               {fmtRatio(v)}
@@ -11204,7 +11124,6 @@ function GapTradeTab({ active }: { active: boolean }) {
             value={soAbCount}
             description="窗口内强平账户与跨客户对手账户的疑似对敲配对（同 IP 行黄色高亮）"
             dotColor={RULE_SUMMARY_CARD_STYLES[0].dot}
-            textColor={RULE_SUMMARY_CARD_STYLES[0].value}
           />
           <SummaryCard
             compact
@@ -11212,7 +11131,6 @@ function GapTradeTab({ active }: { active: boolean }) {
             value={gapClientCount}
             description="规则1: 净出金 且 利润≥$100 · 规则2: 净入金>0 且 赚回≥1×净入金 ($100+) · 仅扛过缺口的持仓 (开 23-24 / 平 01-02 MT)"
             dotColor={RULE_SUMMARY_CARD_STYLES[2].dot}
-            textColor={RULE_SUMMARY_CARD_STYLES[2].value}
           />
         </div>
 
@@ -11861,7 +11779,7 @@ function GapTradeSoDetail({ row }: { row: AlertEvent }) {
         <DetailRow
           label="亏损 (USD)"
           value={fmtCurrency(row.l_profit_usd)}
-          highlightClass="text-rose-600 dark:text-rose-400"
+          highlightClass={signColorClass(row.l_profit_usd)}
         />
         <DetailRow label="balance (USD)" value={fmtCurrency(row.l_balance_usd)} />
         <DetailRow
@@ -11883,7 +11801,7 @@ function GapTradeSoDetail({ row }: { row: AlertEvent }) {
         <DetailRow
           label="盈利 (USD)"
           value={fmtCurrency(row.c_profit_usd)}
-          highlightClass="text-emerald-600 dark:text-emerald-400"
+          highlightClass={signColorClass(row.c_profit_usd)}
         />
       </DetailGroup>
       <Separator />
@@ -11901,7 +11819,7 @@ function GapTradeSoDetail({ row }: { row: AlertEvent }) {
             row.net_usd !== null &&
             row.net_usd !== undefined &&
             Math.abs(row.net_usd) < 100
-              ? "font-bold"
+              ? "font-semibold"
               : ""
           }
         />
@@ -11916,7 +11834,7 @@ function GapTradeSoDetail({ row }: { row: AlertEvent }) {
           value={row.shared_ip_count ?? 0}
           highlightClass={
             (row.shared_ip_count ?? 0) > 0
-              ? "font-bold text-amber-700 dark:text-amber-400"
+              ? "font-semibold text-amber-700 dark:text-amber-400"
               : ""
           }
         />
@@ -11928,7 +11846,7 @@ function GapTradeSoDetail({ row }: { row: AlertEvent }) {
                 <Badge
                   key={ip}
                   variant="outline"
-                  className="font-mono text-[10px]"
+                  className="font-mono text-xs"
                 >
                   {ip}
                 </Badge>
@@ -11975,7 +11893,7 @@ function GapTradeGapDetail({ row }: { row: AlertEvent }) {
         <DetailRow
           label="累积 Profit (USD)"
           value={fmtCurrency(row.total_profit_usd)}
-          highlightClass="text-emerald-600 dark:text-emerald-400 font-bold"
+          highlightClass={cn("font-semibold", signColorClass(row.total_profit_usd))}
         />
         <DetailRow
           label="历史净入金 (USD)"
@@ -11987,7 +11905,7 @@ function GapTradeGapDetail({ row }: { row: AlertEvent }) {
           value={fmtRatio(row.profit_ratio)}
           highlightClass={
             (row.profit_ratio ?? 0) >= 2
-              ? "text-rose-600 dark:text-rose-400 font-bold"
+              ? "text-red-600 dark:text-red-400 font-semibold"
               : ""
           }
         />
@@ -12021,7 +11939,7 @@ function GapTradeGapDetail({ row }: { row: AlertEvent }) {
       <DetailGroup title={`涉及产品 (${symbols.length})`}>
         <div className="flex flex-wrap gap-1">
           {symbols.map((s) => (
-            <Badge key={s} variant="outline" className="text-[10px]">
+            <Badge key={s} variant="outline" className="text-xs">
               {s}
             </Badge>
           ))}
@@ -12074,7 +11992,6 @@ function SummaryCard({
   description,
   value,
   dotColor,
-  textColor,
   /** Tighter padding and type scale — used for 快开快平 per-rule cards. */
   compact = false,
   /** Pre-formatted display text (e.g. "957%" / "$1,234.00"); overrides `value`. */
@@ -12084,7 +12001,6 @@ function SummaryCard({
   description?: string;
   value: number;
   dotColor: string;
-  textColor: string;
   compact?: boolean;
   valueText?: string;
 }) {
@@ -12108,17 +12024,14 @@ function SummaryCard({
                 </span>
               </div>
               <p
-                className={cn(
-                  "shrink-0 text-lg font-bold tabular-nums leading-none",
-                  textColor,
-                )}
+                className="shrink-0 text-lg font-semibold tracking-tight tabular-nums leading-none"
               >
                 {valueText ?? value.toLocaleString()}
               </p>
             </div>
             {description && (
               <p
-                className="line-clamp-2 text-[11px] leading-snug text-muted-foreground"
+                className="line-clamp-2 text-xs leading-snug text-muted-foreground"
                 title={description}
               >
                 {description}
@@ -12136,10 +12049,7 @@ function SummaryCard({
               </span>
             </div>
             <p
-              className={cn(
-                "text-2xl font-bold tabular-nums leading-none",
-                textColor,
-              )}
+              className="text-2xl font-semibold tracking-tight tabular-nums leading-none"
             >
               {valueText ?? value.toLocaleString()}
             </p>
