@@ -124,7 +124,6 @@ def _query_mt4_recent_opens(
         INNER JOIN {db_name}.mt4_users u ON t.LOGIN = u.LOGIN
         WHERE {where_time}
           AND t.CMD IN (0, 1)
-          AND t.LOGIN NOT LIKE '7%%'
           {demo_test_filter_sql('u.`GROUP`', login_col='t.LOGIN', server_label=server_label)}
     """
     params: list = list(time_params)

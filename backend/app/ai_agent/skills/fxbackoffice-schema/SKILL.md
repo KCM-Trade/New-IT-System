@@ -63,7 +63,6 @@ WHERE t.closeDate = '1970-01-01'
   AND t.sid IN (1, 5, 6)
   AND t.CMD IN (0, 1)
   AND COALESCE(t.isDeleted, 0) = 0
-  AND (t.sid <> 1 OR t.LOGIN NOT LIKE '7%')
   AND t.SYMBOL NOT LIKE '%.demo'
   AND LOWER(mu.`GROUP`) NOT LIKE '%demo%' AND LOWER(mu.`GROUP`) NOT LIKE '%test%'
 ```
@@ -116,7 +115,7 @@ JOIN mt4_users mu ON mu.loginSid = t.loginSid
 JOIN users u ON u.id = mu.userId AND COALESCE(u.isEmployee, 0) = 0
 WHERE t.closeDate = '1970-01-01'
   AND t.sid IN (1, 5, 6) AND t.CMD IN (0, 1) AND COALESCE(t.isDeleted, 0) = 0
-  AND (t.sid <> 1 OR t.LOGIN NOT LIKE '7%') AND t.SYMBOL NOT LIKE '%.demo'
+  AND t.SYMBOL NOT LIKE '%.demo'
   AND LOWER(mu.`GROUP`) NOT LIKE '%demo%' AND LOWER(mu.`GROUP`) NOT LIKE '%test%'
   AND t.SYMBOL LIKE 'XAUUSD%'
   AND UPPER(mu.CURRENCY) <> 'CEN'
