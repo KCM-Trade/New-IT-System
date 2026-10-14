@@ -63,7 +63,7 @@ Append-only 日志。最新的写在最上面。
 | 2026-05-15 | [OPT-0007](./items/OPT-0007-scan-history-dual-write.md) | `27a0b00` | 删除 scan_history.alerts/rules_config 双写冗余（DB 203MB→92MB） |
 | 2026-05-14 | [OPT-0006](./items/OPT-0006-m2-roace-precompute.md) | `38b77a4` | Client Return Rate ROACE 子查询预计算到 SQLite 快照 |
 | 2026-05-14 | [OPT-0005](./items/OPT-0005-m1-phase2-temp-table.md) | `8d1d1c2` | Client Return Rate Phase 2 主表替代 N 行 UNION ALL |
-| 2026-10-14 | OPT-0079 | KCM 风控管道守卫 hardening：共享 lag 守卫 + 每小时重提醒、从库语句超时、告警指纹去重（K14，两轮冷审 13 条全修，pytest 155→218） | — |
+| 2026-10-14 | OPT-0079 | — | KCM 风控管道守卫 hardening：共享 lag 守卫 + 每小时重提醒、从库语句超时、告警指纹去重（K14，两轮冷审 13 条全修，pytest 155→218） |
 
 ## 已放弃
 
