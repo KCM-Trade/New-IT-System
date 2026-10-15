@@ -4,17 +4,21 @@
 set -e
 
 # Parse args BEFORE touching anything (no git pull, no docker) so a typo can
-# never half-run a deploy. The only flag is --skip-verify; there is
-# deliberately no env-var equivalent, because an env var leaves no trace in
-# the terminal/history while a flag on the command line does (OPT-0080 D2).
+# never half-run a deploy. Flags have deliberately no env-var equivalent,
+# because an env var leaves no trace in the terminal/history while a flag on
+# the command line does (OPT-0080 D2).
 SKIP_VERIFY=0
+ALLOW_DIRTY=0
 usage() {
-  echo "Usage: $0 [--skip-verify]" >&2
+  echo "Usage: $0 [--skip-verify] [--allow-dirty]" >&2
   echo "  --skip-verify  skip ./verify.sh (pytest/tsc/vitest gates). Emergency only." >&2
+  echo "  --allow-dirty  deploy even with uncommitted changes to tracked files." >&2
+  echo "                 The build COPYs the working tree, so that WIP ships to prod." >&2
 }
 for arg in "$@"; do
   case "$arg" in
     --skip-verify) SKIP_VERIFY=1 ;;
+    --allow-dirty) ALLOW_DIRTY=1 ;;
     *) echo "ERROR: unknown argument: $arg" >&2; usage; exit 2 ;;
   esac
 done
@@ -25,8 +29,35 @@ echo "================================"
 
 cd /opt/myproject/New-IT-System
 
+# Refuse to deploy a dirty tracked tree (OPT-0080 cold review). Checked
+# BEFORE git pull: pulling into a dirty tree can fail half-way or merge
+# remote changes into someone's uncommitted edits. The image
+# build COPYs this working tree, and several AI sessions share it: uncommitted
+# edits would ship to prod without being in git, and someone's red WIP would
+# make verify fail for an unrelated deploy. Untracked files are allowed (the
+# repo routinely holds scratch output such as backend/scripts/output/).
+tracked_changes() { git status --porcelain --untracked-files=no; }
+DIRTY="$(tracked_changes)"
+if [ -n "$DIRTY" ]; then
+  if [ "$ALLOW_DIRTY" = "1" ]; then
+    echo "################################################################"
+    echo "  WARNING: --allow-dirty given — deploying with uncommitted changes"
+    echo "  to tracked files. They WILL be built into the prod images:"
+    printf '%s\n' "$DIRTY" | sed 's/^/    /'
+    echo "################################################################"
+  else
+    echo "ERROR: tracked files have uncommitted changes — deploy ABORTED. Nothing was built."
+    printf '%s\n' "$DIRTY" | sed 's/^/    /'
+    echo "  The build COPYs the working tree, so this uncommitted code would ship to"
+    echo "  prod without being in git (other sessions share this tree). Commit or"
+    echo "  stash it, or (deliberately) re-run with: ./deploy.sh --allow-dirty"
+    exit 1
+  fi
+fi
 # Pull latest code
 git pull origin main
+
+DEPLOY_HEAD="$(git rev-parse HEAD)"
 
 # Run the verify gate on the code we are about to build (OPT-0080 D1). Before
 # this, a red pytest/tsc on main deployed anyway (or, for tsc, only blew up
@@ -68,6 +99,20 @@ echo ""
 echo "--- Checking nginx.conf ---"
 ./scripts/check-nginx-conf.sh
 echo ""
+
+# verify + archiving take minutes and the tree is shared: make sure we build
+# exactly the code that verify saw (same HEAD, still no tracked edits).
+if [ "$(git rev-parse HEAD)" != "$DEPLOY_HEAD" ]; then
+  echo "ERROR: tree changed during verify — HEAD moved from $DEPLOY_HEAD to $(git rev-parse HEAD)."
+  echo "  Deploy ABORTED before building; prod untouched. Re-run ./deploy.sh."
+  exit 1
+fi
+if [ "$ALLOW_DIRTY" != "1" ] && [ -n "$(tracked_changes)" ]; then
+  echo "ERROR: tree changed during verify — tracked files were modified:"
+  tracked_changes | sed 's/^/    /'
+  echo "  Deploy ABORTED before building; prod untouched. Re-run once the tree is clean."
+  exit 1
+fi
 
 # Rebuild and restart prod containers only
 docker compose -f docker-compose.prod.yml up -d --build
