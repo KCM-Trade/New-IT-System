@@ -121,7 +121,7 @@ idea ──scope──▶ ready ──claim──▶ wip ──finish──▶ d
 ### D. 完成（3 stage：review hook → merge+close → lesson hook）
 
 > **核心变化**：动作 4 不再是单步 close，而是 3 stage 流程，**两端各加一个用户决策 hook**：
-> - 前置 hook（Stage 1）：merge 前问要不要 outsider-review
+> - 前置 hook（Stage 1）：merge 前按改动风险档位决定跑不跑 outsider-review（2026-10-15 起不再每次问）
 > - 收尾 hook（Stage 3）：close 后问要不要生成技术课件
 > - 中间（Stage 2）：合并 + close 一次性 commit，不再产出独立 `docs(opt): close`
 
@@ -129,9 +129,12 @@ idea ──scope──▶ ready ──claim──▶ wip ──finish──▶ d
 
 #### Stage 1 — outsider-review hook（merge 前）
 
-**总是问用户**（不基于 effort 隐式默认）。两个选项：
-- Yes → 跑 [`outsider-review`](../../.cursor/skills/outsider-review/SKILL.md)，对每条 finding 单独问处理方式：当场修 / 立新 hardening OPT / live with（记 follow-up）
-- No → 直接进 Stage 2
+Claude 先按 `verify-ladder` 的档位表给整个 branch 的 diff 定档，写一行 `rung: <S|M|L> — <理由>`（判据与本项目检查清单在 `docs/ai-context/verify-profile.md`）：
+- **S**（≤ 约 50 行、单一区域、行为已被测试钉住、纯文档/样式）→ 不冷审，直接进 Stage 2
+- **M**（新接口/页面/列、多文件功能、模块内重构）→ 后台跑 [`outsider-review`](../../.cursor/skills/outsider-review/SKILL.md)
+- **L**（auth / 权限 / 数据范围 / 金额单位 / 时区 / SQL 守卫 / 活库迁移 / 跨模块 / **任何错了也看不出来的改动**）→ 冷审 + 逐条要证据复核
+
+按改动本身定档，不按 effort 标签；S/M 拿不准取 M。用户明说「不用冷审」或「冷审一下」时以用户为准。档位那一行写进 merge commit 的 close body。每条 finding 仍单独问处理方式：当场修 / 立新 hardening OPT / live with（记 follow-up）。
 
 #### Stage 2 — Merge + close
 
