@@ -1,7 +1,7 @@
 ---
 id: OPT-0080
 title: verify.sh 加 --changed 按 diff 选闸门 + deploy.sh 部署前跑 verify、部署后跑 smoke
-status: wip
+status: done
 priority: P1
 area: devops
 effort: S
@@ -61,4 +61,36 @@ related: [[OPT-0051]], [[OPT-0053]]
 
 ## 结果
 
-（close 时填）
+实施（2026-10-15，四个提交，两个 agent 按文件所有权并行，主线程集成 + 冷审 + 文档）：
+`a1e7419` deploy 闸门 + smoke · `6ec4bde` verify `--changed` · `36cf965` / `61e9306` 冷审修复。
+
+**AC 对照**
+1. ✅ 五种路径的 dry-run 结果正确（nginx.conf 现在是 nginx check **+ pytest**，见偏差 2）。
+2. ✅ `scripts/test-verify-changed.sh` 60/60，含临时 git 仓库里的真实 diff（已提交/已暂存/未暂存/未跟踪/删除/重命名）。
+3. ✅ 只改一个前端文件：干净 worktree 实测 13.2s。⚠ 共用工作区里有别人留下的 `backend/` 未跟踪文件时会带上 pytest（3m11s 实测），属于设计内的保守方向。
+4. ✅ `./deploy.sh --bogus` exit 2、什么都不做；顺序：dirty 检查 < pull < verify < HEAD/工作区复查 < build < smoke < prune（测试里有静态检查）。
+5. ✅ `scripts/test-smoke-prod.sh` 72/72（本地假服务器 + PATH 上的假 docker）。
+6. ✅ 对真实 prod 手跑 `scripts/smoke-prod.sh`：PASS（2 轮，含 10s settle）。
+7. ✅ 不带参数的 `./verify.sh`：改前改后都是 pytest 3189 passed / 1 deselected，约 3m06s。
+8. ✅ verify-profile / dev-prod-guide / CLAUDE.md 已更新（三者都在 gitignore 里，是本地文件）。
+
+**与决定的偏差**
+1. 未映射路径跑**默认四项**闸门，不含 nginx check（nginx check 要 docker，deploy 本来就会跑它）。
+2. 前端文件的文件名只要出现在 `backend/tests/**/*.py` 里，就带上 pytest（冷审 #2）。这条规则会随测试自动更新，不维护手写名单。
+3. `backend/**` 下的 `.md` 也跑 pytest（冷审 #1：ai_agent skills 是运行时资源）。
+4. 新增 D7：已跟踪文件有未提交改动就拒绝部署（`git pull` 之前查），build 前再查一次 HEAD 和工作区；逃生口 `--allow-dirty`（冷审 #5）。
+5. smoke 增加 settle 复查：10 秒后 RestartCount 不能变（冷审 #4）；环境变量做整数校验，每个 docker 调用套 `timeout 15`（冷审 #6）。
+
+**Stage 1 冷审处理**（零上下文独立 agent，8 条，主线程逐条复核全部属实）
+- #1 skills 下的 `.md` 一个闸门都不选（high）→ 当场修 `36cf965`
+- #2 后端测试读前端文件（med-high）→ 当场修 `36cf965`
+- #3 在 main 上时已提交的改动看不见 → 当场修（加警告）`36cf965`
+- #4 smoke 没有稳定性检查 → 当场修 `61e9306`
+- #5 闸门测的树和 build 的树可能不同 → 当场修 `61e9306`
+- #6 smoke 可能无限轮询 → 当场修 `61e9306`
+- #7 泄漏的 `VERIFY_CHANGED_FILES=""` / 被 gitignore 的输入 → live with：输出里已标明 override；`.env` 改动本来就不在 diff 里
+- #8 测试没覆盖真实 git 和 docker 分支 → 当场修（两个提交都有）
+
+**Follow-up**
+- 第 3 条建议（optimization-tracker Stage 1 按档位决定是否冷审）未做，等用户另行决定。
+- eslint 增量闸门、pytest-xdist 并行实验：未立 OPT。
