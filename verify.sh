@@ -9,7 +9,7 @@
 # `VERIFY: PASS` or `VERIFY: FAIL` for easy grepping.
 #
 # Hard gates (must pass — they gate the exit code):
-#   1. backend  pytest   — ~1349 tests, the strongest correctness signal here
+#   1. backend  pytest   — the full backend suite, the strongest correctness signal
 #   2. frontend tsc -b   — type check (build was silently broken before this)
 #   3. frontend vitest   — unit tests (commission math, filter persistence)
 #   (4. nginx conf check — scripts/check-nginx-conf.sh; only ever selected by
@@ -40,16 +40,21 @@
 # (default `main`; `--base <ref>` or `--base=<ref>`):
 #     diff vs merge-base(base, HEAD)  ∪  staged + unstaged  ∪  untracked
 # Mapping (union over all changed files — classify_path below is the SSOT):
-#     docs/**, any *.md, .cursor/**, .claude/**     → nothing
-#     backend/**                                    → backend pytest
+#     backend/** (including *.md — skill files are
+#       runtime resources pinned by tests)          → backend pytest
+#     docs/**, any other *.md, .cursor/**, .claude/** → nothing
 #     frontend/nginx.conf, frontend/Dockerfile*,
 #     scripts/check-nginx-conf.sh                   → nginx conf check
 #     frontend/** (everything else)                 → tsc + vitest + eslint
+#     any frontend/** path whose basename appears in
+#       a backend/tests/**/*.py file                → + backend pytest
 #     anything else (verify.sh, deploy.sh, compose,
 #     scripts/**, root files, ...)                  → every default gate
 # An empty change set runs nothing and passes; the coverage block at the end
 # names every gate that was NOT run and why. `--dry-run` prints the selection
 # (with the file that triggered each gate) and runs nothing.
+# If merge-base(base, HEAD) == HEAD (e.g. running on main itself) committed work
+# is invisible: only uncommitted/untracked files count, and the output says so.
 # Test hook: VERIFY_CHANGED_FILES (newline-separated) replaces the repository
 # computation entirely — scripts/test-verify-changed.sh relies on it.
 #
@@ -125,18 +130,22 @@ declare -A GATE_NTRIG=()     # id -> number of files that triggered it
 CHANGED_FILES=()
 IGNORED_COUNT=0              # changed files that map to no gate (docs/meta)
 CHANGE_SOURCE=""             # where the file list came from, for the output
+BASE_AT_HEAD=0               # 1 when merge-base(base, HEAD) == HEAD
 
 # classify_path <path> → prints one of: none | backend | nginx | frontend | all
-# Order matters: the "nothing" row wins (backend/README.md runs no tests), and
-# nginx.conf / Dockerfile* are carved out of frontend/** before it.
-# frontend/nginx.conf alone selects ONLY the nginx check, not tsc/vitest: it is
-# not TypeScript and cannot break them, and the OPT-0080 mapping rows are
-# exclusive. scripts/check-nginx-conf.sh maps to the nginx check too — it is
+# Order matters: backend/** wins over the "nothing" row — Markdown under
+# backend/ is not always prose (backend/app/ai_agent/skills/**/SKILL.md are
+# runtime resources pinned by test_ai_agent_skills.py), and a backend README
+# costing one pytest run is the cheap side of that trade. nginx.conf /
+# Dockerfile* are carved out of frontend/** before it.
+# frontend/nginx.conf selects the nginx check, not tsc/vitest: it is not
+# TypeScript and cannot break them. (It also selects pytest, but through the
+# separate backend_test_reader rule below — test_app_assembly.py reads it.) scripts/check-nginx-conf.sh maps to the nginx check too — it is
 # the checker itself, and an edit to it is only proven by running it.
 classify_path() {
   case "$1" in
-    docs/*|*.md|.cursor/*|.claude/*) echo none ;;
     backend/*)                       echo backend ;;
+    docs/*|*.md|.cursor/*|.claude/*) echo none ;;
     frontend/nginx.conf|frontend/Dockerfile*|scripts/check-nginx-conf.sh)
                                      echo nginx ;;
     frontend/*)                      echo frontend ;;
@@ -150,11 +159,41 @@ mark_gate() { # mark_gate <id> <reason>
   GATE_NTRIG[$1]=$(( ${GATE_NTRIG[$1]:-0} + 1 ))
 }
 
+# backend_test_reader <frontend path> → prints the first backend test file that
+# mentions the path's basename, or nothing. Some backend tests read frontend
+# sources (test_activity_sort_whitelist_drift.py parses ActivityClientsPanel.tsx,
+# test_app_assembly.py reads frontend/nginx.conf, ...), so a frontend-only
+# change can break pytest. Self-maintaining on purpose: a new test that reads a
+# new frontend file is picked up without editing a list here.
+# Matching is whole-name: the basename must not be flanked by a filename
+# character [A-Za-z0-9_.-], so `a.ts` does not match inside `data.ts`,
+# `Dockerfile` does not match `Dockerfile.ai-agent`, and `nginx.conf` would not
+# match `nginx.conf.template`. (grep -w is not enough: it treats `.` and `-` as
+# boundaries.) There is deliberately NO
+# skip list of "generic" basenames (index.ts, types.ts, ...): today none of
+# them appears in backend/tests, and if a test ever names one, the cost of
+# matching is an extra pytest run, whereas skipping it would silently miss the
+# one test that reads that file. Over-selecting is the safe direction.
+backend_test_reader() {
+  local base="${1##*/}" dir="$ROOT/backend/tests" hit re
+  [[ -n "$base" && -d "$dir" ]] || return 0
+  re="$(printf '%s' "$base" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
+  re="(^|[^A-Za-z0-9_.-])${re}(\$|[^A-Za-z0-9_.-])"
+  hit="$(command grep -rlE --include='*.py' -- "$re" "$dir" 2>/dev/null | sort | head -1)"
+  [[ -n "$hit" ]] && printf '%s' "${hit#"$ROOT"/}"
+  return 0
+}
+
 # select_gates — fills GATE_ON / GATE_WHY from CHANGED_FILES.
 select_gates() {
-  local f g
+  local f g cls reader
   for f in "${CHANGED_FILES[@]}"; do
-    case "$(classify_path "$f")" in
+    cls="$(classify_path "$f")"
+    if [[ "$f" == frontend/* ]]; then
+      reader="$(backend_test_reader "$f")"
+      [[ -z "$reader" ]] || mark_gate pytest "$f (read by $reader)"
+    fi
+    case "$cls" in
       none)     IGNORED_COUNT=$(( IGNORED_COUNT + 1 )) ;;
       backend)  mark_gate pytest "$f" ;;
       nginx)    mark_gate nginx "$f" ;;
@@ -196,6 +235,7 @@ compute_changed_files() {
   mb="$(git -C "$ROOT" merge-base "$BASE" HEAD)" \
     || usage_error "no merge-base between '$BASE' and HEAD"
   CHANGE_SOURCE="$BASE (merge-base ${mb:0:8})"
+  [[ "$mb" == "$(git -C "$ROOT" rev-parse HEAD)" ]] && BASE_AT_HEAD=1
   # --no-renames so a rename reports BOTH the old and the new path: moving a
   # file out of backend/ must still run the backend gate. Each command is
   # checked on its own — a failure inside a pipeline would otherwise be
@@ -221,6 +261,13 @@ compute_changed_files() {
   fi
 }
 
+# Printed in the dry run AND the coverage block (also under --quiet): with HEAD
+# at the base, every committed change is invisible to the diff.
+base_at_head_warning() {
+  printf '\033[33mWARNING: HEAD is at the base (%s) — only uncommitted/untracked changes were considered;\033[0m\n' "$BASE"
+  printf '         pass --base <ref> (e.g. origin/main or HEAD~N) to include commits\n'
+}
+
 if [[ $CHANGED -eq 1 ]]; then
   compute_changed_files
   select_gates
@@ -231,9 +278,11 @@ fi
 # ── --dry-run: print the selection, run nothing ─────────────────────────────
 # Line format is stable on purpose (scripts/test-verify-changed.sh parses it):
 #   "  run   <id> <label> triggered by <file>"   /   "  skip  <id> <label> ..."
+#   then one "  file  <path>" line per changed file.
 if [[ $DRY_RUN -eq 1 ]]; then
   printf 'verify --changed (dry run) — base: %s, %d changed file(s), %d docs/meta ignored\n' \
     "$CHANGE_SOURCE" "${#CHANGED_FILES[@]}" "$IGNORED_COUNT"
+  [[ $BASE_AT_HEAD -eq 0 ]] || base_at_head_warning
   any=0
   for g in "${GATE_IDS[@]}"; do
     if [[ -n "${GATE_ON[$g]:-}" ]]; then
@@ -245,6 +294,10 @@ if [[ $DRY_RUN -eq 1 ]]; then
   for g in "${GATE_IDS[@]}"; do
     [[ -n "${GATE_ON[$g]:-}" ]] \
       || printf '  skip  %-7s %-27s no changed file maps to it\n' "$g" "${GATE_LABEL[$g]}"
+  done
+  # The full change set, so a preview shows exactly what the diff saw.
+  for f in "${CHANGED_FILES[@]}"; do
+    printf '  file  %s\n' "$f"
   done
   exit 0
 fi
@@ -324,6 +377,7 @@ fi
 # than buried in a comment nobody reads.
 printf '\n────────────────────────────────────────\n'
 if [[ $CHANGED -eq 1 ]]; then
+  [[ $BASE_AT_HEAD -eq 0 ]] || base_at_head_warning
   # --changed: name every gate that did NOT run, with the reason. A PASS from
   # a partial run must never read like a PASS from the full one.
   if [[ ${#CHANGED_FILES[@]} -eq 0 ]]; then

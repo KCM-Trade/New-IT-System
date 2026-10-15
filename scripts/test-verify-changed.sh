@@ -4,16 +4,21 @@
 # Runs nothing heavy: every case uses `--dry-run`, and all but the bad-ref case
 # feed the change set through the VERIFY_CHANGED_FILES test hook, so no pytest,
 # npm or docker is needed and the result does not depend on the state of the
-# working tree. The one case that exercises the real repository computation
-# (an invalid --base ref) only asks git to resolve a ref, which must fail
-# loudly with exit 2 instead of degrading to "no changes" (= PASS).
+# working tree. The real repository computation is exercised two ways: an
+# invalid --base ref against this repo (must fail loudly with exit 2 instead of
+# degrading to "no changes" = PASS), and a throwaway git repo in a temp dir
+# (a copy of verify.sh + a main branch + a feature branch) that checks every
+# kind of change — committed, staged, unstaged, untracked, deleted, renamed —
+# is seen, and that HEAD-at-base prints a warning.
 #
 # What it proves:
 #   1. Each row of the mapping table selects exactly its gates.
 #   2. An empty change set selects nothing.
 #   3. Mixed sets take the union; any unmapped path escalates to all default
 #      gates; docs/meta paths never add anything.
-#   4. Argument handling: --base / --base=, flag order, unknown flags, and
+#   4. Frontend files a backend test reads (by basename, real backend/tests)
+#      also select pytest.
+#   5. Argument handling: --base / --base=, flag order, unknown flags, and
 #      --base / --dry-run without --changed are all handled as specified.
 #
 # Usage: ./scripts/test-verify-changed.sh
@@ -61,13 +66,18 @@ check "backend/app file → pytest only" "$(selected 'backend/app/x.py')" "pytes
 check "backend/requirements.txt → pytest only" "$(selected 'backend/requirements.txt')" "pytest"
 # Design choice (documented in verify.sh classify_path): nginx.conf alone runs
 # ONLY the nginx check — it is not TypeScript and cannot break tsc/vitest.
-check "frontend/nginx.conf → nginx only" "$(selected 'frontend/nginx.conf')" "nginx"
+# ...but it also selects pytest, because backend/tests/test_app_assembly.py
+# reads it (backend-test-reader rule, see the section below).
+check "frontend/nginx.conf → pytest + nginx" "$(selected 'frontend/nginx.conf')" "pytest nginx"
 check "frontend/Dockerfile.prod → nginx only" "$(selected 'frontend/Dockerfile.prod')" "nginx"
 check "frontend/Dockerfile → nginx only" "$(selected 'frontend/Dockerfile')" "nginx"
 check "scripts/check-nginx-conf.sh → nginx only" "$(selected 'scripts/check-nginx-conf.sh')" "nginx"
 check "docs/a.md → none" "$(selected 'docs/a.md')" "none"
 check "docs/ non-md asset → none" "$(selected 'docs/img/x.png')" "none"
-check "*.md anywhere (backend/README.md) → none" "$(selected 'backend/README.md')" "none"
+check "backend/README.md → pytest (backend/** wins over *.md)" "$(selected 'backend/README.md')" "pytest"
+check "backend ai_agent SKILL.md → pytest" \
+  "$(selected 'backend/app/ai_agent/skills/x/SKILL.md')" "pytest"
+check "*.md elsewhere (frontend/README.md) → none" "$(selected 'frontend/README.md')" "none"
 check "root CLAUDE.md → none" "$(selected 'CLAUDE.md')" "none"
 check ".cursor/** → none" "$(selected '.cursor/rules/x.mdc')" "none"
 check ".claude/** → none" "$(selected '.claude/settings.json')" "none"
@@ -75,6 +85,17 @@ check "deploy.sh → all default gates" "$(selected 'deploy.sh')" "$ALL_DEFAULT"
 check "verify.sh → all default gates" "$(selected 'verify.sh')" "$ALL_DEFAULT"
 check "scripts/other.sh → all default gates" "$(selected 'scripts/smoke-prod.sh')" "$ALL_DEFAULT"
 check "docker-compose.prod.yml → all default gates" "$(selected 'docker-compose.prod.yml')" "$ALL_DEFAULT"
+
+echo "=== Frontend files read by backend tests (real backend/tests) ==="
+PANEL="$(cd "$REPO_ROOT" && find frontend/src -name ActivityClientsPanel.tsx | head -1)"
+check "ActivityClientsPanel.tsx exists in repo" "$([ -n "$PANEL" ] && echo yes)" "yes"
+check "$PANEL → pytest + frontend gates" "$(selected "$PANEL")" "pytest $FRONTEND"
+out="$(VERIFY_CHANGED_FILES="$PANEL" "$VERIFY" --changed --dry-run 2>&1)"
+check "reason names the reading backend test" \
+  "$(printf '%s\n' "$out" | grep -c 'read by backend/tests/test_activity_sort_whitelist_drift.py')" "1"
+check "file no backend test mentions → no pytest" \
+  "$(selected 'frontend/src/zz-no-test-mentions-this-opt0080.tsx')" "$FRONTEND"
+check "basename match is whole-word (data.ts vs a.ts)" "$(selected 'frontend/src/a.ts')" "$FRONTEND"
 
 echo "=== Empty and mixed sets ==="
 check "empty change set → none" "$(selected '')" "none"
@@ -84,7 +105,7 @@ check "frontend + backend → union" \
 check "docs + deploy.sh → all default gates" \
   "$(selected $'docs/a.md\ndeploy.sh')" "$ALL_DEFAULT"
 check "nginx.conf + frontend/src → frontend gates + nginx" \
-  "$(selected $'frontend/nginx.conf\nfrontend/src/a.tsx')" "tsc vitest eslint nginx"
+  "$(selected $'frontend/nginx.conf\nfrontend/src/a.tsx')" "pytest tsc vitest eslint nginx"
 check "backend + docs → pytest only" \
   "$(selected $'backend/app/x.py\ndocs/a.md\n.claude/x')" "pytest"
 
@@ -119,6 +140,47 @@ check "--base with an invalid ref → exit 2" \
   "$(env -u VERIFY_CHANGED_FILES "$VERIFY" --changed --dry-run --base no-such-ref-opt0080 >/dev/null 2>&1; echo $?)" "2"
 check "--base HEAD resolves → exit 0" \
   "$(env -u VERIFY_CHANGED_FILES "$VERIFY" --changed --dry-run --base HEAD >/dev/null 2>&1; echo $?)" "0"
+
+echo "=== Real git computation in a throwaway repo ==="
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+R="$TMP/repo"
+g() { git -C "$R" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@" >/dev/null 2>&1; }
+mkdir -p "$R/backend/app" "$R/frontend/src" "$R/scripts" "$R/docs"
+cp "$VERIFY" "$R/verify.sh"
+for f in backend/app/c.py backend/app/s.py backend/app/u.py frontend/src/del.ts \
+         scripts/old.sh docs/keep.md; do echo base > "$R/$f"; done
+git init -q -b main "$R" 2>/dev/null || { git init -q "$R"; git -C "$R" checkout -q -b main; }
+g add -A; g commit -m base
+# On main itself: HEAD == merge-base → warning, no committed changes visible.
+out="$(env -u VERIFY_CHANGED_FILES "$R/verify.sh" --changed --dry-run --base HEAD 2>&1)"; rc=$?
+check "on main, --base HEAD → exit 0" "$rc" "0"
+check "on main, --base HEAD → HEAD-at-base warning" \
+  "$(printf '%s\n' "$out" | grep -c 'HEAD is at the base')" "1"
+check "on main, clean tree → no gates" "$(printf '%s\n' "$out" | grep -c '(no gates selected)')" "1"
+out="$(env -u VERIFY_CHANGED_FILES "$R/verify.sh" --changed --dry-run --quiet 2>&1)"
+check "on main, default base → warning too (even with --quiet)" \
+  "$(printf '%s\n' "$out" | grep -c 'HEAD is at the base')" "1"
+# Feature branch with every kind of change.
+g checkout -b feat
+echo changed > "$R/backend/app/c.py"; g commit -am committed
+echo staged > "$R/backend/app/s.py"; g add backend/app/s.py
+echo unstaged > "$R/backend/app/u.py"
+echo new > "$R/frontend/src/new.tsx"
+rm "$R/frontend/src/del.ts"
+g mv scripts/old.sh scripts/renamed.sh
+out="$(env -u VERIFY_CHANGED_FILES "$R/verify.sh" --changed --dry-run 2>&1)"; rc=$?
+files="$(printf '%s\n' "$out" | awk '$1 == "file" { print $2 }' | tr '\n' ' ' | sed 's/ $//')"
+check "branch dry run → exit 0" "$rc" "0"
+for f in backend/app/c.py backend/app/s.py backend/app/u.py frontend/src/new.tsx \
+         frontend/src/del.ts scripts/old.sh scripts/renamed.sh; do
+  check "sees $f" "$(printf '%s\n' "$out" | awk -v f="$f" '$1 == "file" && $2 == f' | wc -l | tr -d ' ')" "1"
+done
+check "branch sees exactly the 7 changed paths (no verify.sh, no docs)" "$files" \
+  "backend/app/c.py backend/app/s.py backend/app/u.py frontend/src/del.ts frontend/src/new.tsx scripts/old.sh scripts/renamed.sh"
+check "branch → no HEAD-at-base warning" "$(printf '%s\n' "$out" | grep -c 'HEAD is at the base')" "0"
+check "branch → all default gates (scripts/ is unmapped)" \
+  "$(printf '%s\n' "$out" | awk '$1 == "run" { print $2 }' | tr '\n' ' ' | sed 's/ $//')" "$ALL_DEFAULT"
 
 echo "=== Result: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
